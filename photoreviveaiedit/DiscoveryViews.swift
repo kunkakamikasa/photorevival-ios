@@ -1,0 +1,906 @@
+import AVFoundation
+import SwiftUI
+
+struct DiscoveryPage: View {
+    let tab: AppTab
+    let videoSections: [TemplateSection]
+    let heroItems: [TemplateItem]
+    let isLoadingTemplates: Bool
+    let credits: Int
+    let onSelectTemplate: (TemplateItem) -> Void
+    let onMembership: () -> Void
+    let onCredits: () -> Void
+    let onGift: () -> Void
+    let onSuggestion: () -> Void
+    let onSummerOffer: () -> Void
+    let isSubscribed: Bool
+    let onLogin: () -> Void
+    let onFixedFeature: (FixedFeature) -> Void
+
+    var body: some View {
+        Group {
+            if tab == .home {
+                HomeDiscoveryView(
+                    sections: videoSections,
+                    heroItems: heroItems,
+                    isLoadingTemplates: isLoadingTemplates,
+                    credits: credits,
+                    onSelectTemplate: onSelectTemplate,
+                    onMembership: onMembership,
+                    onCredits: onCredits,
+                    onGift: onGift,
+                    onSummerOffer: onSummerOffer,
+                    isSubscribed: isSubscribed,
+                    onLogin: onLogin,
+                    onFixedFeature: onFixedFeature
+                )
+            } else {
+                StandardDiscoveryView(
+                    tab: tab,
+                    sections: tab == .video ? videoSections : [],
+                    heroItems: tab == .video ? heroItems : [],
+                    isLoadingTemplates: isLoadingTemplates,
+                    credits: credits,
+                    onSelectTemplate: onSelectTemplate,
+                    onMembership: onMembership,
+                    onCredits: onCredits,
+                    onGift: onGift,
+                    onSuggestion: onSuggestion,
+                    onFixedFeature: onFixedFeature
+                )
+            }
+        }
+    }
+}
+
+private struct HomeDiscoveryView: View {
+    let sections: [TemplateSection]
+    let heroItems: [TemplateItem]
+    let isLoadingTemplates: Bool
+    let credits: Int
+    let onSelectTemplate: (TemplateItem) -> Void
+    let onMembership: () -> Void
+    let onCredits: () -> Void
+    let onGift: () -> Void
+    let onSummerOffer: () -> Void
+    let isSubscribed: Bool
+    let onLogin: () -> Void
+    let onFixedFeature: (FixedFeature) -> Void
+
+    var body: some View {
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                HomeHeroCarousel(
+                    items: heroItems,
+                    credits: credits,
+                    onSelect: onSelectTemplate,
+                    onMembership: onMembership,
+                    onCredits: onCredits,
+                    onGift: onGift,
+                    onSummerOffer: onSummerOffer,
+                    isSubscribed: isSubscribed,
+                    onLogin: onLogin
+                )
+
+                HomeQuickActionStrip(onSelect: onFixedFeature)
+                    .padding(.top, -38)
+                    .zIndex(2)
+
+                VStack(spacing: 25) {
+                    ForEach(sections) { section in
+                        TemplateSectionView(section: section, onSelect: onSelectTemplate)
+                    }
+
+                    if sections.isEmpty && isLoadingTemplates {
+                        ProgressView()
+                            .tint(AppPalette.ink)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 44)
+                    }
+                }
+                .padding(.top, 24)
+            }
+            .padding(.bottom, 124)
+        }
+        .scrollIndicators(.hidden)
+        .ignoresSafeArea(edges: .top)
+    }
+}
+
+private struct StandardDiscoveryView: View {
+    let tab: AppTab
+    let sections: [TemplateSection]
+    let heroItems: [TemplateItem]
+    let isLoadingTemplates: Bool
+    let credits: Int
+    let onSelectTemplate: (TemplateItem) -> Void
+    let onMembership: () -> Void
+    let onCredits: () -> Void
+    let onGift: () -> Void
+    let onSuggestion: () -> Void
+    let onFixedFeature: (FixedFeature) -> Void
+
+    var body: some View {
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                DiscoveryHeader(
+                    title: tab.pageTitle,
+                    credits: credits,
+                    onMembership: onMembership,
+                    onCredits: onCredits,
+                    onGift: onGift
+                )
+
+                if tab == .video {
+                    VideoModeStrip()
+                        .padding(.top, 10)
+                }
+
+                if !heroItems.isEmpty {
+                    FramedHeroCarousel(
+                        items: heroItems,
+                        height: tab == .video ? 219 : 196,
+                        accessibilityLabel: tab == .video ? "Try AI Video" : "Try AI Photo",
+                        onSelect: onSelectTemplate
+                    )
+                    .padding(.top, tab == .video ? 0 : 5)
+                }
+
+                if tab == .photo {
+                    PhotoToolStrip(onSelect: onFixedFeature)
+                        .padding(.top, 18)
+                }
+
+                VStack(spacing: 25) {
+                    ForEach(sections) { section in
+                        TemplateSectionView(section: section, onSelect: onSelectTemplate)
+                    }
+
+                    if tab == .video && sections.isEmpty && isLoadingTemplates {
+                        ProgressView()
+                            .tint(AppPalette.ink)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 44)
+                    }
+                }
+                .padding(.top, 24)
+
+                if tab == .photo {
+                    SuggestTemplateCallToAction(action: onSuggestion)
+                        .padding(.top, 42)
+                }
+            }
+            .padding(.bottom, 124)
+        }
+        .scrollIndicators(.hidden)
+    }
+}
+
+private struct SuggestTemplateCallToAction: View {
+    let action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Didn't find the style you like?")
+                .font(.title3)
+                .foregroundStyle(AppPalette.ink.opacity(0.76))
+
+            Button(action: action) {
+                Text("Suggest a Template")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 34)
+                    .frame(height: 52)
+                    .background(AppPalette.ink, in: Capsule())
+            }
+            .buttonStyle(TemplatePressStyle())
+            .accessibilityIdentifier("suggest-template")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+    }
+}
+
+private struct DiscoveryHeader: View {
+    let title: String
+    let credits: Int
+    let onMembership: () -> Void
+    let onCredits: () -> Void
+    let onGift: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 21, weight: .heavy))
+                .foregroundStyle(AppPalette.ink)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            RewardControls(
+                credits: credits,
+                onMembership: onMembership,
+                onCredits: onCredits,
+                onGift: onGift
+            )
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 50)
+    }
+}
+
+private struct RewardControls: View {
+    let credits: Int
+    let onMembership: () -> Void
+    let onCredits: () -> Void
+    let onGift: () -> Void
+
+    var body: some View {
+        HStack(spacing: 9) {
+            HStack(spacing: 0) {
+                Button(action: onMembership) {
+                    Text("PRO")
+                        .font(.system(size: 15, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(width: 59, height: 34)
+                        .background(AppPalette.accent, in: Capsule())
+                }
+                .accessibilityLabel("Open Pro membership")
+
+                Button(action: onCredits) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "diamond.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(AppPalette.orange)
+                        Text("\(credits)")
+                            .font(.system(size: 15, weight: .bold))
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .heavy))
+                            .foregroundStyle(AppPalette.accent)
+                            .frame(width: 20, height: 20)
+                            .background(.white.opacity(0.88), in: Circle())
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .frame(height: 34)
+                }
+                .accessibilityLabel("View credits")
+            }
+            .padding(2)
+            .background(Color.black.opacity(0.20), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.72), lineWidth: 1))
+
+            Button(action: onGift) {
+                Image(systemName: "gift.fill")
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(AppPalette.orange)
+                    .frame(width: 40, height: 40)
+                    .background(.white.opacity(0.72), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.90), lineWidth: 1.2))
+                    .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+            }
+            .accessibilityLabel("Open daily gift")
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct HomeHeroCarousel: View {
+    let items: [TemplateItem]
+    let credits: Int
+    let onSelect: (TemplateItem) -> Void
+    let onMembership: () -> Void
+    let onCredits: () -> Void
+    let onGift: () -> Void
+    let onSummerOffer: () -> Void
+    let isSubscribed: Bool
+    let onLogin: () -> Void
+    @State private var selectedPage = 0
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            TabView(selection: $selectedPage) {
+                Button(action: onSummerOffer) {
+                    SummerCampaignHero()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .tag(0)
+                .accessibilityLabel("Open 65% summer offer")
+
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    Button {
+                        onSelect(item)
+                    } label: {
+                        TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .tag(index + 1)
+                    .accessibilityLabel("Open \(item.title)")
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            LinearGradient(
+                colors: [AppPalette.surfaceCenter.opacity(0.62), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 116)
+            .allowsHitTesting(false)
+
+            ZStack {
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: AppPalette.surfaceCenter.opacity(0.42), location: 0.43),
+                        .init(color: AppPalette.surfaceCenter, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                LinearGradient(
+                    stops: [
+                        .init(color: AppPalette.surfaceEdge.opacity(0.48), location: 0),
+                        .init(color: .clear, location: 0.27),
+                        .init(color: .clear, location: 0.73),
+                        .init(color: AppPalette.surfaceEdge.opacity(0.50), location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .mask(
+                    LinearGradient(colors: [.clear, .clear, .black], startPoint: .top, endPoint: .bottom)
+                )
+            }
+            .frame(height: 148)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
+
+            Group {
+                if isSubscribed {
+                    RewardControls(
+                        credits: credits,
+                        onMembership: onMembership,
+                        onCredits: onCredits,
+                        onGift: onGift
+                    )
+                } else {
+                    GuestHomeControls(onLogin: onLogin, onGift: onGift)
+                }
+            }
+            .padding(.top, 57)
+            .padding(.trailing, 17)
+
+            Button {
+                if selectedPage == 0 {
+                    onSummerOffer()
+                } else if items.indices.contains(selectedPage - 1) {
+                    onSelect(items[selectedPage - 1])
+                }
+            } label: {
+                Text("Try Now")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 17)
+                    .frame(height: 34)
+                    .background(.black.opacity(0.36), in: Capsule())
+                    .overlay(
+                        Capsule().stroke(
+                            LinearGradient(colors: [.yellow, AppPalette.accent], startPoint: .leading, endPoint: .trailing),
+                            lineWidth: 1
+                        )
+                    )
+            }
+            .buttonStyle(TemplatePressStyle())
+            .padding(.trailing, 18)
+            .padding(.bottom, 80)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+            PageDots(count: items.count + 1, selection: selectedPage)
+                .padding(.leading, 19)
+                .padding(.bottom, 72)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
+        .frame(height: 365)
+        .clipped()
+        .task {
+            await advanceCarousel(
+                count: items.count + 1,
+                selection: $selectedPage,
+                intervalNanoseconds: 10_000_000_000
+            )
+        }
+    }
+}
+
+private struct GuestHomeControls: View {
+    let onLogin: () -> Void
+    let onGift: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onLogin) {
+                HStack(spacing: 6) {
+                    Image("RewardsCreditToken")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 21, height: 21)
+
+                    Text("Free Use")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(Color(red: 1, green: 0.36, blue: 0.31), in: Capsule())
+            }
+            .accessibilityLabel("Free Use")
+
+            Button(action: onGift) {
+                Image("HomeGiftIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 46, height: 46)
+                    .clipShape(Circle())
+            }
+            .accessibilityLabel("Open daily gift")
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct FramedHeroCarousel: View {
+    let items: [TemplateItem]
+    let height: CGFloat
+    let accessibilityLabel: String
+    let onSelect: (TemplateItem) -> Void
+    @State private var selectedPage = 0
+
+    var body: some View {
+        ZStack {
+            TabView(selection: $selectedPage) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    Button {
+                        onSelect(item)
+                    } label: {
+                        ZStack {
+                            TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.28)],
+                                startPoint: .center,
+                                endPoint: .bottom
+                            )
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                    }
+                    .buttonStyle(.plain)
+                    .tag(index)
+                    .accessibilityLabel(accessibilityLabel)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            Button {
+                onSelect(items[selectedPage])
+            } label: {
+                Text("Try Now")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .frame(height: 36)
+                    .background(.black.opacity(0.38), in: Capsule())
+                    .overlay(
+                        Capsule().stroke(
+                            LinearGradient(colors: [.yellow, AppPalette.accent], startPoint: .leading, endPoint: .trailing),
+                            lineWidth: 1
+                        )
+                    )
+            }
+            .buttonStyle(TemplatePressStyle())
+            .padding(15)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+            PageDots(count: items.count, selection: selectedPage)
+                .padding(.leading, 16)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .allowsHitTesting(false)
+        }
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 20)
+        .task { await advanceCarousel(count: items.count, selection: $selectedPage) }
+    }
+}
+
+private struct PageDots: View {
+    let count: Int
+    let selection: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<count, id: \.self) { index in
+                Circle()
+                    .fill(index == selection ? Color.white : Color.white.opacity(0.48))
+                    .frame(width: 8, height: 8)
+                    .scaleEffect(index == selection ? 1.08 : 1)
+                    .animation(.easeInOut(duration: 0.22), value: selection)
+            }
+        }
+    }
+}
+
+@MainActor
+private func advanceCarousel(
+    count: Int,
+    selection: Binding<Int>,
+    intervalNanoseconds: UInt64 = 4_000_000_000
+) async {
+    guard count > 1 else { return }
+    while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeInOut(duration: 0.35)) {
+            selection.wrappedValue = (selection.wrappedValue + 1) % count
+        }
+    }
+}
+
+private struct HomeQuickActionStrip: View {
+    let onSelect: (FixedFeature) -> Void
+
+    private let actions: [(FixedFeature, TemplateItem, String?)] = [
+        (.oneTapRestore, TemplateCatalog.memory, "HOT"),
+        (.enhanceVideo, TemplateCatalog.fashionShow, "NEW"),
+        (.photoToVideo, TemplateCatalog.schoolWave, nil),
+        (.aiImage, TemplateCatalog.anime, nil),
+        (.fusion, TemplateCatalog.cinematic, "NEW"),
+        (.enhancePhoto, TemplateCatalog.gentleman, nil),
+        (.textToVideo, TemplateCatalog.schoolWave, nil)
+    ]
+
+    var body: some View {
+        VStack(spacing: 8) {
+            GeometryReader { proxy in
+                let cardWidth = max(108, (proxy.size.width - 64) / 3)
+
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(actions, id: \.0) { action in
+                            Button {
+                                onSelect(action.0)
+                            } label: {
+                                VStack(spacing: 7) {
+                                    ZStack(alignment: .topTrailing) {
+                                        TemplateMediaView(item: action.1, gravity: .resizeAspectFill)
+                                            .frame(width: cardWidth, height: 66)
+                                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                                        if let badge = action.2 {
+                                            Text(badge)
+                                                .font(.system(size: 10, weight: .heavy))
+                                                .foregroundStyle(badge == "HOT" ? .white : .black)
+                                                .padding(.horizontal, 7)
+                                                .frame(height: 21)
+                                                .background(badge == "HOT" ? AppPalette.accent : Color.yellow, in: Capsule())
+                                                .offset(x: -4, y: 4)
+                                        }
+                                    }
+                                    Text(action.0.title)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(AppPalette.ink)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.72)
+                                }
+                                .frame(width: cardWidth)
+                            }
+                            .buttonStyle(TemplatePressStyle())
+                            .accessibilityLabel(action.0.title)
+                            .accessibilityIdentifier("fixed-feature-\(action.0.id)")
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .scrollIndicators(.hidden)
+                .accessibilityIdentifier("home-fixed-features")
+            }
+            .frame(height: 92)
+
+            HStack(spacing: 0) {
+                Capsule()
+                    .fill(AppPalette.surfaceEdge.opacity(0.72))
+                    .frame(width: 38, height: 8)
+                Capsule()
+                    .fill(Color.white.opacity(0.46))
+                    .frame(width: 38, height: 8)
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 110)
+    }
+}
+
+private struct TemplateSectionView: View {
+    let section: TemplateSection
+    let onSelect: (TemplateItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 9) {
+                Text(section.title)
+                    .font(.system(size: 22, weight: .heavy))
+                    .foregroundStyle(AppPalette.ink)
+                    .lineLimit(1)
+
+                if section.title == "Baby Adventure" {
+                    HStack(spacing: 2) {
+                        Image(systemName: "link")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(AppPalette.accent)
+                            .rotationEffect(.degrees(-18))
+
+                        Text("NEW")
+                            .font(.system(size: 11, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .frame(height: 20)
+                            .background(AppPalette.ink, in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                if section.title == "Baby Adventure" {
+                    Text("未上线")
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .frame(height: 23)
+                        .background(AppPalette.orange, in: Capsule())
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(AppPalette.ink.opacity(0.78))
+            }
+            .padding(.horizontal, 20)
+
+            GeometryReader { proxy in
+                let portraitWidth = max(108, (proxy.size.width - 67) / 3)
+
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 11) {
+                        ForEach(section.items) { item in
+                            TemplateCoverCard(item: item, portraitWidth: portraitWidth) {
+                                onSelect(item)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .frame(height: section.items.map(\.orientation).contains(.portrait) ? 166 : 116)
+        }
+    }
+}
+
+struct TemplateCoverCard: View {
+    let item: TemplateItem
+    var portraitWidth: CGFloat = 110
+    let action: () -> Void
+
+    private var cardSize: CGSize {
+        item.orientation == .landscape
+            ? CGSize(width: 174, height: 116)
+            : CGSize(width: portraitWidth, height: 166)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .bottomLeading) {
+                TemplateMediaView(item: item, gravity: .resizeAspectFill)
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.70)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+
+                Text(item.title)
+                    .font(.system(size: item.orientation == .landscape ? 15 : 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .padding(9)
+
+                if let badge = item.badge {
+                    Text(badge)
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundStyle(badge == "HOT" ? .white : .black)
+                        .padding(.horizontal, 7)
+                        .frame(height: 21)
+                        .background(badge == "HOT" ? AppPalette.accent : Color.yellow, in: Capsule())
+                        .padding(7)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+
+            }
+            .frame(width: cardSize.width, height: cardSize.height)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(TemplatePressStyle())
+        .accessibilityIdentifier("template-\(item.id)")
+        .accessibilityLabel(item.title)
+    }
+}
+
+struct TemplateMediaView: View {
+    let item: TemplateItem
+    var gravity: AVLayerVideoGravity
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            if let coverImageURL = item.coverImageURL {
+                AsyncImage(url: coverImageURL) { phase in
+                    if case .success(let image) = phase {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    }
+                }
+            } else if !item.imageName.isEmpty {
+                Image(item.imageName)
+                    .resizable()
+                    .scaledToFill()
+            }
+
+            if let coverVideoURL = item.coverVideoURL {
+                RemoteLoopingVideoView(url: coverVideoURL, videoGravity: gravity)
+                    .allowsHitTesting(false)
+            } else if let videoName = item.videoName {
+                LoopingVideoView(resourceName: videoName, videoGravity: gravity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipped()
+    }
+}
+
+struct TemplatePressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .brightness(configuration.isPressed ? -0.07 : 0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.76), value: configuration.isPressed)
+    }
+}
+
+private struct PhotoToolStrip: View {
+    let onSelect: (FixedFeature) -> Void
+
+    private let tools = [
+        ("Restore &\nColorize", "photo.badge.checkmark", FixedFeature.oneTapRestore, "HOT"),
+        ("Enhance\nPhoto", "wand.and.stars", FixedFeature.enhancePhoto, nil),
+        ("Image to\nImage", "person.crop.rectangle.stack", FixedFeature.imageToImage, "NEW"),
+        ("Text to\nImage", "text.below.photo", FixedFeature.textToImage, nil)
+    ]
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 9) {
+                ForEach(tools, id: \.0) { tool in
+                    Button { onSelect(tool.2) } label: {
+                        VStack(spacing: 6) {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: tool.1)
+                                    .font(.system(size: 21, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 42, height: 42)
+                                    .background(Color(red: 1.0, green: 0.70, blue: 0.30), in: RoundedRectangle(cornerRadius: 11))
+
+                                if let badge = tool.3 {
+                                    Text(badge)
+                                        .font(.system(size: 9, weight: .heavy))
+                                        .foregroundStyle(badge == "HOT" ? .white : .black)
+                                        .padding(.horizontal, 6)
+                                        .frame(height: 18)
+                                        .background(badge == "HOT" ? AppPalette.accent : Color.yellow, in: Capsule())
+                                        .offset(x: 14, y: -10)
+                                }
+                            }
+
+                            Text(tool.0)
+                                .font(.system(size: 13, weight: .bold))
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(AppPalette.ink)
+                                .lineLimit(2)
+                        }
+                        .frame(width: 92, height: 88)
+                        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(TemplatePressStyle())
+                    .accessibilityIdentifier("photo-fixed-feature-\(tool.2.id)")
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+        }
+        .scrollIndicators(.hidden)
+    }
+}
+
+private struct VideoModeSelectionShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let shoulder: CGFloat = min(10, rect.width * 0.10)
+        let radius: CGFloat = min(14, rect.height * 0.30)
+        var path = Path()
+
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + shoulder, y: rect.minY + radius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + shoulder + radius, y: rect.minY),
+            control: CGPoint(x: rect.minX + shoulder, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - shoulder - radius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - shoulder, y: rect.minY + radius),
+            control: CGPoint(x: rect.maxX - shoulder, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct VideoModeStrip: View {
+    @State private var mode = "Photo To Video"
+    private let modes = ["Photo To\nVideo", "Enhance\nVideo", "Fusion", "Text To\nVideo"]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(modes, id: \.self) { item in
+                let normalized = item.replacingOccurrences(of: "\n", with: " ")
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) { mode = normalized }
+                } label: {
+                    Text(item)
+                        .font(.system(size: 16, weight: .heavy))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(mode == normalized ? .white : AppPalette.ink)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background {
+                            if mode == normalized {
+                                VideoModeSelectionShape()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                Color(red: 0.82, green: 0.61, blue: 0.40),
+                                                Color(red: 0.74, green: 0.49, blue: 0.29)
+                                            ],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                    )
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, -6)
+    }
+}
