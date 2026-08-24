@@ -720,54 +720,12 @@ private struct SummerCoupon: View {
 
 struct SummerCampaignHero: View {
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Image("SummerBeachBackground")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-
-                VStack(spacing: 2) {
-                    Text("Today's Hot Rewards")
-                        .font(.system(size: 34, weight: .heavy))
-                        .foregroundStyle(
-                            LinearGradient(colors: [AppPalette.orange, Color.red], startPoint: .leading, endPoint: .trailing)
-                        )
-                        .minimumScaleFactor(0.66)
-                        .lineLimit(1)
-
-                    HStack(spacing: 12) {
-                        Text("Save up to")
-                            .font(.headline.bold())
-                            .foregroundStyle(AppPalette.accent)
-                            .padding(.horizontal, 12)
-                            .frame(height: 34)
-                            .background(.white.opacity(0.88), in: Capsule())
-                            .overlay(Capsule().stroke(AppPalette.accent.opacity(0.55), lineWidth: 1))
-
-                        Text("65%")
-                            .font(.system(size: 76, weight: .heavy))
-                            .foregroundStyle(
-                                LinearGradient(colors: [.yellow, AppPalette.orange, Color.red], startPoint: .top, endPoint: .bottom)
-                            )
-                            .shadow(color: .black.opacity(0.18), radius: 2, y: 3)
-                    }
-
-                    HStack(spacing: 48) {
-                        Image(systemName: "seal.fill")
-                        Image(systemName: "star.fill")
-                    }
-                    .font(.title)
-                    .foregroundStyle(Color(red: 0.89, green: 0.40, blue: 0.13))
-                }
-                .padding(.horizontal, 18)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(.top, 104)
-            }
-        }
-        .clipped()
-        .accessibilityIdentifier("summer-campaign-hero")
+        Image("HomeDiscountCarousel")
+            .resizable()
+            .scaledToFill()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .accessibilityIdentifier("summer-campaign-hero")
     }
 }
 

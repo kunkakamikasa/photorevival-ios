@@ -7,8 +7,7 @@ import Security
 import UIKit
 
 enum PhotoReviveAPIConfig {
-    static let projectURL = URL(string: "https://lrenlgqppvqfbibxppbi.supabase.co")!
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxyZW5sZ3FwcHZxZmJpYnhwcGJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI1MTIxODMsImV4cCI6MjA3ODA4ODE4M30.xVbKv4Es1sZRtWYsqbcu4eBoL1XZlMcyLcEJTTpddP4"
+    static let projectURL = URL(string: "https://api.alihantakaz.site")!
     static let appID = "photorevival"
 }
 
@@ -46,6 +45,26 @@ private struct PhotoReviveIDTokenRequest: Encodable {
     let id_token: String
     let access_token: String?
     let nonce: String?
+}
+
+private struct PhotoReviveAdjustAttributionRequest: Encodable {
+    let user_id: String
+    let app_id: String
+    let adjust_adid: String?
+    let network: String?
+    let campaign: String?
+    let adgroup: String?
+    let creative: String?
+    let tracker_name: String?
+    let tracker_token: String?
+    let click_label: String?
+    let referrer: String
+    let adjust_environment: String
+    let attribution_data: [String: String]
+}
+
+private struct PhotoReviveAdjustAttributionResponse: Decodable {
+    let success: Bool
 }
 
 enum PhotoReviveAuthError: LocalizedError {
@@ -113,6 +132,10 @@ final class PhotoReviveAuthStore: ObservableObject {
                 }
 
                 UserDefaults.standard.set(true, forKey: "isLoggedIn")
+                let userID = client.currentUserID
+                AdjustService.shared.setExternalDeviceID(userID)
+                AdjustService.shared.trackCompleteRegistration(userID: userID)
+                await client.bindAdjustAttributionIfAvailable()
                 didAuthenticate = true
             } catch let error as PhotoReviveAuthError {
                 if case .signInCancelled = error {
@@ -148,6 +171,11 @@ final class PhotoReviveAuthClient {
             self.session = URLSession(configuration: configuration)
         }
         cachedSession = Self.loadStoredSession()
+    }
+
+    var currentUserID: String? {
+        guard let accessToken = cachedSession?.accessToken else { return nil }
+        return Self.userID(from: accessToken)
     }
 
     func signInWithApple(idToken: String, nonce: String) async throws -> PhotoReviveSession {
@@ -191,6 +219,54 @@ final class PhotoReviveAuthClient {
         }
     }
 
+    /// Persist the current Adjust attribution against the authenticated user.
+    /// The server derives `ad`/`noad` from `network`; this method is intentionally
+    /// best-effort so an attribution outage never blocks sign-in.
+    func bindAdjustAttributionIfAvailable() async {
+        guard let userID = currentUserID,
+              let snapshot = AdjustService.shared.attributionSnapshot else {
+            return
+        }
+
+        do {
+            let token = try await accessToken()
+            var request = URLRequest(
+                url: PhotoReviveAPIConfig.projectURL.appendingPathComponent(
+                    "functions/v1/bind-user-adjust-attribution"
+                )
+            )
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONEncoder().encode(
+                PhotoReviveAdjustAttributionRequest(
+                    user_id: userID,
+                    app_id: PhotoReviveAPIConfig.appID,
+                    adjust_adid: snapshot.adjustAdid,
+                    network: snapshot.network,
+                    campaign: snapshot.campaign,
+                    adgroup: snapshot.adgroup,
+                    creative: snapshot.creative,
+                    tracker_name: snapshot.trackerName,
+                    tracker_token: snapshot.trackerToken,
+                    click_label: snapshot.clickLabel,
+                    referrer: snapshot.referrer,
+                    adjust_environment: snapshot.adjustEnvironment,
+                    attribution_data: snapshot.attributionData
+                )
+            )
+
+            let response: PhotoReviveAdjustAttributionResponse = try await send(request)
+            guard response.success else {
+                print("[Adjust] Server rejected attribution binding")
+                return
+            }
+            print("[Adjust] Attribution bound for user \(userID)")
+        } catch {
+            print("[Adjust] Attribution binding failed: \(error.localizedDescription)")
+        }
+    }
+
     func signOut() async {
         let accessToken = cachedSession?.accessToken
         clearSession()
@@ -199,7 +275,6 @@ final class PhotoReviveAuthClient {
 
         var request = URLRequest(url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("auth/v1/logout"))
         request.httpMethod = "POST"
-        request.setValue(PhotoReviveAPIConfig.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         _ = try? await session.data(for: request)
     }
@@ -223,7 +298,6 @@ final class PhotoReviveAuthClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(PhotoReviveAPIConfig.anonKey, forHTTPHeaderField: "apikey")
         request.httpBody = try JSONEncoder().encode(
             PhotoReviveIDTokenRequest(
                 provider: provider.rawValue,
@@ -261,7 +335,6 @@ final class PhotoReviveAuthClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(PhotoReviveAPIConfig.anonKey, forHTTPHeaderField: "apikey")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": refreshToken])
 
         let response: PhotoReviveSessionResponse = try await send(request)
@@ -344,6 +417,22 @@ final class PhotoReviveAuthClient {
 
     static func sha256(_ input: String) -> String {
         SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func userID(from accessToken: String) -> String? {
+        let parts = accessToken.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+
+        var encodedPayload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        encodedPayload += String(repeating: "=", count: (4 - encodedPayload.count % 4) % 4)
+
+        guard let payloadData = Data(base64Encoded: encodedPayload),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            return nil
+        }
+        return payload["sub"] as? String
     }
 }
 

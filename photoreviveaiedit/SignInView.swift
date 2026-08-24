@@ -83,34 +83,13 @@ struct SignInView: View {
                 .padding(.horizontal, 19)
                 .position(x: proxy.size.width / 2, y: proxy.size.height * 0.724)
 
-                HStack(spacing: 8) {
-                    Rectangle().fill(.white.opacity(0.72)).frame(height: 0.5)
-                    Text("or")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white)
-                    Rectangle().fill(.white.opacity(0.72)).frame(height: 0.5)
-                }
-                .padding(.horizontal, 64)
-                .position(x: proxy.size.width / 2, y: proxy.size.height * 0.786)
-
-                SignInProviderButton(
-                    title: "Sign in with Email",
-                    style: .email,
-                    isLoading: false,
-                    action: {}
-                )
-                .opacity(0.65)
-                .allowsHitTesting(false)
-                .padding(.horizontal, 19)
-                .position(x: proxy.size.width / 2, y: proxy.size.height * 0.846)
-
                 agreementText
                     .font(.system(size: 13.5, weight: .regular))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.leading)
                     .padding(.horizontal, 19)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .position(x: proxy.size.width / 2, y: proxy.size.height * 0.938)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height * 0.846)
             }
             .ignoresSafeArea()
         }
@@ -141,7 +120,6 @@ private struct SignInProviderButton: View {
     enum Style {
         case apple
         case google
-        case email
     }
 
     let title: String
@@ -161,15 +139,10 @@ private struct SignInProviderButton: View {
                 }
                 .padding(.horizontal, 25)
             }
-            .foregroundStyle(style == .email ? .white : .black)
+            .foregroundStyle(.black)
             .frame(maxWidth: .infinity)
             .frame(height: 50)
-            .background(style == .email ? Color.white.opacity(0.08) : .white, in: Capsule())
-            .overlay {
-                if style == .email {
-                    Capsule().stroke(.white, lineWidth: 1)
-                }
-            }
+            .background(.white, in: Capsule())
         }
         .buttonStyle(TemplatePressStyle())
         .disabled(isLoading)
@@ -187,9 +160,6 @@ private struct SignInProviderButton: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 23, height: 23)
-        case .email:
-            Image(systemName: "envelope")
-                .font(.system(size: 22, weight: .medium))
         }
     }
 
@@ -197,7 +167,6 @@ private struct SignInProviderButton: View {
         switch style {
         case .apple: "apple"
         case .google: "google"
-        case .email: "email"
         }
     }
 }

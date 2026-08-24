@@ -11,6 +11,7 @@ final class FeatureConfigStore: ObservableObject {
     @Published private(set) var isLoading = true
 
     private var hasStartedLoading = false
+    private var loadGeneration = 0
 
     /// Home is a cross-menu catalog. The CMS controls the section order, so
     /// keep the video and image tabs separate while exposing one ordered list
@@ -51,10 +52,28 @@ final class FeatureConfigStore: ObservableObject {
     }
 
     func load() async {
-        guard !hasStartedLoading else { return }
+        await load(force: false)
+    }
+
+    /// Re-fetch the audience-scoped catalog after Adjust resolves attribution.
+    /// Adjust callbacks can arrive after the initial screen has started loading,
+    /// so the first request may have used the conservative `noad` audience.
+    func reloadAfterAttributionChange() async {
+        guard !ProcessInfo.processInfo.arguments.contains("-useLocalFeatureCatalog") else { return }
+        await load(force: true)
+    }
+
+    private func load(force: Bool) async {
+        guard force || !hasStartedLoading else { return }
         hasStartedLoading = true
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if generation == loadGeneration {
+                isLoading = false
+            }
+        }
 
         if ProcessInfo.processInfo.arguments.contains("-useLocalFeatureCatalog") {
             videoSections = TemplateCatalog.videoSections
@@ -65,22 +84,39 @@ final class FeatureConfigStore: ObservableObject {
             return
         }
 
-        async let fetchedVideoSections = fetchSections(menu: "video", generationKind: .video)
-        async let fetchedImageSections = fetchSections(menu: "image", generationKind: .image)
-        async let fetchedCarousels = fetchCarousels()
+        await AdjustService.shared.waitForInitialAttribution()
+        let referrer = AdjustService.shared.referrer
+
+        async let fetchedVideoSections = fetchSections(
+            menu: "video",
+            generationKind: .video,
+            referrer: referrer
+        )
+        async let fetchedImageSections = fetchSections(
+            menu: "image",
+            generationKind: .image,
+            referrer: referrer
+        )
+        async let fetchedCarousels = fetchCarousels(referrer: referrer)
 
         do {
             let remoteSections = try await fetchedVideoSections
+            guard generation == loadGeneration else { return }
             videoSections = Self.addingLocalDearBabyItems(to: remoteSections)
         } catch {
             // An empty catalog is intentional: do not restore placeholder covers on failure.
         }
-        do { imageSections = try await fetchedImageSections } catch {
+        do {
+            let remoteSections = try await fetchedImageSections
+            guard generation == loadGeneration else { return }
+            imageSections = remoteSections
+        } catch {
             // Keep the fixed photo tools usable when the remote catalog is unavailable.
         }
 
         do {
             let carousels = try await fetchedCarousels
+            guard generation == loadGeneration else { return }
             homeCarouselEntries = carousels[.home] ?? []
             photoCarouselEntries = carousels[.photo] ?? []
             videoCarouselEntries = carousels[.video] ?? []
@@ -91,24 +127,23 @@ final class FeatureConfigStore: ObservableObject {
 
     private func fetchSections(
         menu: String,
-        generationKind: TemplateGenerationKind
+        generationKind: TemplateGenerationKind,
+        referrer: String
     ) async throws -> [TemplateSection] {
         var components = URLComponents(
-            string: "https://lrenlgqppvqfbibxppbi.supabase.co/functions/v1/get-feature-configs"
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/get-feature-configs"),
+            resolvingAgainstBaseURL: false
         )
         components?.queryItems = [
             URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID),
             URLQueryItem(name: "menu", value: menu),
             URLQueryItem(name: "page_type", value: "default"),
-            URLQueryItem(name: "limit", value: "20")
+            URLQueryItem(name: "limit", value: "20"),
+            URLQueryItem(name: "referrer", value: referrer)
         ]
         guard let url = components?.url else { return [] }
 
-        var request = URLRequest(url: url)
-        request.setValue(PhotoReviveAPIConfig.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(PhotoReviveAPIConfig.anonKey)", forHTTPHeaderField: "Authorization")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(from: url)
         guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
             return []
@@ -124,18 +159,18 @@ final class FeatureConfigStore: ObservableObject {
             .compactMap { $0.element.templateSection(generationKind: generationKind) }
     }
 
-    private func fetchCarousels() async throws -> [RemoteCarouselPage: [TemplateDetailEntry]] {
+    private func fetchCarousels(referrer: String) async throws -> [RemoteCarouselPage: [TemplateDetailEntry]] {
         var components = URLComponents(
-            string: "https://lrenlgqppvqfbibxppbi.supabase.co/functions/v1/get-app-carousels"
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/get-app-carousels"),
+            resolvingAgainstBaseURL: false
         )
-        components?.queryItems = [URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID)]
+        components?.queryItems = [
+            URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID),
+            URLQueryItem(name: "referrer", value: referrer)
+        ]
         guard let url = components?.url else { return [:] }
 
-        var request = URLRequest(url: url)
-        request.setValue(PhotoReviveAPIConfig.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(PhotoReviveAPIConfig.anonKey)", forHTTPHeaderField: "Authorization")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(from: url)
         guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
             return [:]

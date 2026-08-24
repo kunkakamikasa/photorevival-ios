@@ -32,13 +32,27 @@
 		</dict>
 	</array>
 	<key>GIDClientID</key>
-	<string>$(PHOTO_REVIVE_GOOGLE_CLIENT_ID)</string>
+	<string>$(PHOTO_REVIVE_GOOGLE_IOS_CLIENT_ID)</string>
 	<key>GIDServerClientID</key>
 	<string>$(PHOTO_REVIVE_GOOGLE_SERVER_CLIENT_ID)</string>
+	<key>AdjustAppToken</key>
+	<string>kz8k3gu2jf9c</string>
+	<key>AdjustEnvironment</key>
+	<string>$(ADJUST_ENVIRONMENT)</string>
+	<key>AdjustAppOpenedEventToken</key>
+	<string>huxvpy</string>
+	<key>AdjustCompleteRegistrationEventToken</key>
+	<string>w58th0</string>
+	<key>AdjustSubscribeEventToken</key>
+	<string>imrzos</string>
+	<key>PhotoReviveAppID</key>
+	<string>$(PHOTO_REVIVE_APP_ID)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>We use device data to measure advertising performance and improve Photo Revival.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

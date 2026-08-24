@@ -53,7 +53,7 @@ struct CreateFlowView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
-                    .padding(.bottom, 32)
+                    .padding(.bottom, 16)
                 }
                 .scrollIndicators(.hidden)
             }
@@ -308,7 +308,7 @@ struct CreateFlowView: View {
         }
         .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity)
-        .frame(height: 116, alignment: .top)
+        .frame(height: 150, alignment: .top)
         .background(Color(.systemBackground).opacity(0.70), in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -326,7 +326,8 @@ struct CreateFlowView: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 12) {
                     ForEach(flow.templates) { item in
-                        let thumbnailHeight: CGFloat = flow.family == .videoNoPrompt ? 116 : 152
+                        let thumbnailWidth: CGFloat = flow.family == .videoNoPrompt ? 150 : 158
+                        let thumbnailHeight: CGFloat = flow.family == .videoNoPrompt ? 150 : 214
 
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -336,7 +337,7 @@ struct CreateFlowView: View {
                             ZStack(alignment: .bottom) {
                                 TemplateMediaView(item: item, gravity: .resizeAspectFill)
                                     .frame(
-                                        width: 116,
+                                        width: thumbnailWidth,
                                         height: thumbnailHeight,
                                         alignment: flow.family == .videoNoPrompt ? .top : .center
                                     )
@@ -351,7 +352,7 @@ struct CreateFlowView: View {
                                     .lineLimit(2)
                                     .padding(8)
                             }
-                            .frame(width: 116, height: thumbnailHeight)
+                            .frame(width: thumbnailWidth, height: thumbnailHeight)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -440,9 +441,7 @@ struct CreateFlowView: View {
                 }
             }
         } label: {
-            HStack(spacing: 12) {
-                Spacer()
-
+            ZStack {
                 if isCreating {
                     ProgressView()
                         .tint(.white)
@@ -457,11 +456,12 @@ struct CreateFlowView: View {
                     }
                 }
 
-                Spacer()
-
-                Label("\(flow.cost)", systemImage: "diamond.fill")
-                    .font(.headline)
-                    .foregroundStyle(Color.yellow)
+                HStack {
+                    Spacer()
+                    Label("\(flow.cost)", systemImage: "diamond.fill")
+                        .font(.headline)
+                        .foregroundStyle(Color.yellow)
+                }
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 20)
@@ -537,7 +537,8 @@ struct CreateFlowView: View {
                     ForEach(0..<uploadCount, id: \.self) { index in
                         ImageGenerationUploadSlot(
                             image: selectedVideoImages.indices.contains(index) ? selectedVideoImages[index] : nil,
-                            label: "Image\(index + 1)"
+                            label: "Image\(index + 1)",
+                            fallbackItem: activeTemplate
                         )
                         .frame(width: slotWidth, height: 214)
                         .accessibilityIdentifier("video-image-upload-slot-\(index + 1)")
@@ -2634,6 +2635,13 @@ private struct ImageGenerationPrimaryButton: View {
 private struct ImageGenerationUploadSlot: View {
     let image: UIImage?
     let label: String
+    let fallbackItem: TemplateItem?
+
+    init(image: UIImage?, label: String, fallbackItem: TemplateItem? = nil) {
+        self.image = image
+        self.label = label
+        self.fallbackItem = fallbackItem
+    }
 
     var body: some View {
         ZStack {
@@ -2641,6 +2649,8 @@ private struct ImageGenerationUploadSlot: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
+            } else if let fallbackItem {
+                TemplateFirstFrameView(item: fallbackItem)
             } else {
                 Color(.systemGray4)
                 Image(systemName: "photo.badge.plus")
@@ -2648,7 +2658,7 @@ private struct ImageGenerationUploadSlot: View {
                     .foregroundStyle(AppPalette.surfaceEdge)
             }
 
-            if image != nil {
+            if image != nil || fallbackItem != nil {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 35, weight: .regular))
                     .foregroundStyle(.white)
@@ -2682,6 +2692,33 @@ private struct ImageGenerationUploadSlot: View {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .stroke(AppPalette.surfaceEdge.opacity(0.90), lineWidth: 1.1)
         )
+    }
+}
+
+private struct TemplateFirstFrameView: View {
+    let item: TemplateItem
+
+    var body: some View {
+        Group {
+            if !item.imageName.isEmpty {
+                Image(item.imageName)
+                    .resizable()
+                    .scaledToFill()
+            } else if let coverImageURL = item.coverImageURL {
+                AsyncImage(url: coverImageURL) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Color(.systemGray4)
+                    }
+                }
+            } else {
+                TemplateMediaView(item: item, gravity: .resizeAspectFill)
+            }
+        }
+        .clipped()
     }
 }
 

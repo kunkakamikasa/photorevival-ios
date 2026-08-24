@@ -41,9 +41,19 @@ struct AppRootView: View {
                 canRequestTrackingAuthorization = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
+            Task {
+                await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
+            }
+        }
         .task(id: trackingRequestContext) {
             guard trackingRequestContext.canRequest else { return }
             await trackingAuthorization.requestAuthorizationIfNeeded()
+            guard !Task.isCancelled, scenePhase == .active else { return }
+            AdjustService.shared.startIfNeeded(
+                externalDeviceID: PhotoReviveAuthClient.shared.currentUserID
+            )
+            await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
         }
     }
 

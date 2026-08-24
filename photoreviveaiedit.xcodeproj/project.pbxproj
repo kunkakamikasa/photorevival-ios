@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = ABCD0002AA00000100000001 /* GoogleSignIn */; };
+		E1230001E1230001E1230001 /* AdjustSdk in Frameworks */ = {isa = PBXBuildFile; productRef = E1230002E1230002E1230002 /* AdjustSdk */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */,
+				E1230001E1230001E1230001 /* AdjustSdk in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			name = photoreviveaiedit;
 			packageProductDependencies = (
 				ABCD0002AA00000100000001 /* GoogleSignIn */,
+				E1230002E1230002E1230002 /* AdjustSdk */,
 			);
 			productName = photoreviveaiedit;
 			productReference = 9BDFA8CA30301E5200499773 /* photoreviveaiedit.app */;
@@ -203,6 +206,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				ABCD0003AA00000100000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9BDFA8CB30301E5200499773 /* Products */;
@@ -400,6 +404,7 @@
 		9BDFA8EC30301E5300499773 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ADJUST_ENVIRONMENT = sandbox;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = photoreviveaiedit/photoreviveaiedit.entitlements;
@@ -410,7 +415,7 @@
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = NXQ273YHT7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = photoreviveaiedit/Info.plist;
+				INFOPLIST_FILE = Config/PhotoReviveInfo.plist;
 				INFOPLIST_KEY_NSUserTrackingUsageDescription = "We use device data to measure advertising performance and improve Photo Revival.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -422,13 +427,14 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PHOTO_REVIVE_GOOGLE_CLIENT_ID = REPLACE_WITH_GOOGLE_IOS_CLIENT_ID;
-				PHOTO_REVIVE_GOOGLE_REVERSED_CLIENT_ID = REPLACE_WITH_REVERSED_GOOGLE_IOS_CLIENT_ID;
-				PHOTO_REVIVE_GOOGLE_SERVER_CLIENT_ID = REPLACE_WITH_GOOGLE_WEB_CLIENT_ID;
+				PHOTO_REVIVE_APP_ID = photorevival;
+				PHOTO_REVIVE_GOOGLE_IOS_CLIENT_ID = "354535275492-6cnj3rk0jea8s7fku92nredsne4psacp.apps.googleusercontent.com";
+				PHOTO_REVIVE_GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.354535275492-6cnj3rk0jea8s7fku92nredsne4psacp";
+				PHOTO_REVIVE_GOOGLE_SERVER_CLIENT_ID = "354535275492-2ed44h63sckjedrp195c7606u5k96t31.apps.googleusercontent.com";
 				PRODUCT_BUNDLE_IDENTIFIER = com.alihantakaz.photorevival;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "photo revival";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Photo Revival Development Apple SignIn";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -442,6 +448,7 @@
 		9BDFA8ED30301E5300499773 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ADJUST_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = photoreviveaiedit/photoreviveaiedit.entitlements;
@@ -452,7 +459,7 @@
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = NXQ273YHT7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = photoreviveaiedit/Info.plist;
+				INFOPLIST_FILE = Config/PhotoReviveInfo.plist;
 				INFOPLIST_KEY_NSUserTrackingUsageDescription = "We use device data to measure advertising performance and improve Photo Revival.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -464,13 +471,14 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PHOTO_REVIVE_GOOGLE_CLIENT_ID = REPLACE_WITH_GOOGLE_IOS_CLIENT_ID;
-				PHOTO_REVIVE_GOOGLE_REVERSED_CLIENT_ID = REPLACE_WITH_REVERSED_GOOGLE_IOS_CLIENT_ID;
-				PHOTO_REVIVE_GOOGLE_SERVER_CLIENT_ID = REPLACE_WITH_GOOGLE_WEB_CLIENT_ID;
+				PHOTO_REVIVE_APP_ID = photorevival;
+				PHOTO_REVIVE_GOOGLE_IOS_CLIENT_ID = "354535275492-6cnj3rk0jea8s7fku92nredsne4psacp.apps.googleusercontent.com";
+				PHOTO_REVIVE_GOOGLE_REVERSED_CLIENT_ID = "com.googleusercontent.apps.354535275492-6cnj3rk0jea8s7fku92nredsne4psacp";
+				PHOTO_REVIVE_GOOGLE_SERVER_CLIENT_ID = "354535275492-2ed44h63sckjedrp195c7606u5k96t31.apps.googleusercontent.com";
 				PRODUCT_BUNDLE_IDENTIFIER = com.alihantakaz.photorevival;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "photo revival";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Photo Revival Development Apple SignIn";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -611,6 +619,14 @@
 				minimumVersion = 9.1.0;
 			};
 		};
+		E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/adjust/ios_sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.8.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -618,6 +634,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = ABCD0003AA00000100000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignIn;
+		};
+		E1230002E1230002E1230002 /* AdjustSdk */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */;
+			productName = AdjustSdk;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

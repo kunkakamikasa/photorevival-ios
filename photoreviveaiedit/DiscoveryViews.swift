@@ -610,7 +610,8 @@ private struct HomeHeroCarousel: View {
                 .padding(.bottom, 72)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
-        .frame(height: 365)
+        // Keep the supplied 16:9 campaign artwork readable on phone-sized screens.
+        .frame(height: min(365, max(210, UIScreen.main.bounds.width * 941 / 1672)))
         .clipped()
         .task {
             await advanceCarousel(

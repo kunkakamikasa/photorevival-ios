@@ -332,6 +332,13 @@ private enum ReturningOfferPurchaseService {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
+                    AdjustService.shared.trackSubscribe(
+                        productID: product.id,
+                        revenue: NSDecimalNumber(decimal: product.price).doubleValue,
+                        currency: product.priceFormatStyle.currencyCode,
+                        transactionID: String(transaction.id),
+                        orderID: String(transaction.id)
+                    )
                     await transaction.finish()
                     return .purchased
                 case .unverified(_, let error):

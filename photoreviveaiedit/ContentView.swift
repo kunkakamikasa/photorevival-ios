@@ -165,6 +165,11 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.light)
+        .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
+            Task {
+                await featureConfigStore.reloadAfterAttributionChange()
+            }
+        }
         .task {
             await featureConfigStore.load()
         }
