@@ -10,3 +10,7 @@ xcuserdata/
 # Swift Package Manager
 .build/
 .swiftpm/
+
+# Local/generated media assets (CMS supplies production template media)
+/remotion-restore-cover/
+/photoreviveaiedit/TemplateVideos/
