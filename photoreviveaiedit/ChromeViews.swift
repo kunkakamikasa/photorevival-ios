@@ -56,12 +56,17 @@ struct PaperTextureBackground: View {
 
 struct BottomTabBar: View {
     @Binding var selection: AppTab
+    var onSelect: ((AppTab) -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AppTab.allCases) { tab in
                 Button {
-                    withAnimation(.easeInOut(duration: 0.24)) { selection = tab }
+                    if let onSelect {
+                        onSelect(tab)
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.24)) { selection = tab }
+                    }
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)
@@ -104,6 +109,16 @@ struct HomeDiscountBannerView: View {
             }
             .buttonStyle(TemplatePressStyle())
             .accessibilityIdentifier("home-discount-banner")
+            .overlay {
+                GeometryReader { proxy in
+                    HomeDiscountTapHint()
+                        .position(
+                            x: proxy.size.width * 0.958,
+                            y: proxy.size.height * 0.755
+                        )
+                }
+                .allowsHitTesting(false)
+            }
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -119,6 +134,29 @@ struct HomeDiscountBannerView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)
+    }
+}
+
+private struct HomeDiscountTapHint: View {
+    @State private var isTapping = false
+
+    var body: some View {
+        Image(systemName: "hand.point.up.left.fill")
+            .font(.system(size: 31, weight: .bold))
+            .foregroundStyle(Color(red: 1.0, green: 0.89, blue: 0.73))
+            .shadow(color: .white.opacity(0.8), radius: 2)
+            .shadow(color: .black.opacity(0.28), radius: 3, y: 2)
+            .rotationEffect(.degrees(-11))
+            .scaleEffect(isTapping ? 0.91 : 1.0)
+            .offset(x: isTapping ? -2 : 1, y: isTapping ? -7 : 2)
+            .animation(
+                .easeInOut(duration: 0.58).repeatForever(autoreverses: true),
+                value: isTapping
+            )
+            .onAppear {
+                isTapping = true
+            }
+            .accessibilityHidden(true)
     }
 }
 

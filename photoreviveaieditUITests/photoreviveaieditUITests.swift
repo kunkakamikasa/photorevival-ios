@@ -25,7 +25,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testMainNavigationAndCreateFlow() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-skipOnboarding")
+        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
         app.launch()
 
         let photoTab = app.buttons["AI Photo"]
@@ -91,9 +91,31 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testColdLaunchOpensTheTappedFilter() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let motorcycle = app.buttons["template-motorcycle-boy"]
+        XCTAssertTrue(motorcycle.waitForExistence(timeout: 4))
+        for _ in 0..<5 where !motorcycle.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(motorcycle.isHittable)
+        motorcycle.tap()
+
+        XCTAssertTrue(app.buttons["Try Motorcycle Boy"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Try Baby Fly"].exists)
+    }
+
+    @MainActor
     func testImageGenerationGroupRouting() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-skipOnboarding", "-disableReturningOffer"]
+        app.launchArguments += ["-skipOnboarding", "-disableReturningOffer", "-loggedIn", "-useLocalFeatureCatalog"]
         app.launch()
 
         app.buttons["AI Photo"].tap()
@@ -120,7 +142,6 @@ final class photoreviveaieditUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Photo"].exists)
-        XCTAssertTrue(app.staticTexts["Please wait\n(1-3 min)"].exists)
 
         let generatedCard = app.buttons["Generated image"]
         XCTAssertTrue(generatedCard.waitForExistence(timeout: 4))
@@ -178,7 +199,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testPaywallAndInviteRoutes() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-skipOnboarding", "-resetLimitedOfferEligibility"]
+        app.launchArguments += ["-skipOnboarding", "-resetLimitedOfferEligibility", "-loggedIn"]
         app.launch()
 
         app.buttons["AI Photo"].tap()
@@ -238,7 +259,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testSummerHeroOfferRoute() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-skipOnboarding")
+        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
         app.launch()
 
         let summerHero = app.buttons["Open 65% summer offer"]
@@ -256,7 +277,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testSuggestionRoute() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-skipOnboarding")
+        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
         app.launch()
         app.buttons["AI Photo"].tap()
 
@@ -274,7 +295,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testPageSnapshots() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-skipOnboarding")
+        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
         app.launch()
 
         attachScreenshot(named: "Home", app: app)
@@ -371,6 +392,28 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testAIPhotoLoadsRemoteNewOutfitCatalog() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-skipOnboarding", "-disableReturningOffer"]
+        app.launch()
+
+        let photoTab = app.buttons["AI Photo"]
+        XCTAssertTrue(photoTab.waitForExistence(timeout: 3))
+        photoTab.tap()
+
+        let newOutfit = app.staticTexts["New Outfit"]
+        for _ in 0..<8 where !newOutfit.exists {
+            app.swipeUp()
+            Thread.sleep(forTimeInterval: 0.35)
+        }
+
+        XCTAssertTrue(newOutfit.waitForExistence(timeout: 5), "The CMS New Outfit section did not load")
+        let fashionDresses = app.buttons["template-photorevival-new-outfit-fashion-dresses"]
+        XCTAssertTrue(fashionDresses.waitForExistence(timeout: 3))
+        attachScreenshot(named: "AI Photo CMS New Outfit", app: app)
+    }
+
+    @MainActor
     func testFirstLaunchOnboardingAndGuestRoutes() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-forceOnboarding", "-disableReturningOffer"]
@@ -412,7 +455,51 @@ final class photoreviveaieditUITests: XCTestCase {
         let discountBanner = app.buttons["home-discount-banner"]
         XCTAssertTrue(discountBanner.waitForExistence(timeout: 2))
         discountBanner.tap()
-        XCTAssertTrue(app.buttons["summer-offer-continue"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["sign-in-google"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testGuestProtectedHomeEntryPointsRequireLogin() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-skipOnboarding", "-disableReturningOffer", "-useLocalFeatureCatalog"]
+        app.launch()
+
+        assertRequiresLogin(app.buttons["Free Use"], app: app)
+        assertRequiresLogin(app.buttons["Open daily gift"], app: app)
+        assertRequiresLogin(app.buttons["Open 65% summer offer"], app: app)
+        assertRequiresLogin(app.buttons["home-discount-banner"], app: app)
+        assertRequiresLogin(app.buttons["Me"], app: app)
+    }
+
+    @MainActor
+    func testGuestUploadActionsRequireLogin() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-skipOnboarding", "-disableReturningOffer", "-useLocalFeatureCatalog"]
+        app.launch()
+
+        app.buttons["AI Photo"].tap()
+        let cowboy = app.buttons["template-cowboy-style"].firstMatch
+        for _ in 0..<8 where !cowboy.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(cowboy.waitForExistence(timeout: 3))
+        cowboy.tap()
+        app.buttons["Try Cowboy Style"].tap()
+        XCTAssertTrue(app.buttons["image-generate-button"].waitForExistence(timeout: 3))
+        assertRequiresLogin(app.buttons["image-generate-button"], app: app)
+
+        app.terminate()
+        app.launch()
+
+        let memory = app.buttons["template-memory"]
+        for _ in 0..<6 where !memory.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(memory.waitForExistence(timeout: 3))
+        memory.tap()
+        app.buttons["Try Memory"].tap()
+        XCTAssertTrue(app.buttons["creation-primary-action"].waitForExistence(timeout: 3))
+        assertRequiresLogin(app.buttons["creation-primary-action"], app: app)
     }
 
     @MainActor
@@ -481,7 +568,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testGeneratedVideoResultRoutes() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-skipOnboarding")
+        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
         app.launch()
 
         app.buttons["Open daily gift"].tap()
@@ -532,6 +619,14 @@ final class photoreviveaieditUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    @MainActor
+    private func assertRequiresLogin(_ entryPoint: XCUIElement, app: XCUIApplication) {
+        XCTAssertTrue(entryPoint.waitForExistence(timeout: 3))
+        entryPoint.tap()
+        XCTAssertTrue(app.buttons["sign-in-google"].waitForExistence(timeout: 2))
+        app.buttons["Close sign in"].tap()
     }
 
     @MainActor

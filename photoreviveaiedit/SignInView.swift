@@ -2,7 +2,13 @@ import SwiftUI
 
 struct SignInView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var pendingProvider: String?
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
+    @StateObject private var authStore = PhotoReviveAuthStore()
+    let onAuthenticated: () -> Void
+
+    init(onAuthenticated: @escaping () -> Void = {}) {
+        self.onAuthenticated = onAuthenticated
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -62,7 +68,8 @@ struct SignInView: View {
                 SignInProviderButton(
                     title: "Sign in with Apple",
                     style: .apple,
-                    action: { pendingProvider = "Apple" }
+                    isLoading: authStore.activeProvider == .apple,
+                    action: { authStore.signIn(with: .apple) }
                 )
                 .padding(.horizontal, 19)
                 .position(x: proxy.size.width / 2, y: proxy.size.height * 0.646)
@@ -70,7 +77,8 @@ struct SignInView: View {
                 SignInProviderButton(
                     title: "Sign in with Google",
                     style: .google,
-                    action: { pendingProvider = "Google" }
+                    isLoading: authStore.activeProvider == .google,
+                    action: { authStore.signIn(with: .google) }
                 )
                 .padding(.horizontal, 19)
                 .position(x: proxy.size.width / 2, y: proxy.size.height * 0.724)
@@ -88,8 +96,11 @@ struct SignInView: View {
                 SignInProviderButton(
                     title: "Sign in with Email",
                     style: .email,
-                    action: { pendingProvider = "Email" }
+                    isLoading: false,
+                    action: {}
                 )
+                .opacity(0.65)
+                .allowsHitTesting(false)
                 .padding(.horizontal, 19)
                 .position(x: proxy.size.width / 2, y: proxy.size.height * 0.846)
 
@@ -105,13 +116,19 @@ struct SignInView: View {
         }
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
-        .alert("Sign-in connection needed", isPresented: Binding(
-            get: { pendingProvider != nil },
-            set: { if !$0 { pendingProvider = nil } }
+        .onChange(of: authStore.didAuthenticate) { _, didAuthenticate in
+            guard didAuthenticate else { return }
+            isLoggedIn = true
+            onAuthenticated()
+            dismiss()
+        }
+        .alert("Sign-in failed", isPresented: Binding(
+            get: { authStore.errorMessage != nil },
+            set: { if !$0 { authStore.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { pendingProvider = nil }
+            Button("OK", role: .cancel) { authStore.errorMessage = nil }
         } message: {
-            Text("Connect the \(pendingProvider ?? "selected") sign-in service before enabling this button.")
+            Text(authStore.errorMessage ?? "Please try again.")
         }
     }
 
@@ -129,12 +146,13 @@ private struct SignInProviderButton: View {
 
     let title: String
     let style: Style
+    let isLoading: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                Text(title)
+                Text(isLoading ? "Connecting..." : title)
                     .font(.system(size: 19, weight: .medium))
 
                 HStack {
@@ -154,6 +172,7 @@ private struct SignInProviderButton: View {
             }
         }
         .buttonStyle(TemplatePressStyle())
+        .disabled(isLoading)
         .accessibilityIdentifier("sign-in-\(accessibilitySuffix)")
     }
 

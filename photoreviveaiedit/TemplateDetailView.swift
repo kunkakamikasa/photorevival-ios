@@ -4,6 +4,7 @@ import SwiftUI
 struct TemplateDetailView: View {
     let item: TemplateItem
     let detailItems: [TemplateItem]
+    let configuredTryNowItem: TemplateItem?
     @Binding var credits: Int
     let onClose: () -> Void
     @State private var selectedID: String?
@@ -14,13 +15,26 @@ struct TemplateDetailView: View {
     init(
         item: TemplateItem,
         detailItems: [TemplateItem]? = nil,
+        tryNowItem: TemplateItem? = nil,
         credits: Binding<Int>,
         onClose: @escaping () -> Void
     ) {
         self.item = item
-        self.detailItems = detailItems?.isEmpty == false
+        let sourceItems = detailItems?.isEmpty == false
             ? detailItems!
             : TemplateCatalog.detailItems(for: item)
+
+        // Put the tapped item first so the correct page is visible even before
+        // ScrollViewReader has completed its first layout pass. This matters on
+        // a cold launch, where scrollTo can otherwise be ignored for one frame.
+        if let selectedIndex = sourceItems.firstIndex(where: { $0.id == item.id }) {
+            let remainingItems = Array(sourceItems.dropFirst(selectedIndex + 1))
+                + Array(sourceItems.prefix(selectedIndex))
+            self.detailItems = [item] + remainingItems
+        } else {
+            self.detailItems = [item] + sourceItems.filter { $0.id != item.id }
+        }
+        self.configuredTryNowItem = tryNowItem
         self._credits = credits
         self.onClose = onClose
         self._selectedID = State(initialValue: item.id)
@@ -35,7 +49,11 @@ struct TemplateDetailView: View {
                             TemplateDetailPage(
                                 item: detailItem,
                                 onClose: onClose,
-                                onTry: { creatorItem = detailItem }
+                                onTry: {
+                                    creatorItem = detailItem.id == item.id
+                                        ? configuredTryNowItem?.withPreviewMedia(from: detailItem) ?? detailItem
+                                        : detailItem
+                                }
                             )
                             .containerRelativeFrame([.horizontal, .vertical])
                             .id(detailItem.id)
@@ -56,10 +74,9 @@ struct TemplateDetailView: View {
                         }
                 )
                 .onAppear {
-                    DispatchQueue.main.async {
-                        scrollProxy.scrollTo(item.id, anchor: .center)
-                        selectedID = item.id
-                    }
+                    // A detail page must open on the exact cover that was tapped.
+                    selectedID = item.id
+                    scrollProxy.scrollTo(item.id, anchor: .center)
                 }
             }
 
@@ -81,7 +98,7 @@ struct TemplateDetailView: View {
             if creatorItem.generationKind == .image {
                 ImageGenerationUploadView(template: creatorItem, credits: $credits)
             } else {
-                CreateFlowView(template: creatorItem, credits: $credits)
+                CreateFlowView(template: creatorItem, templates: detailItems, credits: $credits)
             }
         }
         .onAppear(perform: presentSwipeHintIfNeeded)
@@ -130,7 +147,15 @@ private struct TemplateDetailPage: View {
             ZStack {
                 Color.black
 
-                if item.orientation == .landscape {
+                if let comparisonCover = item.comparisonCover {
+                    TemplateComparisonView(
+                        cover: comparisonCover,
+                        allowsInteraction: true,
+                        imageContentMode: .fit
+                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                } else if item.orientation == .landscape {
                     TemplateMediaView(item: item, gravity: .resizeAspect)
                         .frame(width: proxy.size.width, height: proxy.size.width / item.orientation.aspectRatio)
                         .position(x: proxy.size.width / 2, y: proxy.size.height * 0.47)

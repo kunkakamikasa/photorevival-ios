@@ -7,7 +7,7 @@ struct ContentView: View {
     @AppStorage("hasOpenedMainExperience") private var hasOpenedMainExperience = false
     @AppStorage("returningOfferLastPresentedDay") private var returningOfferLastPresentedDay = 0.0
     @State private var selectedTab: AppTab = .home
-    @State private var selectedTemplate: TemplateItem?
+    @State private var selectedTemplateRoute: TemplateDetailRoute?
     @State private var showSettings = false
     @State private var fullScreenDestination: AppDestination?
     @State private var postDismissAction: PostDismissAction?
@@ -19,7 +19,7 @@ struct ContentView: View {
     @State private var returningOffer: ReturningOfferVariant?
     @State private var hasEvaluatedReturningOffer = false
     @StateObject private var featureConfigStore = FeatureConfigStore()
-    @State private var selectedTemplateGroup: [TemplateItem] = []
+    @State private var pendingLoginAction: (() -> Void)?
 
     init(startupPresentationsAllowed: Bool = true) {
         self.startupPresentationsAllowed = startupPresentationsAllowed
@@ -39,42 +39,63 @@ struct ContentView: View {
                     DiscoveryPage(
                         tab: selectedTab,
                         videoSections: featureConfigStore.videoSections,
-                        heroItems: featureConfigStore.heroItems,
+                        imageSections: featureConfigStore.imageSections,
+                        homeSections: featureConfigStore.homeSections,
+                        heroEntries: featureConfigStore.heroEntries(for: selectedTab),
                         isLoadingTemplates: featureConfigStore.isLoading,
                         credits: credits,
                         onSelectTemplate: { template in
-                            selectedTemplateGroup = featureConfigStore.detailItems(for: template)
-                            selectedTemplate = template
+                            selectedTemplateRoute = TemplateDetailRoute(
+                                item: template,
+                                detailItems: featureConfigStore.detailItems(for: template)
+                            )
+                        },
+                        onSelectCarousel: { entry in
+                            guard entry.tryNowItem != nil else { return }
+                            selectedTemplateRoute = TemplateDetailRoute(
+                                item: entry.displayItem,
+                                detailItems: [entry.displayItem],
+                                tryNowItem: entry.tryNowItem
+                            )
                         },
                         onMembership: { fullScreenDestination = .membership },
-                        onCredits: { fullScreenDestination = .credits },
-                        onGift: { fullScreenDestination = .credits },
+                        onCredits: { requireLogin { fullScreenDestination = .credits } },
+                        onGift: { requireLogin { fullScreenDestination = .credits } },
                         onSuggestion: { fullScreenDestination = .suggestion },
-                    onSummerOffer: { fullScreenDestination = .summerSale },
-                    isSubscribed: isSubscribed,
-                    onLogin: { fullScreenDestination = .login },
-                    onFixedFeature: { feature in
-                        fullScreenDestination = .fixedFeature(feature)
-                    }
-                )
+                        onSummerOffer: { requireLogin { fullScreenDestination = .summerSale } },
+                        isSubscribed: isSubscribed,
+                        isLoggedIn: isLoggedIn,
+                        onLogin: { requireLogin {} },
+                        onFixedFeature: { feature in
+                            fullScreenDestination = .fixedFeature(feature)
+                        }
+                    )
                 }
             }
             .transition(.opacity)
         }
         .overlay(alignment: .bottom) {
             ZStack(alignment: .bottom) {
-                BottomTabBar(selection: $selectedTab)
+                BottomTabBar(selection: $selectedTab) { tab in
+                    guard tab == .me else {
+                        withAnimation(.easeInOut(duration: 0.24)) { selectedTab = tab }
+                        return
+                    }
+                    requireLogin {
+                        withAnimation(.easeInOut(duration: 0.24)) { selectedTab = .me }
+                    }
+                }
 
                 if selectedTab == .home && showHomeOfferBanner {
                     HomeDiscountBannerView(
-                        onOpen: { fullScreenDestination = .summerSale },
+                        onOpen: { requireLogin { fullScreenDestination = .summerSale } },
                         onClose: {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 showHomeOfferBanner = false
                             }
                         }
                     )
-                    .padding(.bottom, 68)
+                    .padding(.bottom, 56)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -91,13 +112,14 @@ struct ContentView: View {
             }
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
-        .fullScreenCover(item: $selectedTemplate) { template in
+        .fullScreenCover(item: $selectedTemplateRoute) { route in
             TemplateDetailView(
-                item: template,
-                detailItems: selectedTemplateGroup,
+                item: route.item,
+                detailItems: route.detailItems,
+                tryNowItem: route.tryNowItem,
                 credits: $credits
             ) {
-                selectedTemplate = nil
+                selectedTemplateRoute = nil
             }
         }
         .fullScreenCover(item: $fullScreenDestination, onDismiss: handleDestinationDismissed) { destination in
@@ -119,7 +141,9 @@ struct ContentView: View {
             case .suggestion:
                 SuggestionView()
             case .login:
-                SignInView()
+                SignInView {
+                    fullScreenDestination = nil
+                }
             case .fixedFeature(let feature):
                 FixedFeatureView(feature: feature, credits: $credits)
             }
@@ -179,7 +203,24 @@ struct ContentView: View {
         storedIsLoggedIn || ProcessInfo.processInfo.arguments.contains("-loggedIn")
     }
 
+    private func requireLogin(_ action: @escaping () -> Void) {
+        guard !isLoggedIn else {
+            action()
+            return
+        }
+
+        pendingLoginAction = action
+        fullScreenDestination = .login
+    }
+
     private func handleDestinationDismissed() {
+        if isLoggedIn, let action = pendingLoginAction {
+            pendingLoginAction = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: action)
+        } else if !isLoggedIn {
+            pendingLoginAction = nil
+        }
+
         let action = postDismissAction
         postDismissAction = nil
 
@@ -211,6 +252,20 @@ struct ContentView: View {
         withAnimation(.easeOut(duration: 0.22)) {
             showLimitedOfferPopup = true
         }
+    }
+}
+
+private struct TemplateDetailRoute: Identifiable {
+    let item: TemplateItem
+    let detailItems: [TemplateItem]
+    let tryNowItem: TemplateItem?
+
+    var id: String { item.id }
+
+    init(item: TemplateItem, detailItems: [TemplateItem], tryNowItem: TemplateItem? = nil) {
+        self.item = item
+        self.detailItems = detailItems
+        self.tryNowItem = tryNowItem
     }
 }
 

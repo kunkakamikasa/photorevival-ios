@@ -5,12 +5,16 @@ import UIKit
 
 struct CreateFlowView: View {
     let template: TemplateItem?
+    let templates: [TemplateItem]?
     @Binding var credits: Int
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
     @State private var activeTemplate: TemplateItem?
     @State private var selectedMedia: PhotosPickerItem?
     @State private var selectedImage: UIImage?
+    @State private var selectedVideoItems: [PhotosPickerItem] = []
+    @State private var selectedVideoImages: [UIImage?]
     @State private var showOptions = false
     @State private var showCredits = false
     @State private var notice: CreationNotice?
@@ -23,11 +27,19 @@ struct CreateFlowView: View {
     @State private var ratio = "9:16"
     @State private var outputCount = "1"
     @State private var showGenerationFlow = false
+    @State private var showLogin = false
+    @State private var pendingLoginAction: (() -> Void)?
 
-    init(template: TemplateItem?, credits: Binding<Int>) {
+    init(
+        template: TemplateItem?,
+        templates: [TemplateItem]? = nil,
+        credits: Binding<Int>
+    ) {
         self.template = template
+        self.templates = templates
         _credits = credits
         _activeTemplate = State(initialValue: template)
+        _selectedVideoImages = State(initialValue: Array(repeating: nil, count: max(1, template?.imageUploadCount ?? 1)))
     }
 
     var body: some View {
@@ -74,6 +86,9 @@ struct CreateFlowView: View {
         .onChange(of: selectedMedia) { _, item in
             loadImage(from: item)
         }
+        .onChange(of: selectedVideoItems) { _, items in
+            loadVideoImages(items)
+        }
         .sheet(isPresented: $showOptions) {
             GenerationOptionsSheet(
                 isImageFlow: flow.isImageFlow,
@@ -95,10 +110,21 @@ struct CreateFlowView: View {
             VideoGenerationFlowView(
                 title: flow.title,
                 templateTitle: activeTemplate?.title ?? template?.title ?? "Generated Video",
-                videoName: activeTemplate?.videoName ?? template?.videoName ?? "baby_fly",
+                videoName: activeTemplate?.videoName ?? template?.videoName,
+                template: activeTemplate ?? template,
                 onRegenerate: { showGenerationFlow = false },
                 onClose: { showGenerationFlow = false }
             )
+        }
+        .fullScreenCover(isPresented: $showLogin, onDismiss: {
+            if !isLoggedIn { pendingLoginAction = nil }
+        }) {
+            SignInView {
+                showLogin = false
+                let action = pendingLoginAction
+                pendingLoginAction = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: action ?? {})
+            }
         }
         .alert(item: $notice) { notice in
             Alert(
@@ -112,9 +138,9 @@ struct CreateFlowView: View {
     @ViewBuilder
     private var editorContent: some View {
         switch flow.family {
-        case .restore:
-            restoreEditor
-        case .baby:
+        case .videoNoPrompt:
+            noPromptVideoEditor
+        case .videoPrompt:
             guidedVideoEditor
         case .image:
             imageTemplateEditor
@@ -123,7 +149,7 @@ struct CreateFlowView: View {
         }
     }
 
-    private var restoreEditor: some View {
+    private var noPromptVideoEditor: some View {
         VStack(alignment: .leading, spacing: 18) {
             largeSourcePreview(height: 428)
 
@@ -136,8 +162,8 @@ struct CreateFlowView: View {
     }
 
     private var guidedVideoEditor: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            sourcePhotoPicker(width: 166, height: 214)
+        VStack(alignment: .leading, spacing: 12) {
+            videoUploadSlots
 
             promptCard
 
@@ -272,18 +298,23 @@ struct CreateFlowView: View {
     }
 
     private var promptCard: some View {
-        Text(flow.prompt)
-            .font(.body)
-            .foregroundStyle(.secondary)
-            .lineSpacing(4)
-            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-            .padding(18)
-            .background(Color(.systemBackground).opacity(0.70), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1)
-            )
-            .accessibilityLabel("Generation prompt")
+        ScrollView(.vertical) {
+            Text(flow.prompt)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineSpacing(4)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(16)
+        }
+        .scrollIndicators(.hidden)
+        .frame(maxWidth: .infinity)
+        .frame(height: 116, alignment: .top)
+        .background(Color(.systemBackground).opacity(0.70), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1)
+        )
+        .accessibilityLabel("Generation prompt")
     }
 
     private var templateChooser: some View {
@@ -295,21 +326,19 @@ struct CreateFlowView: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 12) {
                     ForEach(flow.templates) { item in
-                        let thumbnailHeight: CGFloat = flow.family == .restore ? 116 : 152
+                        let thumbnailHeight: CGFloat = flow.family == .videoNoPrompt ? 116 : 152
 
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                activeTemplate = item
+                                selectTemplate(item)
                             }
                         } label: {
                             ZStack(alignment: .bottom) {
-                                Image(item.imageName)
-                                    .resizable()
-                                    .scaledToFill()
+                                TemplateMediaView(item: item, gravity: .resizeAspectFill)
                                     .frame(
                                         width: 116,
                                         height: thumbnailHeight,
-                                        alignment: flow.family == .restore ? .top : .center
+                                        alignment: flow.family == .videoNoPrompt ? .top : .center
                                     )
                                     .clipped()
 
@@ -359,7 +388,7 @@ struct CreateFlowView: View {
                         .background(AppPalette.backgroundTop, in: Circle())
                     parameterPill(duration)
                     parameterPill(videoResolution)
-                    if flow.family != .restore {
+                    if flow.family != .videoNoPrompt {
                         parameterPill(ratio)
                     }
                 }
@@ -392,21 +421,23 @@ struct CreateFlowView: View {
 
     private var creationButton: some View {
         Button {
-            guard credits >= flow.cost else {
-                showCredits = true
-                return
-            }
-
-            credits -= flow.cost
-            if flow.isImageFlow {
-                isCreating = true
-                Task {
-                    try? await Task.sleep(for: .milliseconds(850))
-                    isCreating = false
-                    notice = .queued
+            requireLogin {
+                guard credits >= flow.cost else {
+                    showCredits = true
+                    return
                 }
-            } else {
-                showGenerationFlow = true
+
+                credits -= flow.cost
+                if flow.isImageFlow {
+                    isCreating = true
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(850))
+                        isCreating = false
+                        notice = .queued
+                    }
+                } else {
+                    showGenerationFlow = true
+                }
             }
         } label: {
             HStack(spacing: 12) {
@@ -444,6 +475,15 @@ struct CreateFlowView: View {
         .accessibilityIdentifier("creation-primary-action")
     }
 
+    private func requireLogin(_ action: @escaping () -> Void) {
+        guard isLoggedIn || ProcessInfo.processInfo.arguments.contains("-loggedIn") else {
+            pendingLoginAction = action
+            showLogin = true
+            return
+        }
+        action()
+    }
+
     private func loadImage(from item: PhotosPickerItem?) {
         guard let item else { return }
 
@@ -456,8 +496,62 @@ struct CreateFlowView: View {
         }
     }
 
+    private func loadVideoImages(_ items: [PhotosPickerItem]) {
+        Task {
+            var images = Array(repeating: nil, count: flow.imageUploadCount) as [UIImage?]
+            for (index, item) in items.prefix(flow.imageUploadCount).enumerated() {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data) else { continue }
+                if images.indices.contains(index) {
+                    images[index] = image
+                }
+            }
+            await MainActor.run { selectedVideoImages = images }
+        }
+    }
+
+    private func selectTemplate(_ item: TemplateItem) {
+        activeTemplate = item
+        let count = max(1, item.imageUploadCount)
+        if selectedVideoImages.count != count {
+            selectedVideoImages = Array((selectedVideoImages + Array(repeating: nil, count: count)).prefix(count))
+        }
+        selectedVideoItems = Array(selectedVideoItems.prefix(count))
+    }
+
+    private var videoUploadSlots: some View {
+        GeometryReader { proxy in
+            let spacing: CGFloat = 14
+            let uploadCount = flow.imageUploadCount
+            let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
+            let slotWidth = uploadCount == 1
+                ? min(166, proxy.size.width)
+                : availableWidth / CGFloat(uploadCount)
+
+            PhotosPicker(
+                selection: $selectedVideoItems,
+                maxSelectionCount: uploadCount,
+                matching: .images
+            ) {
+                HStack(spacing: spacing) {
+                    ForEach(0..<uploadCount, id: \.self) { index in
+                        ImageGenerationUploadSlot(
+                            image: selectedVideoImages.indices.contains(index) ? selectedVideoImages[index] : nil,
+                            label: "Image\(index + 1)"
+                        )
+                        .frame(width: slotWidth, height: 214)
+                        .accessibilityIdentifier("video-image-upload-slot-\(index + 1)")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(height: 214)
+    }
+
     private var flow: CreationFlowConfiguration {
-        CreationFlowConfiguration(template: template)
+        CreationFlowConfiguration(template: activeTemplate ?? template, templateOptions: templates)
     }
 }
 
@@ -622,88 +716,76 @@ private struct GenerationOptionsSheet: View {
 
 private struct CreationFlowConfiguration {
     enum Family: Equatable {
-        case restore
-        case baby
+        case videoNoPrompt
+        case videoPrompt
         case image
-        case remote
         case standard
     }
 
     let template: TemplateItem?
+    let templateOptions: [TemplateItem]?
 
     var family: Family {
         guard let template else { return .standard }
-        if template.coverVideoURL != nil { return .remote }
-
-        switch template.id {
-        case TemplateCatalog.memory.id,
-             TemplateCatalog.gentleman.id,
-             TemplateCatalog.fashion.id,
-             TemplateCatalog.cowboy.id:
-            return .restore
-        case TemplateCatalog.babyFly.id,
-             TemplateCatalog.motorcycle.id,
-             TemplateCatalog.skiing.id:
-            return .baby
-        case TemplateCatalog.mangaRide.id:
-            return .image
-        default:
-            return .standard
-        }
+        // CMS menu=image is always the image upload page. Its one-image or
+        // two-image variant is controlled separately by material requirements.
+        if template.generationKind == .image { return .image }
+        // CMS menu=video has exactly two upload-page variants. The prompt
+        // switch is stored on the template itself, never inferred from media.
+        return template.showsPrompt ? .videoPrompt : .videoNoPrompt
     }
 
     var title: String {
         switch family {
-        case .restore: "Revive Old Photos"
-        case .baby: "Baby Adventure"
+        case .videoNoPrompt, .videoPrompt:
+            template?.detailGroupTitle ?? template?.title ?? "Create with AI"
         case .image: "Raging Battle"
-        case .remote: template?.detailGroupID ?? template?.title ?? "Create with AI"
         case .standard: template?.title ?? "Create with AI"
         }
     }
 
     var cost: Int {
         switch family {
-        case .restore: 40
-        case .baby: 60
+        case .videoNoPrompt: max(template?.estimatedCredits ?? 0, 40)
+        case .videoPrompt: max(template?.estimatedCredits ?? 0, 50)
         case .image: 30
-        case .remote: template?.estimatedCredits ?? 0
         case .standard: 50
         }
     }
 
     var templates: [TemplateItem] {
+        if let templateOptions, !templateOptions.isEmpty {
+            return templateOptions
+        }
+
         switch family {
-        case .restore:
-            [TemplateCatalog.memory, TemplateCatalog.gentleman, TemplateCatalog.fashion, TemplateCatalog.cowboy]
-        case .baby:
-            [TemplateCatalog.babyFly, TemplateCatalog.motorcycle, TemplateCatalog.skiing, TemplateCatalog.cartoon]
+        case .videoNoPrompt:
+            return [TemplateCatalog.memory, TemplateCatalog.gentleman, TemplateCatalog.fashion, TemplateCatalog.cowboy]
+        case .videoPrompt:
+            return [TemplateCatalog.babyFly, TemplateCatalog.motorcycle, TemplateCatalog.skiing, TemplateCatalog.cartoon]
         case .image:
-            [TemplateCatalog.mangaRide, TemplateCatalog.cartoon, TemplateCatalog.anime]
-        case .remote:
-            template.map { [$0] } ?? []
+            return [TemplateCatalog.mangaRide, TemplateCatalog.cartoon, TemplateCatalog.anime]
         case .standard:
-            [TemplateCatalog.cartoon, TemplateCatalog.anime, TemplateCatalog.mangaRide, TemplateCatalog.memory]
+            return [TemplateCatalog.cartoon, TemplateCatalog.anime, TemplateCatalog.mangaRide, TemplateCatalog.memory]
         }
     }
 
     var prompt: String {
         switch family {
-        case .restore:
-            "Preserve the identity and composition of the source photo while restoring natural motion, detail and color."
-        case .baby:
-            "Use the uploaded image as the only identity reference. Preserve the subject's facial features, appearance and proportions consistently throughout every frame."
+        case .videoNoPrompt:
+            ""
+        case .videoPrompt:
+            template?.promptTemplate ?? "Use the uploaded image as the visual reference and preserve the subject's identity throughout the video."
         case .image:
             "Use the uploaded image as the visual reference and apply the selected illustrated style while preserving the subject and composition."
-        case .remote:
-            template?.promptTemplate ?? ""
         case .standard:
             "Use the uploaded image as the source. Keep the subject recognizable and apply the selected template with natural detail and motion."
         }
     }
 
     var isImageFlow: Bool { family == .image }
-    var showsHelp: Bool { family == .restore }
+    var showsHelp: Bool { family == .videoNoPrompt }
+    var imageUploadCount: Int { template?.imageUploadCount ?? 1 }
 }
 
 private enum VideoGenerationStage: Equatable {
@@ -715,7 +797,8 @@ private enum VideoGenerationStage: Equatable {
 private struct VideoGenerationFlowView: View {
     let title: String
     let templateTitle: String
-    let videoName: String
+    let videoName: String?
+    let template: TemplateItem?
     let onRegenerate: () -> Void
     let onClose: () -> Void
 
@@ -757,6 +840,7 @@ private struct VideoGenerationFlowView: View {
         .fullScreenCover(isPresented: $showPreview) {
             VideoGenerationPreviewView(
                 videoName: videoName,
+                template: template,
                 onClose: { showPreview = false },
                 onRegenerate: {
                     showPreview = false
@@ -841,9 +925,7 @@ private struct VideoGenerationFlowView: View {
                     .foregroundStyle(AppPalette.brownInk)
 
                 ZStack {
-                    Image("BabyFly")
-                        .resizable()
-                        .scaledToFill()
+                    generationMedia(gravity: .resizeAspectFill)
                         .blur(radius: 13)
                         .scaleEffect(1.12)
 
@@ -948,7 +1030,7 @@ private struct VideoGenerationFlowView: View {
         ZStack(alignment: .bottomTrailing) {
             Color.black
 
-            LoopingVideoView(resourceName: videoName, videoGravity: .resizeAspect)
+            generationMedia(gravity: .resizeAspect)
 
             VideoWatermarkPattern()
                 .allowsHitTesting(false)
@@ -1036,7 +1118,7 @@ private struct VideoGenerationFlowView: View {
                 .padding(.top, 62)
 
             ZStack(alignment: .bottomTrailing) {
-                LoopingVideoView(resourceName: videoName, videoGravity: .resizeAspectFill)
+                generationMedia(gravity: .resizeAspectFill)
                 Text("Photo Revive AI")
                     .font(.system(size: 15, weight: .heavy, design: .rounded))
                     .italic()
@@ -1084,10 +1166,22 @@ private struct VideoGenerationFlowView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 28)
     }
+
+    @ViewBuilder
+    private func generationMedia(gravity: AVLayerVideoGravity) -> some View {
+        if let template {
+            TemplateMediaView(item: template, gravity: gravity)
+        } else if let videoName {
+            LoopingVideoView(resourceName: videoName, videoGravity: gravity)
+        } else {
+            Color.black
+        }
+    }
 }
 
 private struct VideoGenerationPreviewView: View {
-    let videoName: String
+    let videoName: String?
+    let template: TemplateItem?
     let onClose: () -> Void
     let onRegenerate: () -> Void
     let onSave: () -> Void
@@ -1097,7 +1191,7 @@ private struct VideoGenerationPreviewView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            LoopingVideoView(resourceName: videoName, videoGravity: .resizeAspect)
+            previewMedia
                 .ignoresSafeArea(edges: .horizontal)
 
             VideoWatermarkPattern()
@@ -1136,6 +1230,17 @@ private struct VideoGenerationPreviewView: View {
             .padding(.top, 160)
         }
         .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var previewMedia: some View {
+        if let template {
+            TemplateMediaView(item: template, gravity: .resizeAspect)
+        } else if let videoName {
+            LoopingVideoView(resourceName: videoName, videoGravity: .resizeAspect)
+        } else {
+            Color.black
+        }
     }
 
     private func previewAction(
@@ -1650,17 +1755,22 @@ private struct FeaturePrimaryButton: View {
     let title: String
     let cost: Int
     @Binding var credits: Int
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
     let onNeedCredits: () -> Void
     let onCreate: () -> Void
+    @State private var showLogin = false
+    @State private var pendingLoginAction: (() -> Void)?
 
     var body: some View {
         Button {
-            guard cost == 0 || credits >= cost else {
-                onNeedCredits()
-                return
+            requireLogin {
+                guard cost == 0 || credits >= cost else {
+                    onNeedCredits()
+                    return
+                }
+                if cost > 0 { credits -= cost }
+                onCreate()
             }
-            if cost > 0 { credits -= cost }
-            onCreate()
         } label: {
             ZStack {
                 VStack(spacing: 0) {
@@ -1695,6 +1805,25 @@ private struct FeaturePrimaryButton: View {
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(AppPalette.ink, lineWidth: 1.2))
         }
         .buttonStyle(TemplatePressStyle())
+        .fullScreenCover(isPresented: $showLogin, onDismiss: {
+            if !isLoggedIn { pendingLoginAction = nil }
+        }) {
+            SignInView {
+                showLogin = false
+                let action = pendingLoginAction
+                pendingLoginAction = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: action ?? {})
+            }
+        }
+    }
+
+    private func requireLogin(_ action: @escaping () -> Void) {
+        guard isLoggedIn || ProcessInfo.processInfo.arguments.contains("-loggedIn") else {
+            pendingLoginAction = action
+            showLogin = true
+            return
+        }
+        action()
     }
 }
 
@@ -1707,44 +1836,59 @@ private struct FeatureDraftWarningOverlay: View {
             Color.black.opacity(0.58)
                 .ignoresSafeArea()
 
-            VStack(spacing: 16) {
-                Image("RewardsBellIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 92, height: 92)
-                    .offset(y: -28)
-                    .padding(.bottom, -24)
+            ZStack(alignment: .top) {
+                VStack(spacing: 16) {
+                    Text("Your draft won't be saved if you leave.")
+                        .font(.system(size: 23, weight: .bold))
+                        .foregroundStyle(AppPalette.brownInk)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Text("Your draft won't be saved if\nyou leave.")
-                    .font(.system(size: 23, weight: .bold))
-                    .foregroundStyle(AppPalette.brownInk)
-                    .multilineTextAlignment(.center)
+                    Button(action: onConfirm) {
+                        Text("Confirm")
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 57)
+                            .background(Color(red: 1.0, green: 0.20, blue: 0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
 
-                Button(action: onConfirm) {
-                    Text("Confirm")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 57)
-                        .background(Color(red: 1.0, green: 0.20, blue: 0.12), in: Capsule())
+                    Button(action: onCancel) {
+                        Text("Cancel")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(.gray)
+                            .frame(minHeight: 30)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 28)
+                .padding(.top, 60)
+                .padding(.bottom, 20)
+                .background(
+                    LinearGradient(colors: [Color.white, Color(red: 1, green: 0.94, blue: 0.80)], startPoint: .top, endPoint: .bottom),
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(AppPalette.surfaceEdge, lineWidth: 4))
 
-                Button(action: onCancel) {
-                    Text("Cancel")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(.gray)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color(red: 1.0, green: 0.97, blue: 0.89))
+
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 39, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.98, green: 0.71, blue: 0.29))
                 }
-                .buttonStyle(.plain)
+                .frame(width: 88, height: 88)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(.white.opacity(0.92), lineWidth: 3)
+                )
+                .shadow(color: AppPalette.brownInk.opacity(0.18), radius: 8, y: 4)
+                .offset(y: -44)
+                .accessibilityHidden(true)
             }
-            .padding(.horizontal, 40)
-            .padding(.top, 28)
-            .padding(.bottom, 22)
-            .background(
-                LinearGradient(colors: [Color.white, Color(red: 1, green: 0.94, blue: 0.80)], startPoint: .top, endPoint: .bottom),
-                in: RoundedRectangle(cornerRadius: 28, style: .continuous)
-            )
-            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(AppPalette.surfaceEdge, lineWidth: 4))
+            .padding(.top, 44)
             .padding(.horizontal, 54)
         }
     }
@@ -2069,7 +2213,8 @@ private struct FixedVideoGeneratorFeature: View {
             VideoGenerationFlowView(
                 title: "Video Generator",
                 templateTitle: mode == .image ? "Photo To Video" : "Text To Video",
-                videoName: "school_wave",
+                videoName: mode == .text ? "text_to_video_whale_cover" : "school_wave",
+                template: nil,
                 onRegenerate: { showGenerationFlow = false },
                 onClose: { showGenerationFlow = false }
             )
@@ -2248,6 +2393,7 @@ struct ImageGenerationUploadView: View {
     @Binding var credits: Int
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
     @AppStorage("hasAcceptedImageAIDataNotice") private var hasAcceptedDataNotice = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage?]
@@ -2257,15 +2403,15 @@ struct ImageGenerationUploadView: View {
     @State private var showSettings = false
     @State private var showDataNotice = false
     @State private var showGenerationFlow = false
+    @State private var showLogin = false
+    @State private var pendingLoginAction: (() -> Void)?
 
     init(template: TemplateItem, credits: Binding<Int>) {
         self.template = template
         _credits = credits
-
-        let names = template.imageReferenceCount == 2
-            ? ["Gentleman", template.imageName]
-            : [template.imageName]
-        _selectedImages = State(initialValue: names.map { UIImage(named: $0) })
+        // Every upload slot starts empty. A template cover is a preview, not
+        // an implicit user photo or clothing reference.
+        _selectedImages = State(initialValue: Array(repeating: nil, count: template.imageUploadCount))
     }
 
     var body: some View {
@@ -2321,7 +2467,7 @@ struct ImageGenerationUploadView: View {
         .fullScreenCover(isPresented: $showGenerationFlow) {
             ImageGenerationFlowView(
                 title: template.title,
-                imageName: template.imageName,
+                template: template,
                 credits: $credits,
                 onClose: {
                     showGenerationFlow = false
@@ -2329,22 +2475,28 @@ struct ImageGenerationUploadView: View {
                 }
             )
         }
+        .fullScreenCover(isPresented: $showLogin, onDismiss: {
+            if !isLoggedIn { pendingLoginAction = nil }
+        }) {
+            SignInView {
+                showLogin = false
+                let action = pendingLoginAction
+                pendingLoginAction = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: action ?? {})
+            }
+        }
         .preferredColorScheme(.light)
     }
 
     private var templatePreview: some View {
         ZStack(alignment: .bottom) {
-            Image(template.imageName)
-                .resizable()
-                .scaledToFill()
+            TemplateMediaView(item: template, gravity: .resizeAspectFill)
                 .blur(radius: 22)
                 .scaleEffect(1.18)
 
             Color.white.opacity(0.31)
 
-            Image(template.imageName)
-                .resizable()
-                .scaledToFit()
+            TemplateMediaView(item: template, gravity: .resizeAspect)
 
             HStack(spacing: 10) {
                 ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
@@ -2380,14 +2532,15 @@ struct ImageGenerationUploadView: View {
     private var uploadSlots: some View {
         GeometryReader { proxy in
             let spacing: CGFloat = 14
-            let availableWidth = proxy.size.width - spacing * CGFloat(max(0, selectedImages.count - 1))
-            let slotWidth = selectedImages.count == 1
+            let uploadCount = template.imageUploadCount
+            let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
+            let slotWidth = uploadCount == 1
                 ? min(151, proxy.size.width)
-                : availableWidth / CGFloat(selectedImages.count)
+                : availableWidth / CGFloat(uploadCount)
 
             PhotosPicker(
                 selection: $selectedItems,
-                maxSelectionCount: template.imageReferenceCount,
+                maxSelectionCount: uploadCount,
                 matching: .images
             ) {
                 HStack(spacing: spacing) {
@@ -2408,11 +2561,22 @@ struct ImageGenerationUploadView: View {
     }
 
     private func beginGeneration() {
-        if hasAcceptedDataNotice {
-            showGenerationFlow = true
-        } else {
-            showDataNotice = true
+        requireLogin {
+            if hasAcceptedDataNotice {
+                showGenerationFlow = true
+            } else {
+                showDataNotice = true
+            }
         }
+    }
+
+    private func requireLogin(_ action: @escaping () -> Void) {
+        guard isLoggedIn || ProcessInfo.processInfo.arguments.contains("-loggedIn") else {
+            pendingLoginAction = action
+            showLogin = true
+            return
+        }
+        action()
     }
 
     private func acceptNoticeAndGenerate() {
@@ -2424,7 +2588,7 @@ struct ImageGenerationUploadView: View {
     private func loadImages(_ items: [PhotosPickerItem]) {
         Task {
             var images = selectedImages
-            for (index, item) in items.prefix(template.imageReferenceCount).enumerated() {
+            for (index, item) in items.prefix(template.imageUploadCount).enumerated() {
                 guard let data = try? await item.loadTransferable(type: Data.self),
                       let image = UIImage(data: data) else { continue }
                 if images.indices.contains(index) {
@@ -2600,7 +2764,7 @@ private enum ImageGenerationStage: Equatable {
 
 private struct ImageGenerationFlowView: View {
     let title: String
-    let imageName: String
+    let template: TemplateItem
     @Binding var credits: Int
     let onClose: () -> Void
 
@@ -2609,7 +2773,9 @@ private struct ImageGenerationFlowView: View {
     @State private var showPaywall = false
     @State private var showVideoGenerator = false
 
-    private var generatedImage: UIImage? { UIImage(named: imageName) }
+    private var generatedImage: UIImage? {
+        template.imageName.isEmpty ? nil : UIImage(named: template.imageName)
+    }
 
     var body: some View {
         ZStack {
@@ -2667,9 +2833,7 @@ private struct ImageGenerationFlowView: View {
                     stage = .detail
                 } label: {
                     ZStack {
-                        Image(imageName)
-                            .resizable()
-                            .scaledToFill()
+                        TemplateMediaView(item: template, gravity: .resizeAspectFill)
 
                         if stage == .loading {
                             Color.black.opacity(0.50)
@@ -2770,9 +2934,7 @@ private struct ImageGenerationFlowView: View {
                 }
                 .padding(.horizontal, 20)
 
-                Image(imageName)
-                    .resizable()
-                    .scaledToFit()
+                TemplateMediaView(item: template, gravity: .resizeAspect)
                     .frame(maxWidth: .infinity, maxHeight: 557)
                     .padding(.horizontal, 48)
                     .padding(.top, 17)
@@ -2860,9 +3022,7 @@ private struct ImageGenerationFlowView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 4)
 
-                Image(imageName)
-                    .resizable()
-                    .scaledToFit()
+                TemplateMediaView(item: template, gravity: .resizeAspect)
                     .frame(width: 212, height: 378)
                     .background(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -3315,6 +3475,7 @@ private struct FixedFusionFeature: View {
                 title: "Fusion",
                 templateTitle: "Generated Video",
                 videoName: "baby_fly",
+                template: nil,
                 onRegenerate: { showGenerationFlow = false },
                 onClose: { showGenerationFlow = false }
             )
