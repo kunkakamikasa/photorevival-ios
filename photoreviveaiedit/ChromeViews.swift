@@ -95,15 +95,15 @@ struct BottomTabBar: View {
 }
 
 struct HomeDiscountBannerView: View {
+    let imageURL: URL
     let onOpen: () -> Void
     let onClose: () -> Void
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Button(action: onOpen) {
-                Image("HomeDiscountBanner")
-                    .resizable()
-                    .scaledToFit()
+                ConfiguredPromotionImage(url: imageURL)
+                    .aspectRatio(1290.0 / 244.0, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
             }
@@ -161,6 +161,7 @@ private struct HomeDiscountTapHint: View {
 }
 
 struct MePage: View {
+    @ObservedObject var accountStore: AppAccountStore
     let onCreate: () -> Void
     let onSettings: () -> Void
     @State private var kind = "Video"
@@ -169,13 +170,29 @@ struct MePage: View {
     @State private var showNotice = false
     @State private var noticeTitle = ""
     @State private var noticeMessage = ""
+    @State private var selectedHistoryTask: GenerationHistoryTask?
+    @State private var deletingTaskID: String?
+
+    init(
+        accountStore: AppAccountStore? = nil,
+        onCreate: @escaping () -> Void,
+        onSettings: @escaping () -> Void
+    ) {
+        self.accountStore = accountStore ?? .shared
+        self.onCreate = onCreate
+        self.onSettings = onSettings
+    }
+
+    private var visibleHistoryTasks: [GenerationHistoryTask] {
+        accountStore.historyTasks.filter { kind == "Video" ? $0.isVideo : !$0.isVideo }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             meHeader
 
-            if kind == "Video" && hasVideoRecord {
-                videoRecordContent
+            if !visibleHistoryTasks.isEmpty {
+                historyContent
                 legalNotice
                     .padding(.top, 16)
                 Spacer(minLength: 0)
@@ -191,10 +208,18 @@ struct MePage: View {
                 showPreview = false
             }
         }
+        .fullScreenCover(item: $selectedHistoryTask) { task in
+            MeHistoryPreviewView(task: task) {
+                selectedHistoryTask = nil
+            }
+        }
         .alert(noticeTitle, isPresented: $showNotice) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(noticeMessage)
+        }
+        .task {
+            await accountStore.refreshHistory()
         }
     }
 
@@ -220,24 +245,6 @@ struct MePage: View {
 
             Spacer(minLength: 0)
 
-            if kind == "Video" && hasVideoRecord {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        hasVideoRecord = false
-                    }
-                } label: {
-                    Text("Delete")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(AppPalette.ink)
-                        .padding(.horizontal, 20)
-                        .frame(height: 43)
-                        .background(Color.white.opacity(0.48), in: Capsule())
-                        .overlay(Capsule().stroke(.white.opacity(0.72), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Delete generation")
-            }
-
             Button(action: onSettings) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 23, weight: .bold))
@@ -251,6 +258,41 @@ struct MePage: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 0)
+    }
+
+    private var historyContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(visibleHistoryTasks) { task in
+                    MeHistoryTaskCard(
+                        task: task,
+                        isDeleting: deletingTaskID == task.id,
+                        onOpen: { selectedHistoryTask = task },
+                        onDelete: { deleteHistoryTask(task) }
+                    )
+                }
+
+                if accountStore.hasMoreHistory {
+                    Button {
+                        Task { await accountStore.loadMoreHistory() }
+                    } label: {
+                        if accountStore.isLoadingMoreHistory {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Text("Load More")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(accountStore.isLoadingMoreHistory)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+        }
+        .scrollIndicators(.hidden)
     }
 
     private var videoRecordContent: some View {
@@ -361,6 +403,141 @@ struct MePage: View {
         noticeTitle = title
         noticeMessage = message
         showNotice = true
+    }
+
+    private func deleteHistoryTask(_ task: GenerationHistoryTask) {
+        guard deletingTaskID == nil else { return }
+        deletingTaskID = task.id
+        Task {
+            defer { deletingTaskID = nil }
+            do {
+                try await accountStore.deleteHistoryTask(id: task.id)
+            } catch {
+                presentNotice(title: "Delete Failed", message: error.localizedDescription)
+            }
+        }
+    }
+}
+
+private struct MeHistoryTaskCard: View {
+    let task: GenerationHistoryTask
+    let isDeleting: Bool
+    let onOpen: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(task.scene?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Creation")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(AppPalette.brownInk)
+                    Text(task.createdAt.photoReviveDisplayDate)
+                        .font(.caption)
+                        .foregroundStyle(AppPalette.brownInk.opacity(0.65))
+                }
+
+                Spacer()
+
+                Text(task.status.capitalized)
+                    .font(.caption.bold())
+                    .foregroundStyle(task.status == "completed" ? Color.green : AppPalette.orange)
+
+                Button(action: onDelete) {
+                    Image(systemName: isDeleting ? "hourglass" : "trash")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(AppPalette.accent)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                .disabled(isDeleting)
+                .accessibilityLabel("Delete generation")
+            }
+
+            Button(action: onOpen) {
+                ZStack {
+                    Color.black.opacity(0.90)
+                    if task.resultURL != nil, task.status == "completed" {
+                        if let coverURL = task.coverURL {
+                            AsyncImage(url: coverURL) { phase in
+                                if case .success(let image) = phase {
+                                    image.resizable().scaledToFill()
+                                } else {
+                                    ProgressView().tint(.white)
+                                }
+                            }
+                        } else {
+                            VStack(spacing: 10) {
+                                Image(systemName: task.isVideo ? "play.rectangle.fill" : "photo")
+                                    .font(.system(size: 36))
+                                Text(task.isVideo ? "Tap to play" : "Open result")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(.white.opacity(0.82))
+                        }
+                    } else {
+                        VStack(spacing: 10) {
+                            ProgressView().tint(.white)
+                            Text(task.errorMessage ?? "Generation \(task.status)")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.78))
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(task.resultURL == nil)
+
+            if let creditsUsed = task.creditsUsed {
+                Label("\(creditsUsed) credits", systemImage: "diamond.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.orange)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.74), lineWidth: 1))
+    }
+}
+
+private struct MeHistoryPreviewView: View {
+    let task: GenerationHistoryTask
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let url = task.resultURL {
+                if task.isVideo {
+                    RemoteLoopingVideoView(url: url, videoGravity: .resizeAspect)
+                        .ignoresSafeArea(edges: .horizontal)
+                } else {
+                    AsyncImage(url: url) { phase in
+                        if case .success(let image) = phase {
+                            image.resizable().scaledToFit()
+                        } else {
+                            ProgressView().tint(.white)
+                        }
+                    }
+                    .padding()
+                }
+            }
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(.black.opacity(0.52), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(18)
+        }
+        .preferredColorScheme(.dark)
     }
 }
 

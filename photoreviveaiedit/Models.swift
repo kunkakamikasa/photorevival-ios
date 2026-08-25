@@ -41,7 +41,6 @@ enum FixedFeature: String, CaseIterable, Identifiable {
     case enhanceVideo
     case photoToVideo
     case aiImage
-    case fusion
     case enhancePhoto
     case textToVideo
     case imageToImage
@@ -49,13 +48,26 @@ enum FixedFeature: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    init?(cmsKey: String) {
+        switch cmsKey {
+        case "restore": self = .oneTapRestore
+        case "enhance_video": self = .enhanceVideo
+        case "photo_to_video": self = .photoToVideo
+        case "ai_image": self = .aiImage
+        case "enhance_photo": self = .enhancePhoto
+        case "text_to_video": self = .textToVideo
+        case "image_to_image": self = .imageToImage
+        case "text_to_image": self = .textToImage
+        default: return nil
+        }
+    }
+
     var title: String {
         switch self {
         case .oneTapRestore: "One-Tap Restore"
         case .enhanceVideo: "Enhance Video"
         case .photoToVideo: "Photo To Video"
         case .aiImage: "AI Image"
-        case .fusion: "Fusion"
         case .enhancePhoto: "Enhance Photo"
         case .textToVideo: "Text To Video"
         case .imageToImage: "Image to Image"
@@ -101,16 +113,24 @@ struct TemplateItem: Identifiable, Hashable {
     let detailGroupTitle: String?
     /// CMS template-level switch for the video upload page prompt card.
     let showsPrompt: Bool
+    /// CMS template-level switch controlling whether the visible prompt can be changed.
+    let promptIsEditable: Bool
     let promptTemplate: String?
+    /// Optional CMS images aligned with Image1, Image2, Image3 upload slots.
+    let uploadPlaceholderURLs: [URL?]
     let estimatedCredits: Int
     let modelType: String?
     let modelID: String?
 
-    /// Image upload pages support one or two image inputs. CMS material
-    /// requirements are mapped to `imageReferenceCount`; this keeps malformed
-    /// or future configurations from creating a third layout.
+    /// Fusion-style templates support up to three image inputs. Larger malformed
+    /// CMS values are clamped so the upload screen stays usable on iPhone.
     var imageUploadCount: Int {
-        min(max(imageReferenceCount, 1), 2)
+        min(max(imageReferenceCount, 1), 3)
+    }
+
+    func uploadPlaceholderURL(at index: Int) -> URL? {
+        guard uploadPlaceholderURLs.indices.contains(index) else { return nil }
+        return uploadPlaceholderURLs[index]
     }
 
     init(
@@ -128,7 +148,9 @@ struct TemplateItem: Identifiable, Hashable {
         detailGroupID: String? = nil,
         detailGroupTitle: String? = nil,
         showsPrompt: Bool = true,
+        promptIsEditable: Bool = false,
         promptTemplate: String? = nil,
+        uploadPlaceholderURLs: [URL?] = [],
         estimatedCredits: Int = 0,
         modelType: String? = nil,
         modelID: String? = nil
@@ -147,7 +169,9 @@ struct TemplateItem: Identifiable, Hashable {
         self.detailGroupID = detailGroupID
         self.detailGroupTitle = detailGroupTitle
         self.showsPrompt = showsPrompt
+        self.promptIsEditable = promptIsEditable
         self.promptTemplate = promptTemplate
+        self.uploadPlaceholderURLs = uploadPlaceholderURLs
         self.estimatedCredits = estimatedCredits
         self.modelType = modelType
         self.modelID = modelID
@@ -173,7 +197,9 @@ struct TemplateItem: Identifiable, Hashable {
             detailGroupID: detailGroupID ?? self.detailGroupID,
             detailGroupTitle: detailGroupTitle ?? self.detailGroupTitle,
             showsPrompt: showsPrompt,
+            promptIsEditable: promptIsEditable,
             promptTemplate: promptTemplate,
+            uploadPlaceholderURLs: uploadPlaceholderURLs,
             estimatedCredits: estimatedCredits,
             modelType: modelType,
             modelID: modelID
@@ -196,7 +222,9 @@ struct TemplateItem: Identifiable, Hashable {
             detailGroupID: groupID,
             detailGroupTitle: detailGroupTitle,
             showsPrompt: showsPrompt,
+            promptIsEditable: promptIsEditable,
             promptTemplate: promptTemplate,
+            uploadPlaceholderURLs: uploadPlaceholderURLs,
             estimatedCredits: estimatedCredits,
             modelType: modelType,
             modelID: modelID
@@ -219,30 +247,59 @@ struct TemplateItem: Identifiable, Hashable {
             detailGroupID: detailGroupID,
             detailGroupTitle: detailGroupTitle,
             showsPrompt: showsPrompt,
+            promptIsEditable: promptIsEditable,
             promptTemplate: promptTemplate,
+            uploadPlaceholderURLs: uploadPlaceholderURLs,
             estimatedCredits: estimatedCredits,
             modelType: modelType,
             modelID: modelID
         )
     }
 
-    func withPreviewMedia(from previewItem: TemplateItem) -> TemplateItem {
+    func withShowsPrompt(_ showsPrompt: Bool) -> TemplateItem {
         TemplateItem(
             id: id,
             title: title,
-            imageName: previewItem.imageName,
-            videoName: previewItem.videoName,
-            coverImageURL: previewItem.coverImageURL,
-            coverVideoURL: previewItem.coverVideoURL,
-            comparisonCover: previewItem.comparisonCover,
-            orientation: previewItem.orientation,
+            imageName: imageName,
+            videoName: videoName,
+            coverImageURL: coverImageURL,
+            coverVideoURL: coverVideoURL,
+            comparisonCover: comparisonCover,
+            orientation: orientation,
             badge: badge,
             generationKind: generationKind,
             imageReferenceCount: imageReferenceCount,
             detailGroupID: detailGroupID,
             detailGroupTitle: detailGroupTitle,
             showsPrompt: showsPrompt,
+            promptIsEditable: promptIsEditable,
             promptTemplate: promptTemplate,
+            uploadPlaceholderURLs: uploadPlaceholderURLs,
+            estimatedCredits: estimatedCredits,
+            modelType: modelType,
+            modelID: modelID
+        )
+    }
+
+    func withPromptControls(showsPrompt: Bool, promptIsEditable: Bool) -> TemplateItem {
+        TemplateItem(
+            id: id,
+            title: title,
+            imageName: imageName,
+            videoName: videoName,
+            coverImageURL: coverImageURL,
+            coverVideoURL: coverVideoURL,
+            comparisonCover: comparisonCover,
+            orientation: orientation,
+            badge: badge,
+            generationKind: generationKind,
+            imageReferenceCount: imageReferenceCount,
+            detailGroupID: detailGroupID,
+            detailGroupTitle: detailGroupTitle,
+            showsPrompt: showsPrompt,
+            promptIsEditable: promptIsEditable,
+            promptTemplate: promptTemplate,
+            uploadPlaceholderURLs: uploadPlaceholderURLs,
             estimatedCredits: estimatedCredits,
             modelType: modelType,
             modelID: modelID
@@ -254,16 +311,59 @@ struct TemplateItem: Identifiable, Hashable {
 struct TemplateDetailEntry: Identifiable, Hashable {
     let displayItem: TemplateItem
     let tryNowItem: TemplateItem?
+    let fixedFeatureTarget: FixedFeature?
 
     var id: String { displayItem.id }
 
-    init(displayItem: TemplateItem, tryNowItem: TemplateItem?) {
+    init(
+        displayItem: TemplateItem,
+        tryNowItem: TemplateItem?,
+        fixedFeatureTarget: FixedFeature? = nil
+    ) {
         self.displayItem = displayItem
         self.tryNowItem = tryNowItem
+        self.fixedFeatureTarget = fixedFeatureTarget
     }
 
     init(item: TemplateItem) {
         self.init(displayItem: item, tryNowItem: item)
+    }
+}
+
+struct HomeQuickAction: Identifiable, Hashable {
+    let feature: FixedFeature
+    let title: String
+    let item: TemplateItem
+
+    var id: String { feature.id }
+
+    init(feature: FixedFeature, title: String? = nil, item: TemplateItem) {
+        self.feature = feature
+        self.title = title ?? feature.title
+        self.item = item
+    }
+}
+
+enum CouponPlanKind: String, CaseIterable, Identifiable, Hashable {
+    case weekly
+    case annual
+
+    var id: String { rawValue }
+}
+
+struct CMSCouponPlan: Hashable {
+    let productID: String
+}
+
+struct CMSCouponOffer: Identifiable, Hashable {
+    let id: String
+    let placement: String
+    let coverImageURL: URL
+    let weeklyPlan: CMSCouponPlan
+    let annualPlan: CMSCouponPlan
+
+    func plan(for kind: CouponPlanKind) -> CMSCouponPlan {
+        kind == .weekly ? weeklyPlan : annualPlan
     }
 }
 
@@ -276,6 +376,8 @@ struct TemplateSection: Identifiable {
     let id: String
     let title: String
     let badge: String?
+    let showsPrompt: Bool?
+    let promptIsEditable: Bool?
     let items: [TemplateItem]
     let generationKind: TemplateGenerationKind
     /// The CMS section ordering. Local catalog sections leave this unset and
@@ -286,6 +388,8 @@ struct TemplateSection: Identifiable {
         _ title: String,
         id: String? = nil,
         badge: String? = nil,
+        showsPrompt: Bool? = nil,
+        promptIsEditable: Bool? = nil,
         items: [TemplateItem],
         generationKind: TemplateGenerationKind = .video,
         sortOrder: Int? = nil
@@ -294,10 +398,21 @@ struct TemplateSection: Identifiable {
         self.id = resolvedID
         self.title = title
         self.badge = badge
+        self.showsPrompt = showsPrompt
+        self.promptIsEditable = promptIsEditable
         self.generationKind = generationKind
         self.sortOrder = sortOrder
-        self.items = items.map {
-            $0.inGenerationGroup(
+        self.items = items.map { item in
+            let configuredItem: TemplateItem
+            if showsPrompt != nil || promptIsEditable != nil {
+                configuredItem = item.withPromptControls(
+                    showsPrompt: showsPrompt ?? item.showsPrompt,
+                    promptIsEditable: promptIsEditable ?? item.promptIsEditable
+                )
+            } else {
+                configuredItem = item
+            }
+            return configuredItem.inGenerationGroup(
                 generationKind,
                 detailGroupID: resolvedID,
                 detailGroupTitle: title
@@ -353,14 +468,24 @@ enum TemplateBadgePolicy {
 
 enum TemplateSectionBadgePolicy {
     static func badge(for section: TemplateSection, at zeroBasedPosition: Int, on page: AppTab) -> String? {
-        if let configuredBadge = section.badge {
-            return TemplateBadgeValue.normalized(configuredBadge)
+        if let configuredBadge = section.badge?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+            switch configuredBadge {
+            case "AUTO", "": return defaultBadge(at: zeroBasedPosition, on: page)
+            case "HOT": return "HOT"
+            case "NEW": return "NEW"
+            case "NONE", "OFF": return nil
+            default: return nil
+            }
         }
 
-        return switch (page, zeroBasedPosition) {
-        case (.home, 0): "HOT"
-        case (.home, 1): "NEW"
-        case (.photo, 0): "HOT"
+        return defaultBadge(at: zeroBasedPosition, on: page)
+    }
+
+    private static func defaultBadge(at zeroBasedPosition: Int, on page: AppTab) -> String? {
+        guard page != .me else { return nil }
+        return switch zeroBasedPosition {
+        case 0: "HOT"
+        case 1: "NEW"
         default: nil
         }
     }
@@ -385,24 +510,6 @@ enum TemplateCatalog {
         title: "School Days",
         imageName: "SchoolWaveLandscape",
         videoName: "school_wave",
-        orientation: .landscape
-    )
-    static let textToVideoWhale = TemplateItem(
-        id: "text-to-video-whale",
-        title: "Text To Video",
-        videoName: "text_to_video_whale_cover",
-        orientation: .landscape
-    )
-    static let photoToVideo = TemplateItem(
-        id: "photo-to-video-cover",
-        title: "Photo To Video",
-        videoName: "photo_to_video_cover",
-        orientation: .landscape
-    )
-    static let fusion = TemplateItem(
-        id: "fusion-cover",
-        title: "Fusion",
-        videoName: "fusion_cover",
         orientation: .landscape
     )
     static let memory = TemplateItem(
@@ -504,49 +611,27 @@ enum TemplateCatalog {
         videoName: "fashion",
         orientation: .landscape
     )
-    static let enhanceVideo = TemplateItem(
-        id: "enhance-video-cover",
-        title: "Enhance Video",
-        imageName: "Fashion",
-        videoName: "enhance_comparison_cover",
-        orientation: .landscape
-    )
-    static let enhancePhoto = TemplateItem(
-        id: "enhance-photo-cover",
-        title: "Enhance Photo",
-        imageName: "EnhanceFeatureCard",
-        videoName: "enhance_photo_comparison_cover",
-        orientation: .landscape
-    )
-    static let gptImage = TemplateItem(
-        id: "gpt-image-cover",
-        title: "AI Image",
-        imageName: "GPTImageMagicCover",
-        videoName: "gpt_image_magic_cover",
-        orientation: .landscape
-    )
-
     static let homeHeroItems = [schoolWave, cinematic, fashionShow].map { $0.inDetailGroup("home-hero") }
     static let photoHeroItems = [cinematic, fashionShow, schoolWave].map { $0.inDetailGroup("photo-hero") }
     static let videoHeroItems = [schoolWave, cinematic, fashionShow].map { $0.inDetailGroup("video-hero") }
-    static let localPhotoHeroEntries: [TemplateDetailEntry] = {
-        let assetNames = ["AIPhotoCarousel3", "AIPhotoCarousel1", "AIPhotoCarousel2"].sorted {
-            photoCarouselNumber(in: $0) < photoCarouselNumber(in: $1)
-        }
-
-        return zip(assetNames, photoHeroItems).map { assetName, template in
-            TemplateDetailEntry(
-                displayItem: template
-                    .inGenerationGroup(.image)
-                    .withImage(named: assetName),
-                tryNowItem: template.inGenerationGroup(.image)
-            )
-        }
-    }()
     static let photoToolItems = [memory, fashion, anime].map { $0.inDetailGroup("photo-tools") }
 
-    private static func photoCarouselNumber(in assetName: String) -> Int {
-        Int(String(assetName.reversed().prefix { $0.isNumber }.reversed())) ?? .max
+    static let homeQuickActions: [HomeQuickAction] = [
+        .oneTapRestore,
+        .enhanceVideo,
+        .photoToVideo,
+        .aiImage,
+        .enhancePhoto,
+        .textToVideo
+    ].map { feature in
+        HomeQuickAction(
+            feature: feature,
+            item: TemplateItem(
+                id: "local-fixed-\(feature.rawValue)",
+                title: feature.title,
+                orientation: .landscape
+            )
+        )
     }
 
     static let homeSections = [
@@ -559,7 +644,7 @@ enum TemplateCatalog {
     static let photoSections = [
         TemplateSection("New Outfit", items: [fashion, cowboy, gentleman, anime], generationKind: .image),
         TemplateSection("Stylized", items: [mangaRide, cartoon, anime, babyFly], generationKind: .image),
-        TemplateSection("Restore & Colorize", items: [memory, fashion, gentleman, cowboy], generationKind: .image)
+        TemplateSection("One-Tap Restore", items: [memory, fashion, gentleman, cowboy], generationKind: .image)
     ]
 
     static let videoSections = [

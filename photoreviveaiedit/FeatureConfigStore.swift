@@ -8,6 +8,9 @@ final class FeatureConfigStore: ObservableObject {
     @Published private(set) var homeCarouselEntries: [TemplateDetailEntry] = []
     @Published private(set) var photoCarouselEntries: [TemplateDetailEntry] = []
     @Published private(set) var videoCarouselEntries: [TemplateDetailEntry] = []
+    @Published private(set) var homeQuickActions: [HomeQuickAction] = []
+    @Published private(set) var homeHeroOffer: CMSCouponOffer?
+    @Published private(set) var homeBottomOffer: CMSCouponOffer?
     @Published private(set) var isLoading = true
 
     private var hasStartedLoading = false
@@ -23,6 +26,13 @@ final class FeatureConfigStore: ObservableObject {
         )
     }
 
+    var videoModeActions: [HomeQuickAction] {
+        // `get-app-fixed-features` only returns enabled Home entries and keeps
+        // their CMS order. The AI Video header mirrors the first four visible
+        // Home entries, so a disabled slot is replaced by the next enabled one.
+        Array(homeQuickActions.prefix(4))
+    }
+
     func heroEntries(for tab: AppTab) -> [TemplateDetailEntry] {
         let configured: [TemplateDetailEntry]
         let fallbackItems: [TemplateItem]
@@ -31,7 +41,7 @@ final class FeatureConfigStore: ObservableObject {
             configured = homeCarouselEntries
             fallbackItems = Array(homeSections.flatMap(\.items).prefix(3))
         case .photo:
-            return TemplateCatalog.localPhotoHeroEntries
+            return photoCarouselEntries
         case .video:
             configured = videoCarouselEntries
             fallbackItems = Array(videoSections.flatMap(\.items).prefix(3))
@@ -49,6 +59,47 @@ final class FeatureConfigStore: ObservableObject {
             return [item]
         }
         return section.items
+    }
+
+    /// Returns one continuous, CMS-ordered detail feed. The selected filter is
+    /// first, followed by the rest of its section and every following section.
+    /// Earlier filters wrap to the end so a detail screen never stops merely
+    /// because the user reached the boundary of the section they opened.
+    func browsingItems(for item: TemplateItem, on tab: AppTab) -> [TemplateItem] {
+        let sections: [TemplateSection]
+        switch tab {
+        case .home:
+            sections = homeSections
+        case .photo:
+            sections = imageSections
+        case .video:
+            sections = videoSections
+        case .me:
+            sections = []
+        }
+
+        let allItems = sections.flatMap(\.items)
+        let selectedIndex = allItems.firstIndex {
+            $0.id == item.id
+                && $0.generationKind == item.generationKind
+                && $0.detailGroupID == item.detailGroupID
+        } ?? allItems.firstIndex {
+            $0.id == item.id && $0.generationKind == item.generationKind
+        }
+
+        let orderedItems: [TemplateItem]
+        if let selectedIndex {
+            orderedItems = [item]
+                + Array(allItems.dropFirst(selectedIndex + 1))
+                + Array(allItems.prefix(selectedIndex))
+        } else {
+            orderedItems = [item] + allItems
+        }
+
+        // A filter can be reused in more than one CMS section. SwiftUI paging
+        // requires stable unique ids, so show its first occurrence only.
+        var seenIDs = Set<String>()
+        return orderedItems.filter { seenIDs.insert($0.id).inserted }
     }
 
     func load() async {
@@ -81,10 +132,16 @@ final class FeatureConfigStore: ObservableObject {
             homeCarouselEntries = TemplateCatalog.homeHeroItems.map(TemplateDetailEntry.init(item:))
             photoCarouselEntries = TemplateCatalog.photoHeroItems.map(TemplateDetailEntry.init(item:))
             videoCarouselEntries = TemplateCatalog.videoHeroItems.map(TemplateDetailEntry.init(item:))
+            homeQuickActions = TemplateCatalog.homeQuickActions
+            homeHeroOffer = nil
+            homeBottomOffer = nil
             return
         }
 
-        await AdjustService.shared.waitForInitialAttribution()
+        // Do not hold the catalog behind Adjust's four-second attribution
+        // window. The initial no-ad catalog can load under the startup video;
+        // the existing attribution notification refreshes it if targeting
+        // resolves to a different audience later.
         let referrer = AdjustService.shared.referrer
 
         async let fetchedVideoSections = fetchSections(
@@ -98,11 +155,13 @@ final class FeatureConfigStore: ObservableObject {
             referrer: referrer
         )
         async let fetchedCarousels = fetchCarousels(referrer: referrer)
+        async let fetchedQuickActions = fetchQuickActions()
 
         do {
             let remoteSections = try await fetchedVideoSections
             guard generation == loadGeneration else { return }
             videoSections = Self.addingLocalDearBabyItems(to: remoteSections)
+            prefetchInitialCovers()
         } catch {
             // An empty catalog is intentional: do not restore placeholder covers on failure.
         }
@@ -110,6 +169,7 @@ final class FeatureConfigStore: ObservableObject {
             let remoteSections = try await fetchedImageSections
             guard generation == loadGeneration else { return }
             imageSections = remoteSections
+            prefetchInitialCovers()
         } catch {
             // Keep the fixed photo tools usable when the remote catalog is unavailable.
         }
@@ -117,12 +177,66 @@ final class FeatureConfigStore: ObservableObject {
         do {
             let carousels = try await fetchedCarousels
             guard generation == loadGeneration else { return }
-            homeCarouselEntries = carousels[.home] ?? []
-            photoCarouselEntries = carousels[.photo] ?? []
-            videoCarouselEntries = carousels[.video] ?? []
+            homeCarouselEntries = carousels.entries[.home] ?? []
+            photoCarouselEntries = carousels.entries[.photo] ?? []
+            videoCarouselEntries = carousels.entries[.video] ?? []
+            homeHeroOffer = carousels.homeHeroOffer
+            homeBottomOffer = carousels.homeBottomOffer
+            prefetchInitialCovers()
         } catch {
             // Section covers remain as a fallback if carousel configuration is unavailable.
         }
+
+        do {
+            let quickActions = try await fetchedQuickActions
+            guard generation == loadGeneration else { return }
+            // The endpoint only returns enabled features. Accept partial and empty
+            // responses so CMS switches can hide one shortcut or the entire row.
+            homeQuickActions = quickActions
+            prefetchInitialCovers()
+        } catch {
+            // Do not restore bundled covers: Home keeps the CMS-only result.
+        }
+    }
+
+    /// Warm the media the user is most likely to see next. Prefetching is
+    /// deliberately narrow and sequential inside the repository, leaving
+    /// transfer slots available for covers that have actually appeared.
+    private func prefetchInitialCovers() {
+        var items = [TemplateItem]()
+        items.append(contentsOf: homeCarouselEntries.prefix(3).map(\.displayItem))
+        items.append(contentsOf: homeQuickActions.prefix(4).map(\.item))
+        items.append(contentsOf: homeSections.prefix(3).flatMap { $0.items.prefix(3) })
+        items.append(contentsOf: imageSections.prefix(3).compactMap { $0.items.first })
+        items.append(contentsOf: videoSections.prefix(2).compactMap { $0.items.first })
+
+        var urls = items.flatMap { item -> [URL] in
+            if let comparison = item.comparisonCover {
+                return [comparison.beforeURL, comparison.afterURL]
+            }
+            return item.coverImageURL.map { [$0] } ?? []
+        }
+        if let homeHeroOffer { urls.insert(homeHeroOffer.coverImageURL, at: 0) }
+        if let homeBottomOffer { urls.append(homeBottomOffer.coverImageURL) }
+        TemplateMediaPreloader.prefetchImages(urls)
+    }
+
+    private func fetchQuickActions() async throws -> [HomeQuickAction] {
+        var components = URLComponents(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/get-app-fixed-features"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID)]
+        guard let url = components?.url else { throw URLError(.badURL) }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let response = response as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        let payload = try JSONDecoder().decode(RemoteFixedFeatureResponse.self, from: data)
+        return payload.items.compactMap(\.quickAction)
     }
 
     private func fetchSections(
@@ -159,7 +273,7 @@ final class FeatureConfigStore: ObservableObject {
             .compactMap { $0.element.templateSection(generationKind: generationKind) }
     }
 
-    private func fetchCarousels(referrer: String) async throws -> [RemoteCarouselPage: [TemplateDetailEntry]] {
+    private func fetchCarousels(referrer: String) async throws -> CarouselLoadResult {
         var components = URLComponents(
             url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/get-app-carousels"),
             resolvingAgainstBaseURL: false
@@ -168,17 +282,29 @@ final class FeatureConfigStore: ObservableObject {
             URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID),
             URLQueryItem(name: "referrer", value: referrer)
         ]
-        guard let url = components?.url else { return [:] }
+        guard let url = components?.url else { return CarouselLoadResult() }
 
         let (data, response) = try await URLSession.shared.data(from: url)
         guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
-            return [:]
+            return CarouselLoadResult()
         }
 
         let payload = try JSONDecoder().decode(RemoteCarouselResponse.self, from: data)
-        return Dictionary(grouping: payload.items.compactMap(\.detailEntry), by: { $0.page })
-            .mapValues { $0.map { $0.entry } }
+        let detailEntries: [(page: RemoteCarouselPage, entry: TemplateDetailEntry)] = payload.items.compactMap { item in
+            guard item.normalizedPlacement == "hero" else { return nil }
+            // AI Photo only accepts an image cover, but its destination is CMS-driven.
+            return item.page == .photo ? item.photoImageEntry : item.detailEntry
+        }
+        let mappedEntries = Dictionary(grouping: detailEntries, by: { $0.page })
+        .mapValues { $0.map { $0.entry } }
+
+        let offers = payload.items.compactMap(\.couponOffer)
+        return CarouselLoadResult(
+            entries: mappedEntries,
+            homeHeroOffer: offers.first { $0.placement == "hero" },
+            homeBottomOffer: offers.first { $0.placement == "bottom_banner" }
+        )
     }
 
     /// Keep the three bundled Dear Baby previews available while the CMS
@@ -212,6 +338,8 @@ final class FeatureConfigStore: ObservableObject {
             existing.title,
             id: existing.id,
             badge: existing.badge,
+            showsPrompt: existing.showsPrompt,
+            promptIsEditable: existing.promptIsEditable,
             items: existing.items + missingItems,
             generationKind: existing.generationKind,
             sortOrder: existing.sortOrder
@@ -251,10 +379,66 @@ private struct RemoteCarouselResponse: Decodable {
     let items: [RemoteCarouselItem]
 }
 
+private struct CarouselLoadResult {
+    var entries: [RemoteCarouselPage: [TemplateDetailEntry]] = [:]
+    var homeHeroOffer: CMSCouponOffer?
+    var homeBottomOffer: CMSCouponOffer?
+}
+
+private struct RemoteFixedFeatureResponse: Decodable {
+    let items: [RemoteFixedFeatureItem]
+}
+
+private enum RemoteFixedFeatureCoverType: String, Decodable {
+    case image
+    case video
+}
+
+private struct RemoteFixedFeatureItem: Decodable {
+    let featureKey: String
+    let title: String
+    let coverType: RemoteFixedFeatureCoverType
+    let coverImageURL: String?
+    let coverVideoURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case featureKey = "feature_key"
+        case title
+        case coverType = "cover_type"
+        case coverImageURL = "cover_image_url"
+        case coverVideoURL = "cover_video_url"
+    }
+
+    var quickAction: HomeQuickAction? {
+        guard let feature = FixedFeature(cmsKey: featureKey) else { return nil }
+        let imageURL = coverImageURL.flatMap(URL.init(string:))
+        let videoURL = coverVideoURL.flatMap(URL.init(string:))
+        guard coverType == .video ? videoURL != nil : imageURL != nil else { return nil }
+
+        let item = TemplateItem(
+            id: "cms-fixed-feature-\(featureKey)",
+            title: title,
+            coverImageURL: imageURL,
+            coverVideoURL: videoURL,
+            orientation: .landscape,
+            generationKind: coverType == .video ? .video : .image
+        )
+        return HomeQuickAction(feature: feature, title: title, item: item)
+    }
+}
+
 private struct RemoteCarouselTarget: Decodable {
     let id: Int
     let title: String?
     let menu: String
+    let showPrompt: Bool?
+    let promptEditable: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, menu
+        case showPrompt = "show_prompt"
+        case promptEditable = "prompt_editable"
+    }
 }
 
 private struct RemoteCarouselItem: Decodable {
@@ -272,6 +456,11 @@ private struct RemoteCarouselItem: Decodable {
     let comparisonCover: RemoteComparisonCover?
     let targetTemplate: RemoteCarouselTarget?
     let targetFilter: RemoteFeatureItem?
+    let targetKind: String?
+    let targetFixedFeatureKey: String?
+    let contentKind: String?
+    let placement: String?
+    let coupon: RemoteCouponConfiguration?
 
     enum CodingKeys: String, CodingKey {
         case id, page, title
@@ -286,9 +475,55 @@ private struct RemoteCarouselItem: Decodable {
         case comparisonCover = "comparison_cover"
         case targetTemplate = "target_template"
         case targetFilter = "target_filter"
+        case targetKind = "target_kind"
+        case targetFixedFeatureKey = "target_fixed_feature_key"
+        case contentKind = "content_kind"
+        case placement
+        case coupon
+    }
+
+    var normalizedPlacement: String {
+        placement?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "hero"
+    }
+
+    var normalizedTargetKind: String {
+        if let targetKind = targetKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !targetKind.isEmpty {
+            return targetKind
+        }
+        if targetTemplate != nil, targetFilter != nil { return "try_now" }
+        // Backward compatibility with the old hard-coded AI Photo action.
+        if page == .photo { return "fixed_feature" }
+        return "none"
+    }
+
+    var fixedFeatureTarget: FixedFeature? {
+        guard normalizedTargetKind == "fixed_feature" else { return nil }
+        let key = targetFixedFeatureKey ?? (page == .photo ? "ai_image" : nil)
+        return key.flatMap(FixedFeature.init(cmsKey:))
+    }
+
+    var couponOffer: CMSCouponOffer? {
+        guard page == .home,
+              contentKind?.lowercased() == "coupon",
+              let coupon,
+              let coverImageURL = coverImageURL.flatMap(URL.init(string:)),
+              let weekly = coupon.weekly.plan,
+              let annual = coupon.annual.plan else {
+            return nil
+        }
+
+        return CMSCouponOffer(
+            id: id,
+            placement: normalizedPlacement,
+            coverImageURL: coverImageURL,
+            weeklyPlan: weekly,
+            annualPlan: annual
+        )
     }
 
     var detailEntry: (page: RemoteCarouselPage, entry: TemplateDetailEntry)? {
+        guard contentKind?.lowercased() != "coupon" else { return nil }
         let imageURL = coverImageURL.flatMap(URL.init(string:))
         let videoURL = coverType == .video ? coverVideoURL.flatMap(URL.init(string:)) : nil
         let comparison = comparisonCoverValue
@@ -296,14 +531,21 @@ private struct RemoteCarouselItem: Decodable {
             ? videoURL != nil
             : (imageURL != nil || comparison != nil) else { return nil }
 
-        let generationKind: TemplateGenerationKind = targetTemplate?.menu == "image" ? .image : .video
+        let generationKind: TemplateGenerationKind
+        if let targetTemplate {
+            generationKind = targetTemplate.menu == "image" ? .image : .video
+        } else {
+            generationKind = coverType == .video ? .video : .image
+        }
         let tryNowItem: TemplateItem?
-        if let targetTemplate, let targetFilter {
+        if normalizedTargetKind == "try_now", let targetTemplate, let targetFilter {
             let groupID = "cms-section-\(targetTemplate.id)"
             tryNowItem = targetFilter.templateItem(
                 groupID: groupID,
                 groupTitle: targetTemplate.title,
-                generationKind: generationKind
+                generationKind: generationKind,
+                showsPrompt: targetTemplate.showPrompt ?? false,
+                promptIsEditable: targetTemplate.promptEditable ?? false
             )
         } else {
             tryNowItem = nil
@@ -320,7 +562,52 @@ private struct RemoteCarouselItem: Decodable {
             detailGroupID: "cms-carousel-\(page.rawValue)",
             detailGroupTitle: targetTemplate?.title
         )
-        return (page, TemplateDetailEntry(displayItem: displayItem, tryNowItem: tryNowItem))
+        return (
+            page,
+            TemplateDetailEntry(
+                displayItem: displayItem,
+                tryNowItem: tryNowItem,
+                fixedFeatureTarget: fixedFeatureTarget
+            )
+        )
+    }
+
+    var photoImageEntry: (page: RemoteCarouselPage, entry: TemplateDetailEntry)? {
+        guard page == .photo,
+              contentKind?.lowercased() != "coupon",
+              let imageURL = coverImageURL.flatMap(URL.init(string:)) else {
+            return nil
+        }
+
+        let tryNowItem: TemplateItem?
+        if normalizedTargetKind == "try_now", let targetTemplate, let targetFilter {
+            let groupID = "cms-section-\(targetTemplate.id)"
+            tryNowItem = targetFilter.templateItem(
+                groupID: groupID,
+                groupTitle: targetTemplate.title,
+                generationKind: .image,
+                showsPrompt: targetTemplate.showPrompt ?? false,
+                promptIsEditable: targetTemplate.promptEditable ?? false
+            )
+        } else {
+            tryNowItem = nil
+        }
+
+        let displayItem = TemplateItem(
+            id: "cms-photo-carousel-\(id)",
+            title: title,
+            coverImageURL: imageURL,
+            orientation: .landscape,
+            generationKind: .image
+        )
+        return (
+            page,
+            TemplateDetailEntry(
+                displayItem: displayItem,
+                tryNowItem: tryNowItem,
+                fixedFeatureTarget: fixedFeatureTarget
+            )
+        )
     }
 
     private var comparisonCoverValue: TemplateComparisonCover? {
@@ -340,15 +627,38 @@ private struct RemoteCarouselItem: Decodable {
     }
 }
 
+private struct RemoteCouponConfiguration: Decodable {
+    let weekly: RemoteCouponPlan
+    let annual: RemoteCouponPlan
+}
+
+private struct RemoteCouponPlan: Decodable {
+    let productID: String
+
+    enum CodingKeys: String, CodingKey {
+        case productID = "product_id"
+    }
+
+    var plan: CMSCouponPlan? {
+        let productID = productID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !productID.isEmpty else { return nil }
+        return CMSCouponPlan(productID: productID)
+    }
+}
+
 private struct RemoteFeatureSection: Decodable {
     let id: Int
     let title: String?
     let badge: String?
+    let showPrompt: Bool?
+    let promptEditable: Bool?
     let sortOrder: Int?
     let items: [RemoteFeatureItem]
 
     enum CodingKeys: String, CodingKey {
         case id, title, badge, items
+        case showPrompt = "show_prompt"
+        case promptEditable = "prompt_editable"
         case sortOrder = "sort_order"
     }
 
@@ -361,12 +671,21 @@ private struct RemoteFeatureSection: Decodable {
                 configuredOrder(lhs.element.sortOrder, rhs.element.sortOrder)
                     || (lhs.element.sortOrder == rhs.element.sortOrder && lhs.offset < rhs.offset)
             }
-            .compactMap { $0.element.templateItem(groupID: groupID, generationKind: generationKind) }
+            .compactMap {
+                $0.element.templateItem(
+                    groupID: groupID,
+                    generationKind: generationKind,
+                    showsPrompt: showPrompt ?? false,
+                    promptIsEditable: promptEditable ?? false
+                )
+            }
         guard !mappedItems.isEmpty else { return nil }
         return TemplateSection(
             title,
             id: groupID,
             badge: badge,
+            showsPrompt: showPrompt ?? false,
+            promptIsEditable: promptEditable ?? false,
             items: mappedItems,
             generationKind: generationKind,
             sortOrder: sortOrder
@@ -389,8 +708,6 @@ private struct RemoteFeatureItem: Decodable {
     let requiresPreview: Bool?
     let previewStyle: String?
     let previewConfig: RemotePreviewConfig?
-    /// Template-level switch for whether the video upload page shows prompt text.
-    let showPrompt: Bool?
     let coverType: String?
     let coverBeforeImageURL: String?
     let coverAfterImageURL: String?
@@ -413,7 +730,6 @@ private struct RemoteFeatureItem: Decodable {
         case requiresPreview = "requires_preview"
         case previewStyle = "preview_style"
         case previewConfig = "preview_config"
-        case showPrompt = "show_prompt"
         case coverType = "cover_type"
         case coverBeforeImageURL = "cover_before_image_url"
         case coverAfterImageURL = "cover_after_image_url"
@@ -427,7 +743,9 @@ private struct RemoteFeatureItem: Decodable {
     func templateItem(
         groupID: String,
         groupTitle: String? = nil,
-        generationKind: TemplateGenerationKind
+        generationKind: TemplateGenerationKind,
+        showsPrompt: Bool,
+        promptIsEditable: Bool
     ) -> TemplateItem? {
         // Image filters are static previews even if an accidental video URL is present in CMS.
         let coverVideoURL = generationKind == .video ? coverVideo.flatMap(URL.init(string:)) : nil
@@ -437,19 +755,31 @@ private struct RemoteFeatureItem: Decodable {
         guard coverImageURL != nil || comparison != nil else { return nil }
         if generationKind == .video && coverVideoURL == nil { return nil }
 
-        let referenceCount = materialRequirements.reduce(0) { count, requirement in
+        var uploadPlaceholderURLs: [URL?] = []
+        for requirement in materialRequirements where uploadPlaceholderURLs.count < 3 {
+            let slotCount: Int
             switch requirement.type {
-            case "single_image": count + 1
-            case "multiple_images": count + (requirement.imageCount ?? 1)
-            default: count
+            case "single_image": slotCount = 1
+            case "multiple_images": slotCount = max(requirement.imageCount ?? 1, 1)
+            default: continue
+            }
+            let configuredCovers = requirement.coverRequired == true
+                ? (requirement.coverImages ?? [])
+                : []
+            for slotIndex in 0..<min(slotCount, 3 - uploadPlaceholderURLs.count) {
+                let placeholderURL = configuredCovers.indices.contains(slotIndex)
+                    ? URL(string: configuredCovers[slotIndex])
+                    : nil
+                uploadPlaceholderURLs.append(placeholderURL)
             }
         }
 
-        // Both image uploads and prompt-enabled video uploads have only a
-        // one-image or two-image variant, determined by material requirements.
-        let imageUploadCount = min(max(referenceCount, 1), 2)
-        let resolvedShowPrompt = showPrompt ?? !(promptTemplate?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-
+        // Upload count is controlled by image material requirements and is
+        // independent from prompt visibility/editability.
+        let imageUploadCount = min(max(uploadPlaceholderURLs.count, 1), 3)
+        if uploadPlaceholderURLs.isEmpty {
+            uploadPlaceholderURLs = [nil]
+        }
         return TemplateItem(
             id: id,
             title: title,
@@ -461,8 +791,10 @@ private struct RemoteFeatureItem: Decodable {
             imageReferenceCount: imageUploadCount,
             detailGroupID: groupID,
             detailGroupTitle: groupTitle,
-            showsPrompt: resolvedShowPrompt,
+            showsPrompt: showsPrompt,
+            promptIsEditable: promptIsEditable,
             promptTemplate: promptTemplate,
+            uploadPlaceholderURLs: Array(uploadPlaceholderURLs.prefix(imageUploadCount)),
             estimatedCredits: estimatedCredits,
             modelType: modelType,
             modelID: modelID
@@ -514,9 +846,13 @@ private struct RemoteComparisonCover: Decodable {
 private struct RemoteMaterialRequirement: Decodable {
     let type: String
     let imageCount: Int?
+    let coverRequired: Bool?
+    let coverImages: [String]?
 
     enum CodingKeys: String, CodingKey {
         case type
         case imageCount = "image_count"
+        case coverRequired = "cover_required"
+        case coverImages = "cover_images"
     }
 }

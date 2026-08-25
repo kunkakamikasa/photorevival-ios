@@ -19,6 +19,12 @@ struct SignInView: View {
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
 
+                LoopingVideoView(resourceName: "SignInBackgroundVideo")
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .overlay(Color.black.opacity(0.15))

@@ -91,6 +91,35 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testVideoNoPromptUploadFitsOneScreen() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let memory = app.buttons["template-memory"].firstMatch
+        for _ in 0..<6 where !memory.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(memory.waitForExistence(timeout: 3))
+        memory.tap()
+
+        let tryMemory = app.buttons["Try Memory"]
+        XCTAssertTrue(tryMemory.waitForExistence(timeout: 3))
+        tryMemory.tap()
+
+        XCTAssertTrue(app.navigationBars["Revive Old Photos"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["upload-sample-preview"].exists)
+        let primaryAction = app.buttons["creation-primary-action"]
+        XCTAssertTrue(primaryAction.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(primaryAction.frame.maxY, app.windows.firstMatch.frame.maxY + 1)
+        attachScreenshot(named: "Video No Prompt Upload One Screen", app: app)
+    }
+
+    @MainActor
     func testColdLaunchOpensTheTappedFilter() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -118,7 +147,6 @@ final class photoreviveaieditUITests: XCTestCase {
         app.launchArguments += ["-skipOnboarding", "-disableReturningOffer", "-loggedIn", "-useLocalFeatureCatalog"]
         app.launch()
 
-        app.buttons["AI Photo"].tap()
         let cowboy = app.buttons["template-cowboy-style"].firstMatch
         for _ in 0..<8 where !cowboy.isHittable {
             app.swipeUp()
@@ -161,6 +189,7 @@ final class photoreviveaieditUITests: XCTestCase {
         app.launchArguments += [
             "-skipOnboarding",
             "-disableReturningOffer",
+            "-useLocalFeatureCatalog",
             "-forceTemplateSwipeHint"
         ]
         app.launch()
@@ -180,9 +209,9 @@ final class photoreviveaieditUITests: XCTestCase {
         attachScreenshot(named: "Template Detail Swipe Hint", app: app)
 
         app.swipeUp()
-        let tryGentleman = app.buttons["Try Gentleman"]
-        XCTAssertTrue(tryGentleman.waitForExistence(timeout: 3))
-        XCTAssertTrue(tryGentleman.isHittable)
+        let tryMangaRider = app.buttons["Try Manga Rider"]
+        XCTAssertTrue(tryMangaRider.waitForExistence(timeout: 3))
+        XCTAssertTrue(tryMangaRider.isHittable)
         XCTAssertFalse(app.descendants(matching: .any)["template-swipe-hint"].exists)
 
         app.swipeDown()
@@ -190,10 +219,48 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(tryCowboy.isHittable)
 
         app.swipeUp()
-        XCTAssertTrue(tryGentleman.waitForExistence(timeout: 3))
-        XCTAssertTrue(tryGentleman.isHittable)
-        tryGentleman.tap()
+        XCTAssertTrue(tryMangaRider.waitForExistence(timeout: 3))
+        XCTAssertTrue(tryMangaRider.isHittable)
+        tryMangaRider.tap()
         XCTAssertTrue(app.staticTexts["Upload Image"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["upload-sample-preview"].exists)
+    }
+
+    @MainActor
+    func testVideoTemplatePagingContinuesIntoNextSection() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        app.buttons["AI Video"].tap()
+        let playfulCartoon = app.buttons["template-cartoon-portrait"].firstMatch
+        for _ in 0..<6 where !playfulCartoon.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(playfulCartoon.waitForExistence(timeout: 3))
+        playfulCartoon.tap()
+
+        let tryPlayfulCartoon = app.buttons["Try Playful Cartoon"]
+        XCTAssertTrue(tryPlayfulCartoon.waitForExistence(timeout: 3))
+
+        app.swipeUp()
+        let tryBelovedBaby = app.buttons["Try Beloved Baby"]
+        XCTAssertTrue(tryBelovedBaby.waitForExistence(timeout: 3))
+        XCTAssertTrue(tryBelovedBaby.isHittable)
+
+        app.swipeDown()
+        XCTAssertTrue(tryPlayfulCartoon.waitForExistence(timeout: 3))
+
+        app.swipeUp()
+        XCTAssertTrue(tryBelovedBaby.waitForExistence(timeout: 3))
+        tryBelovedBaby.tap()
+
+        XCTAssertTrue(app.navigationBars["Dear Baby"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["upload-sample-preview"].exists)
     }
 
     @MainActor
@@ -259,19 +326,43 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testSummerHeroOfferRoute() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-loggedIn",
+            "-showSummerOfferPreview",
+        ]
         app.launch()
 
-        let summerHero = app.buttons["Open 65% summer offer"]
-        XCTAssertTrue(summerHero.waitForExistence(timeout: 3))
-        attachScreenshot(named: "Summer Home Hero", app: app)
-        summerHero.tap()
+        let close = app.buttons["Close summer offer"]
+        let restore = app.buttons["Restore"]
+        let weekly = app.buttons["Weekly Plan"]
+        let annual = app.buttons["Annual Plan"]
+        let continueButton = app.buttons["Continue"]
 
-        XCTAssertTrue(app.buttons["Close summer offer"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["summer-offer-continue"].exists)
-        XCTAssertTrue(app.buttons["Annual Plan"].exists)
-        attachScreenshot(named: "Summer 65 Percent Offer", app: app)
-        app.buttons["Close summer offer"].tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertTrue(close.isHittable)
+        XCTAssertTrue(restore.waitForExistence(timeout: 2))
+        XCTAssertTrue(restore.isHittable)
+        XCTAssertTrue(weekly.isHittable)
+        XCTAssertTrue(annual.isHittable)
+        XCTAssertTrue(continueButton.isHittable)
+        XCTAssertEqual(annual.value as? String, "Selected")
+        XCTAssertEqual(continueButton.value as? String, "special_gift_yearly")
+
+        weekly.tap()
+        XCTAssertEqual(weekly.value as? String, "Selected")
+        XCTAssertEqual(annual.value as? String, "Not selected")
+        XCTAssertEqual(continueButton.value as? String, "special_gift_weekly")
+
+        annual.tap()
+        XCTAssertEqual(annual.value as? String, "Selected")
+        XCTAssertEqual(continueButton.value as? String, "special_gift_yearly")
+        attachScreenshot(named: "Summer 65 Percent Component Offer", app: app)
+
+        close.tap()
+        XCTAssertFalse(close.waitForExistence(timeout: 2))
     }
 
     @MainActor

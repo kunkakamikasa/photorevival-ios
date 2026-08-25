@@ -123,10 +123,18 @@ final class AdjustService: NSObject {
         let environment = Self.infoString("AdjustEnvironment", fallback: Self.defaultEnvironment)
         let config = ADJConfig(appToken: appToken, environment: environment)
         config?.delegate = self
+        if ProcessInfo.processInfo.arguments.contains("-adjustVerbose") {
+            config?.logLevel = .verbose
+        }
         if let externalDeviceID {
             config?.externalDeviceId = externalDeviceID
         }
         Adjust.initSdk(config)
+        if ProcessInfo.processInfo.arguments.contains("-adjustVerbose") {
+            Adjust.idfa { idfa in
+                print("[Adjust] sdkIDFA=\(idfa ?? "nil")")
+            }
+        }
         #else
         // Keep the wrapper usable by unit tests and non-iOS build environments.
         stateQueue.sync { hasReceivedAttribution = true }

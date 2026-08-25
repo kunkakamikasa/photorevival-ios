@@ -40,11 +40,56 @@ private struct PhotoReviveSessionResponse: Decodable {
     let expires_in: TimeInterval?
 }
 
+private struct PhotoReviveAnonymousSessionResponse: Decodable {
+    let session: PhotoReviveAnonymousSession?
+}
+
+private struct PhotoReviveAnonymousSession: Decodable {
+    let accessToken: String
+    let refreshToken: String
+    let expiresIn: TimeInterval
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+    }
+}
+
+private struct PhotoReviveAnonymousLoginRequest: Encodable {
+    let appID: String
+    let platform: String
+    let idfv: String?
+    let appVersion: String?
+    let timezoneName: String
+    let timezoneAbbreviation: String?
+
+    enum CodingKeys: String, CodingKey {
+        case appID = "app_id"
+        case platform
+        case idfv
+        case appVersion = "app_version"
+        case timezoneName = "timezone_name"
+        case timezoneAbbreviation = "timezone_abbr"
+    }
+}
+
 private struct PhotoReviveIDTokenRequest: Encodable {
     let provider: String
     let id_token: String
     let access_token: String?
     let nonce: String?
+}
+
+private struct PhotoReviveAppContextRequest: Encodable {
+    let app_id: String
+    let timezone_name: String
+    let timezone_abbr: String?
+}
+
+private struct PhotoReviveAppContextResponse: Decodable {
+    let success: Bool
+    let app_id: String
 }
 
 private struct PhotoReviveAdjustAttributionRequest: Encodable {
@@ -127,7 +172,8 @@ final class PhotoReviveAuthStore: ObservableObject {
                     let result = try await coordinator.start()
                     _ = try await client.signInWithGoogle(
                         idToken: result.idToken,
-                        accessToken: result.accessToken
+                        accessToken: result.accessToken,
+                        nonce: result.nonce
                     )
                 }
 
@@ -159,6 +205,8 @@ final class PhotoReviveAuthClient {
     private let session: URLSession
     private let decoder = JSONDecoder()
     private var cachedSession: PhotoReviveSession?
+    private var hasBoundAppContext = false
+    private var boundTimeZoneIdentifier: String?
 
     init(session: URLSession? = nil) {
         if let session {
@@ -175,7 +223,16 @@ final class PhotoReviveAuthClient {
 
     var currentUserID: String? {
         guard let accessToken = cachedSession?.accessToken else { return nil }
-        return Self.userID(from: accessToken)
+        return Self.tokenPayload(from: accessToken)?["sub"] as? String
+    }
+
+    var currentUserEmail: String? {
+        guard let accessToken = cachedSession?.accessToken,
+              let payload = Self.tokenPayload(from: accessToken),
+              payload["is_anonymous"] as? Bool != true,
+              let email = payload["email"] as? String else { return nil }
+        let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
     }
 
     func signInWithApple(idToken: String, nonce: String) async throws -> PhotoReviveSession {
@@ -187,12 +244,16 @@ final class PhotoReviveAuthClient {
         )
     }
 
-    func signInWithGoogle(idToken: String, accessToken: String) async throws -> PhotoReviveSession {
+    func signInWithGoogle(
+        idToken: String,
+        accessToken: String,
+        nonce: String
+    ) async throws -> PhotoReviveSession {
         try await signInWithOpenID(
             provider: .google,
             idToken: idToken,
             accessToken: accessToken,
-            nonce: nil
+            nonce: nonce
         )
     }
 
@@ -202,6 +263,7 @@ final class PhotoReviveAuthClient {
         }
 
         if cachedSession.isFresh {
+            try await bindAppContextIfNeeded(accessToken: cachedSession.accessToken)
             return cachedSession.accessToken
         }
 
@@ -212,11 +274,58 @@ final class PhotoReviveAuthClient {
 
         do {
             let refreshed = try await refreshSession(refreshToken: cachedSession.refreshToken)
+            try await bindAppContextIfNeeded(accessToken: refreshed.accessToken)
             return refreshed.accessToken
         } catch {
             clearSession()
             throw error
         }
+    }
+
+    /// Feedback remains available before OAuth sign-in. The anonymous session
+    /// gives the server a stable user_id while leaving the App's visible login
+    /// state unchanged.
+    func feedbackAccessToken() async throws -> String {
+        if cachedSession != nil {
+            return try await accessToken()
+        }
+
+        var request = URLRequest(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent(
+                "functions/v1/anonymous-login"
+            )
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            PhotoReviveAnonymousLoginRequest(
+                appID: PhotoReviveAPIConfig.appID,
+                platform: "ios",
+                idfv: UIDevice.current.identifierForVendor?.uuidString.lowercased(),
+                appVersion: Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleShortVersionString"
+                ) as? String,
+                timezoneName: Self.currentTimeZoneIdentifier,
+                timezoneAbbreviation: Self.currentTimeZoneAbbreviation
+            )
+        )
+
+        let response: PhotoReviveAnonymousSessionResponse = try await send(request)
+        guard let anonymous = response.session else {
+            throw PhotoReviveAuthError.requestFailed(
+                statusCode: 401,
+                message: "Unable to start a feedback session. Please try again."
+            )
+        }
+        let session = PhotoReviveSession(
+            accessToken: anonymous.accessToken,
+            refreshToken: anonymous.refreshToken,
+            expiresAt: Date().addingTimeInterval(anonymous.expiresIn).timeIntervalSince1970
+        )
+        hasBoundAppContext = true
+        boundTimeZoneIdentifier = Self.currentTimeZoneIdentifier
+        persist(session)
+        return session.accessToken
     }
 
     /// Persist the current Adjust attribution against the authenticated user.
@@ -317,8 +426,14 @@ final class PhotoReviveAuthClient {
             refreshToken: response.refresh_token,
             expiresAt: expiresAt
         )
+        try await bindAppContext(accessToken: session.accessToken)
+        hasBoundAppContext = true
         persist(session)
-        return session
+
+        // Refresh once so the access token also contains the new app metadata.
+        // The binding itself is already durable, so a transient refresh failure
+        // must not discard an otherwise valid OAuth session.
+        return (try? await refreshSession(refreshToken: session.refreshToken)) ?? session
     }
 
     private func refreshSession(refreshToken: String) async throws -> PhotoReviveSession {
@@ -370,6 +485,41 @@ final class PhotoReviveAuthClient {
         }
     }
 
+    private func bindAppContextIfNeeded(accessToken: String) async throws {
+        let currentTimeZoneIdentifier = Self.currentTimeZoneIdentifier
+        guard !hasBoundAppContext || boundTimeZoneIdentifier != currentTimeZoneIdentifier else { return }
+        try await bindAppContext(accessToken: accessToken)
+        hasBoundAppContext = true
+        boundTimeZoneIdentifier = currentTimeZoneIdentifier
+    }
+
+    private func bindAppContext(accessToken: String) async throws {
+        var request = URLRequest(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent(
+                "functions/v1/bind-app-context"
+            )
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(
+            PhotoReviveAppContextRequest(
+                app_id: PhotoReviveAPIConfig.appID,
+                timezone_name: Self.currentTimeZoneIdentifier,
+                timezone_abbr: Self.currentTimeZoneAbbreviation
+            )
+        )
+
+        let response: PhotoReviveAppContextResponse = try await send(request)
+        guard response.success, response.app_id == PhotoReviveAPIConfig.appID else {
+            throw PhotoReviveAuthError.requestFailed(
+                statusCode: 409,
+                message: "Unable to bind this account to PhotoRevive."
+            )
+        }
+        boundTimeZoneIdentifier = Self.currentTimeZoneIdentifier
+    }
+
     private func persist(_ session: PhotoReviveSession) {
         cachedSession = session
         guard let data = try? JSONEncoder().encode(session) else { return }
@@ -378,6 +528,8 @@ final class PhotoReviveAuthClient {
 
     private func clearSession() {
         cachedSession = nil
+        hasBoundAppContext = false
+        boundTimeZoneIdentifier = nil
         PhotoReviveKeychain.delete(service: PhotoReviveKeychain.service)
         UserDefaults.standard.set(false, forKey: "isLoggedIn")
     }
@@ -385,6 +537,18 @@ final class PhotoReviveAuthClient {
     private static func loadStoredSession() -> PhotoReviveSession? {
         guard let data = PhotoReviveKeychain.load(service: PhotoReviveKeychain.service) else { return nil }
         return try? JSONDecoder().decode(PhotoReviveSession.self, from: data)
+    }
+
+    private static var currentTimeZoneIdentifier: String {
+        let identifier = TimeZone.autoupdatingCurrent.identifier
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return identifier.isEmpty ? "America/New_York" : identifier
+    }
+
+    private static var currentTimeZoneAbbreviation: String? {
+        let abbreviation = TimeZone.autoupdatingCurrent.abbreviation()?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return abbreviation?.isEmpty == false ? abbreviation : nil
     }
 
     private static func serverErrorMessage(from data: Data) -> String? {
@@ -419,7 +583,7 @@ final class PhotoReviveAuthClient {
         SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func userID(from accessToken: String) -> String? {
+    private static func tokenPayload(from accessToken: String) -> [String: Any]? {
         let parts = accessToken.split(separator: ".")
         guard parts.count >= 2 else { return nil }
 
@@ -428,11 +592,8 @@ final class PhotoReviveAuthClient {
             .replacingOccurrences(of: "_", with: "/")
         encodedPayload += String(repeating: "=", count: (4 - encodedPayload.count % 4) % 4)
 
-        guard let payloadData = Data(base64Encoded: encodedPayload),
-              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
-            return nil
-        }
-        return payload["sub"] as? String
+        guard let payloadData = Data(base64Encoded: encodedPayload) else { return nil }
+        return try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
     }
 }
 
@@ -561,6 +722,19 @@ private struct PhotoReviveGoogleConfiguration {
 private struct PhotoReviveGoogleAuthorizationResult {
     let idToken: String
     let accessToken: String
+    let nonce: String
+}
+
+struct PhotoReviveGoogleNonce {
+    let rawValue: String
+
+    var hashedValue: String {
+        PhotoReviveAuthClient.sha256(rawValue)
+    }
+
+    static func make() throws -> PhotoReviveGoogleNonce {
+        PhotoReviveGoogleNonce(rawValue: try PhotoReviveAuthClient.randomNonce())
+    }
 }
 
 private final class PhotoReviveGoogleSignInCoordinator {
@@ -580,13 +754,20 @@ private final class PhotoReviveGoogleSignInCoordinator {
             throw PhotoReviveAuthError.requestFailed(statusCode: 500, message: "Could not present Google Sign-In.")
         }
 
+        let nonce = try PhotoReviveGoogleNonce.make()
+
         GIDSignIn.sharedInstance.configuration = GIDConfiguration(
             clientID: configuration.clientID,
             serverClientID: configuration.serverClientID
         )
 
         return try await withCheckedThrowingContinuation { continuation in
-            GIDSignIn.sharedInstance.signIn(withPresenting: presentingViewController) { result, error in
+            GIDSignIn.sharedInstance.signIn(
+                withPresenting: presentingViewController,
+                hint: nil,
+                additionalScopes: nil,
+                nonce: nonce.hashedValue
+            ) { result, error in
                 if let error {
                     if (error as NSError).domain == kGIDSignInErrorDomain,
                        (error as NSError).code == GIDSignInError.canceled.rawValue {
@@ -609,7 +790,8 @@ private final class PhotoReviveGoogleSignInCoordinator {
                 continuation.resume(
                     returning: PhotoReviveGoogleAuthorizationResult(
                         idToken: idToken,
-                        accessToken: user.accessToken.tokenString
+                        accessToken: user.accessToken.tokenString,
+                        nonce: nonce.rawValue
                     )
                 )
             }

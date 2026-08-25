@@ -4,9 +4,10 @@ struct AppRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @StateObject private var trackingAuthorization = TrackingAuthorizationManager()
+    @StateObject private var featureConfigStore = FeatureConfigStore()
     @State private var completedOnboardingThisSession = false
     @State private var showInitialMembership = false
-    @State private var canRequestTrackingAuthorization = false
+    @State private var isShowingStartupVideo = true
 
     private let arguments = ProcessInfo.processInfo.arguments
 
@@ -19,50 +20,57 @@ struct AppRootView: View {
 
     var body: some View {
         ZStack {
-            if shouldShowOnboarding {
+            if isShowingStartupVideo {
+                StartupAnimationView()
+                    .transition(.opacity)
+            } else if shouldShowOnboarding {
                 LaunchExperienceView {
                     completeOnboarding()
                 }
                 .transition(.opacity)
             } else {
                 ContentView(
+                    featureConfigStore: featureConfigStore,
                     startupPresentationsAllowed: trackingAuthorization.hasFinishedInitialRequest
                 )
                     .transition(.opacity)
             }
         }
-        .fullScreenCover(isPresented: $showInitialMembership, onDismiss: {
-            canRequestTrackingAuthorization = true
-        }) {
+        .fullScreenCover(isPresented: $showInitialMembership) {
             MembershipPaywallView()
-        }
-        .onAppear {
-            if !shouldShowOnboarding {
-                canRequestTrackingAuthorization = true
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
             Task {
                 await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
             }
         }
-        .task(id: trackingRequestContext) {
-            guard trackingRequestContext.canRequest else { return }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            // Start CMS and cover warming before any permission flow. This is
+            // the useful work hidden by the three-second startup animation.
+            let featureLoadTask = Task {
+                await featureConfigStore.load()
+            }
             await trackingAuthorization.requestAuthorizationIfNeeded()
-            guard !Task.isCancelled, scenePhase == .active else { return }
+            guard !Task.isCancelled else { return }
             AdjustService.shared.startIfNeeded(
                 externalDeviceID: PhotoReviveAuthClient.shared.currentUserID
             )
             await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
+            await featureLoadTask.value
         }
-    }
+        .task {
+            if arguments.contains("-skipStartupAnimation") {
+                isShowingStartupVideo = false
+                return
+            }
 
-    private var trackingRequestContext: TrackingRequestContext {
-        TrackingRequestContext(
-            canRequest: canRequestTrackingAuthorization
-                && scenePhase == .active
-                && !showInitialMembership
-        )
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.28)) {
+                isShowingStartupVideo = false
+            }
+        }
     }
 
     private func completeOnboarding() {
@@ -74,23 +82,19 @@ struct AppRootView: View {
     }
 }
 
-private struct TrackingRequestContext: Equatable {
-    let canRequest: Bool
-}
-
 private struct LaunchExperienceView: View {
     let onComplete: () -> Void
-    @State private var currentPage = LaunchPage.effect.rawValue
+    @State private var currentPage = LaunchPage.welcome.rawValue
 
     private var page: LaunchPage {
-        LaunchPage(rawValue: currentPage) ?? .effect
+        LaunchPage(rawValue: currentPage) ?? .welcome
     }
 
     var body: some View {
         ZStack {
             LaunchBackgroundMedia(imageName: page.imageName, videoName: page.videoName)
 
-            if page != .effect {
+            if page != .welcome {
                 LinearGradient(
                     stops: page.gradientStops,
                     startPoint: .top,
@@ -101,11 +105,8 @@ private struct LaunchExperienceView: View {
             }
 
             switch page {
-            case .effect:
-                Color.clear
-                    .accessibilityLabel("Photo Revive effect preview")
             case .welcome:
-                WelcomeMarketingOverlay(onContinue: advance)
+                WelcomeVideoContinueHitTarget(onContinue: advance)
             case .restore, .pet, .fusion:
                 GuideOverlay(page: page, onContinue: advance)
             }
@@ -114,12 +115,6 @@ private struct LaunchExperienceView: View {
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.38), value: currentPage)
         .preferredColorScheme(page.colorScheme)
-        .task(id: currentPage) {
-            guard page == .effect else { return }
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
-            guard !Task.isCancelled, currentPage == LaunchPage.effect.rawValue else { return }
-            advance()
-        }
     }
 
     private func advance() {
@@ -134,7 +129,6 @@ private struct LaunchExperienceView: View {
 }
 
 private enum LaunchPage: Int {
-    case effect
     case welcome
     case restore
     case pet
@@ -142,7 +136,6 @@ private enum LaunchPage: Int {
 
     var imageName: String {
         switch self {
-        case .effect: "OnboardingEffectBackground"
         case .welcome: "OnboardingWelcomeBackground"
         case .restore: "OnboardingRestoreBackground"
         case .pet: "OnboardingPetBackground"
@@ -150,10 +143,12 @@ private enum LaunchPage: Int {
         }
     }
 
-    var videoName: String? {
+    var videoName: String {
         switch self {
-        case .effect: "onboarding_launch"
-        case .welcome, .restore, .pet, .fusion: nil
+        case .welcome: "OnboardingWelcomeVideo"
+        case .restore: "OnboardingRestoreVideo"
+        case .pet: "OnboardingPetVideo"
+        case .fusion: "OnboardingFusionVideo"
         }
     }
 
@@ -162,7 +157,7 @@ private enum LaunchPage: Int {
         case .restore: "Bring Memories to Life"
         case .pet: "See Your Pet Again"
         case .fusion: "Bring Your\nFamily Together"
-        case .effect, .welcome: ""
+        case .welcome: ""
         }
     }
 
@@ -171,7 +166,7 @@ private enum LaunchPage: Int {
         case .restore: "With Restore & Photo to Video"
         case .pet: "With Templates"
         case .fusion: "With Fusion"
-        case .effect, .welcome: ""
+        case .welcome: ""
         }
     }
 
@@ -180,14 +175,14 @@ private enum LaunchPage: Int {
         case .restore: 0
         case .pet: 1
         case .fusion: 2
-        case .effect, .welcome: 0
+        case .welcome: 0
         }
     }
 
     var colorScheme: ColorScheme {
         switch self {
         case .welcome, .restore: .dark
-        case .effect, .pet, .fusion: .light
+        case .pet, .fusion: .light
         }
     }
 
@@ -211,9 +206,18 @@ private enum LaunchPage: Int {
                 .init(color: .black.opacity(0.62), location: 0.68),
                 .init(color: .black, location: 0.94)
             ]
-        case .effect:
-            []
         }
+    }
+}
+
+private struct StartupAnimationView: View {
+    var body: some View {
+        LaunchBackgroundMedia(
+            imageName: "OnboardingEffectBackground",
+            videoName: "OnboardingLaunchVideo"
+        )
+        .accessibilityLabel("Photo Revive startup animation")
+        .preferredColorScheme(.light)
     }
 }
 
@@ -237,58 +241,21 @@ private struct LaunchBackgroundMedia: View {
     }
 }
 
-private struct WelcomeMarketingOverlay: View {
+private struct WelcomeVideoContinueHitTarget: View {
     let onContinue: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                VStack(spacing: 2) {
-                    HStack(alignment: .center, spacing: 15) {
-                        Image(systemName: "laurel.leading")
-                            .font(.system(size: 43, weight: .medium))
-
-                        VStack(spacing: 2) {
-                            Text("2M+")
-                                .font(.system(size: 39, weight: .heavy))
-
-                            HStack(spacing: 3) {
-                                ForEach(0..<5, id: \.self) { _ in
-                                    Image(systemName: "star.fill")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundStyle(Color(red: 1, green: 0.62, blue: 0.02))
-                                }
-                            }
-                        }
-
-                        Image(systemName: "laurel.trailing")
-                            .font(.system(size: 43, weight: .medium))
-                    }
-
-                    Text("Users Worldwide")
-                        .font(.system(size: 16, weight: .regular))
-                }
-                .foregroundStyle(.white)
-                .position(x: proxy.size.width / 2, y: proxy.size.height * 0.637)
-
-                VStack(spacing: 8) {
-                    Text("Welcome to\nPhoto Revive")
-                        .font(.system(size: 31, weight: .heavy))
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(1)
-
-                    Text("Bring Your Favorite Moments to Life")
-                        .font(.system(size: 18, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                }
-                .foregroundStyle(.white)
-                    .position(x: proxy.size.width / 2, y: proxy.size.height * 0.773)
-
-                OnboardingContinueButton(action: onContinue)
-                    .padding(.horizontal, 20)
-                    .position(x: proxy.size.width / 2, y: proxy.size.height * 0.890)
+            Button(action: onContinue) {
+                Color.clear
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
             }
+            .buttonStyle(.plain)
+            .frame(height: 58)
+            .padding(.horizontal, 20)
+            .position(x: proxy.size.width / 2, y: proxy.size.height * 0.890)
+            .accessibilityLabel("Continue")
+            .accessibilityIdentifier("onboarding-continue")
         }
     }
 }

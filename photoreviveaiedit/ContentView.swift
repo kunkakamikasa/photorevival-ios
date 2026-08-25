@@ -15,13 +15,17 @@ struct ContentView: View {
     @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
     @State private var showQuickCreator = false
     @State private var showHomeOfferBanner = true
-    @State private var credits = 0
+    @StateObject private var accountStore = AppAccountStore.shared
     @State private var returningOffer: ReturningOfferVariant?
     @State private var hasEvaluatedReturningOffer = false
-    @StateObject private var featureConfigStore = FeatureConfigStore()
+    @ObservedObject private var featureConfigStore: FeatureConfigStore
     @State private var pendingLoginAction: (() -> Void)?
 
-    init(startupPresentationsAllowed: Bool = true) {
+    init(
+        featureConfigStore: FeatureConfigStore,
+        startupPresentationsAllowed: Bool = true
+    ) {
+        _featureConfigStore = ObservedObject(wrappedValue: featureConfigStore)
         self.startupPresentationsAllowed = startupPresentationsAllowed
     }
 
@@ -32,6 +36,7 @@ struct ContentView: View {
             Group {
                 if selectedTab == .me {
                     MePage(
+                        accountStore: accountStore,
                         onCreate: { showQuickCreator = true },
                         onSettings: { showSettings = true }
                     )
@@ -42,27 +47,43 @@ struct ContentView: View {
                         imageSections: featureConfigStore.imageSections,
                         homeSections: featureConfigStore.homeSections,
                         heroEntries: featureConfigStore.heroEntries(for: selectedTab),
+                        homeQuickActions: featureConfigStore.homeQuickActions,
+                        videoModeActions: featureConfigStore.videoModeActions,
+                        homeHeroOffer: featureConfigStore.homeHeroOffer,
                         isLoadingTemplates: featureConfigStore.isLoading,
-                        credits: credits,
+                        credits: accountStore.creditsBalance,
                         onSelectTemplate: { template in
                             selectedTemplateRoute = TemplateDetailRoute(
                                 item: template,
-                                detailItems: featureConfigStore.detailItems(for: template)
+                                detailItems: featureConfigStore.browsingItems(
+                                    for: template,
+                                    on: selectedTab
+                                )
                             )
                         },
                         onSelectCarousel: { entry in
-                            guard entry.tryNowItem != nil else { return }
+                            if let feature = entry.fixedFeatureTarget {
+                                fullScreenDestination = .fixedFeature(feature)
+                                return
+                            }
+                            guard let tryNowItem = entry.tryNowItem else { return }
                             selectedTemplateRoute = TemplateDetailRoute(
                                 item: entry.displayItem,
-                                detailItems: [entry.displayItem],
-                                tryNowItem: entry.tryNowItem
+                                detailItems: featureConfigStore.browsingItems(
+                                    for: tryNowItem,
+                                    on: selectedTab
+                                ),
+                                tryNowItem: tryNowItem,
+                                tryNowItems: featureConfigStore.detailItems(for: tryNowItem)
                             )
                         },
                         onMembership: { fullScreenDestination = .membership },
                         onCredits: { requireLogin { fullScreenDestination = .credits } },
                         onGift: { requireLogin { fullScreenDestination = .credits } },
                         onSuggestion: { fullScreenDestination = .suggestion },
-                        onSummerOffer: { requireLogin { fullScreenDestination = .summerSale } },
+                        onSummerOffer: { offer in
+                            requireLogin { fullScreenDestination = .summerSale(offer) }
+                        },
                         isSubscribed: isSubscribed,
                         isLoggedIn: isLoggedIn,
                         onLogin: { requireLogin {} },
@@ -86,9 +107,12 @@ struct ContentView: View {
                     }
                 }
 
-                if selectedTab == .home && showHomeOfferBanner {
+                if selectedTab == .home,
+                   showHomeOfferBanner,
+                   let offer = featureConfigStore.homeBottomOffer {
                     HomeDiscountBannerView(
-                        onOpen: { requireLogin { fullScreenDestination = .summerSale } },
+                        imageURL: offer.coverImageURL,
+                        onOpen: { requireLogin { fullScreenDestination = .summerSale(offer) } },
                         onClose: {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 showHomeOfferBanner = false
@@ -117,7 +141,11 @@ struct ContentView: View {
                 item: route.item,
                 detailItems: route.detailItems,
                 tryNowItem: route.tryNowItem,
-                credits: $credits
+                tryNowItems: route.tryNowItems,
+                creationItemsProvider: { item in
+                    featureConfigStore.detailItems(for: item)
+                },
+                credits: creditsBinding
             ) {
                 selectedTemplateRoute = nil
             }
@@ -134,10 +162,10 @@ struct ContentView: View {
                     postDismissAction = .limitedOffer
                     fullScreenDestination = nil
                 }
-            case .summerSale:
-                SummerSalePaywallView()
+            case .summerSale(let offer):
+                SummerSalePaywallView(offer: offer)
             case .credits:
-                CreditCenterView(credits: $credits)
+                CreditCenterView(credits: creditsBinding, accountStore: accountStore)
             case .suggestion:
                 SuggestionView()
             case .login:
@@ -145,14 +173,18 @@ struct ContentView: View {
                     fullScreenDestination = nil
                 }
             case .fixedFeature(let feature):
-                FixedFeatureView(feature: feature, credits: $credits)
+                FixedFeatureView(
+                    feature: feature,
+                    quickActions: featureConfigStore.homeQuickActions,
+                    credits: creditsBinding
+                )
             }
         }
         .fullScreenCover(isPresented: $showSettings) {
-            SettingsView(credits: $credits)
+            SettingsView(credits: creditsBinding)
         }
         .fullScreenCover(isPresented: $showQuickCreator) {
-            CreateFlowView(template: nil, credits: $credits)
+            CreateFlowView(template: nil, credits: creditsBinding)
         }
         .fullScreenCover(item: $returningOffer) { variant in
             switch variant {
@@ -173,8 +205,34 @@ struct ContentView: View {
         .task {
             await featureConfigStore.load()
         }
+#if DEBUG
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showSummerOfferPreview") else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            fullScreenDestination = .summerSale(Self.summerOfferPreview)
+        }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showRewardsPreview") else { return }
+            await accountStore.prepareRewardSessionIfNeeded()
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            fullScreenDestination = .credits
+        }
+#endif
+        .task(id: isLoggedIn) {
+            if isLoggedIn {
+                await accountStore.refreshAll()
+            } else {
+                accountStore.resetForSignedOutUser()
+            }
+        }
         .task(id: startupPresentationsAllowed) {
             guard startupPresentationsAllowed else { return }
+#if DEBUG
+            guard !ProcessInfo.processInfo.arguments.contains("-showSummerOfferPreview"),
+                  !ProcessInfo.processInfo.arguments.contains("-showRewardsPreview") else { return }
+#endif
             guard !hasEvaluatedReturningOffer else { return }
             hasEvaluatedReturningOffer = true
 
@@ -206,6 +264,27 @@ struct ContentView: View {
 
     private var isLoggedIn: Bool {
         storedIsLoggedIn || ProcessInfo.processInfo.arguments.contains("-loggedIn")
+    }
+
+#if DEBUG
+    private static let summerOfferPreview = CMSCouponOffer(
+        id: "summer-offer-preview",
+        placement: "hero",
+        coverImageURL: URL(string: "https://example.com/summer-offer-preview.png")!,
+        weeklyPlan: CMSCouponPlan(productID: "special_gift_weekly"),
+        annualPlan: CMSCouponPlan(productID: "special_gift_yearly")
+    )
+#endif
+
+    private var creditsBinding: Binding<Int> {
+        Binding(
+            get: { accountStore.creditsBalance },
+            set: { _ in
+                // The balance is server-authoritative. Legacy creation screens still
+                // mutate this Binding, so discard that local value and reconcile.
+                Task { await accountStore.refreshCredits() }
+            }
+        )
     }
 
     private func requireLogin(_ action: @escaping () -> Void) {
@@ -264,20 +343,27 @@ private struct TemplateDetailRoute: Identifiable {
     let item: TemplateItem
     let detailItems: [TemplateItem]
     let tryNowItem: TemplateItem?
+    let tryNowItems: [TemplateItem]?
 
     var id: String { item.id }
 
-    init(item: TemplateItem, detailItems: [TemplateItem], tryNowItem: TemplateItem? = nil) {
+    init(
+        item: TemplateItem,
+        detailItems: [TemplateItem],
+        tryNowItem: TemplateItem? = nil,
+        tryNowItems: [TemplateItem]? = nil
+    ) {
         self.item = item
         self.detailItems = detailItems
         self.tryNowItem = tryNowItem
+        self.tryNowItems = tryNowItems
     }
 }
 
 private enum AppDestination: Identifiable {
     case membership
     case superPrize
-    case summerSale
+    case summerSale(CMSCouponOffer)
     case credits
     case suggestion
     case login
@@ -287,7 +373,7 @@ private enum AppDestination: Identifiable {
         switch self {
         case .membership: "membership"
         case .superPrize: "superPrize"
-        case .summerSale: "summerSale"
+        case .summerSale(let offer): "summerSale-\(offer.id)"
         case .credits: "credits"
         case .suggestion: "suggestion"
         case .login: "login"
@@ -302,5 +388,5 @@ private enum PostDismissAction {
 }
 
 #Preview {
-    ContentView()
+    ContentView(featureConfigStore: FeatureConfigStore())
 }

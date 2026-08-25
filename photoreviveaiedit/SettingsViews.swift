@@ -14,6 +14,7 @@ private enum SettingsDestination: String, Identifiable {
     case creditDetail
     case feedback
     case membership
+    case referral
 
     var id: String { rawValue }
 }
@@ -45,7 +46,7 @@ struct SettingsView: View {
                         SettingsRow(title: "Restore", action: { showNotice("Restore", "Your purchases will be restored when StoreKit products are connected.") })
                         SettingsRow(title: "Language", value: "English", action: { showNotice("Language", "English is the only language currently available.") })
                         SettingsRow(title: "FAQ", action: { showNotice("FAQ", "Find answers about credits, generations and subscriptions here.") })
-                        SettingsRow(title: "Referral Code", action: { showNotice("Referral Code", "Referral codes will be available after account sign-in.") })
+                        SettingsRow(title: "Referral Code", action: { destination = .referral })
                         SettingsRow(title: "Feedback", action: { destination = .feedback })
                         SettingsRow(title: "Rate us", action: { showNotice("Rate us", "Thanks for helping Photo Revive AI grow.") })
                         SettingsRow(title: "Terms of Service", action: { showNotice("Terms of Service", "Terms of Service will open here when the production URL is connected.") })
@@ -83,6 +84,10 @@ struct SettingsView: View {
                 FeedbackView()
             case .membership:
                 MembershipPaywallView()
+            case .referral:
+                NavigationStack {
+                    InviteFriendsView(credits: $credits)
+                }
             }
         }
         .alert(item: $notice) { notice in
@@ -263,37 +268,24 @@ private enum CreditFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-private struct CreditTransaction: Identifiable {
-    let id: Int
-    let title: String
-    let date: String
-    let amount: Int
-    let isSpent: Bool
-}
-
 struct CreditDetailView: View {
     @Binding var credits: Int
+    @ObservedObject var accountStore: AppAccountStore
     @Environment(\.dismiss) private var dismiss
     @State private var filter: CreditFilter = .all
     @State private var showMembership = false
     @State private var showFAQ = false
 
-    private let transactions: [CreditTransaction] = [
-        CreditTransaction(id: 0, title: "Generate Image", date: "08/17/2026 11:04:27", amount: -30, isSpent: true),
-        CreditTransaction(id: 1, title: "Generate Video", date: "08/17/2026 10:55:44", amount: -60, isSpent: true),
-        CreditTransaction(id: 2, title: "Task Reward", date: "08/17/2026 10:53:00", amount: 10, isSpent: false),
-        CreditTransaction(id: 3, title: "Task Reward", date: "08/17/2026 10:52:04", amount: 10, isSpent: false),
-        CreditTransaction(id: 4, title: "Task Reward", date: "08/17/2026 10:52:00", amount: 10, isSpent: false),
-        CreditTransaction(id: 5, title: "Task Reward", date: "08/17/2026 10:51:47", amount: 20, isSpent: false),
-        CreditTransaction(id: 6, title: "Day 1 Check-in", date: "08/17/2026 10:49:53", amount: 20, isSpent: false),
-        CreditTransaction(id: 7, title: "Day 1 Check-in", date: "08/15/2026 14:04:55", amount: 20, isSpent: false)
-    ]
+    init(credits: Binding<Int>, accountStore: AppAccountStore? = nil) {
+        _credits = credits
+        self.accountStore = accountStore ?? .shared
+    }
 
-    private var visibleTransactions: [CreditTransaction] {
+    private var visibleTransactions: [CreditTransactionRecord] {
         switch filter {
-        case .all: transactions
-        case .spent: transactions.filter(\.isSpent)
-        case .earned: transactions.filter { !$0.isSpent }
+        case .all: accountStore.creditTransactions
+        case .spent: accountStore.creditTransactions.filter(\.isSpent)
+        case .earned: accountStore.creditTransactions.filter { !$0.isSpent }
         }
     }
 
@@ -332,6 +324,10 @@ struct CreditDetailView: View {
         } message: {
             Text("Credits are consumed when you generate images or videos and added by rewards.")
         }
+        .task {
+            await accountStore.refreshCreditTransactions()
+            credits = accountStore.creditsBalance
+        }
     }
 
     private var creditHeader: some View {
@@ -362,15 +358,23 @@ struct CreditDetailView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 29, height: 29)
-                Text("\(credits)")
+                Text("\(accountStore.creditWallet?.total ?? credits)")
                     .font(.system(size: 31, weight: .heavy))
                     .foregroundStyle(AppPalette.ink)
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(Color.gray.opacity(0.52))
+                Button {
+                    Task {
+                        await accountStore.refreshCreditTransactions()
+                        credits = accountStore.creditsBalance
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 28, weight: .regular))
+                        .foregroundStyle(Color.gray.opacity(0.52))
+                }
+                .buttonStyle(.plain)
             }
 
-            Text("Recurring Credit \(credits) | Lifetime Credit \(credits)")
+            Text("Recurring Credit \(accountStore.creditWallet?.recurringBalance ?? 0) | Lifetime Credit \(accountStore.creditWallet?.lifetimeBalance ?? 0)")
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(SettingsPalette.muted)
                 .padding(.horizontal, 9)
@@ -404,12 +408,20 @@ struct CreditDetailView: View {
 
     private var transactionList: some View {
         VStack(spacing: 0) {
-            ForEach(visibleTransactions) { transaction in
-                CreditTransactionRow(transaction: transaction)
-                if transaction.id != visibleTransactions.last?.id {
-                    Rectangle()
-                        .fill(SettingsPalette.transactionLine)
-                        .frame(height: 1)
+            if visibleTransactions.isEmpty {
+                Text("No credit activity yet")
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(SettingsPalette.warmGray)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 42)
+            } else {
+                ForEach(visibleTransactions) { transaction in
+                    CreditTransactionRow(transaction: transaction)
+                    if transaction.id != visibleTransactions.last?.id {
+                        Rectangle()
+                            .fill(SettingsPalette.transactionLine)
+                            .frame(height: 1)
+                    }
                 }
             }
         }
@@ -449,18 +461,18 @@ struct CreditDetailView: View {
 }
 
 private struct CreditTransactionRow: View {
-    let transaction: CreditTransaction
+    let transaction: CreditTransactionRecord
 
     var body: some View {
         HStack(spacing: 11) {
             transactionIcon
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(transaction.title)
+                Text(transaction.description ?? transaction.source.replacingOccurrences(of: "_", with: " ").capitalized)
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(AppPalette.ink)
                     .lineLimit(1)
-                Text(transaction.date)
+                Text(transaction.createdAt.photoReviveDisplayDate)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Color.gray.opacity(0.56))
             }

@@ -11,41 +11,101 @@ import Testing
 
 struct photoreviveaieditTests {
 
-    @Test func tryNowTemplateUsesTheDisplayedPreviewMedia() throws {
-        let displayedVideoURL = try #require(URL(string: "https://example.com/carousel.mp4"))
-        let displayedImageURL = try #require(URL(string: "https://example.com/carousel.jpg"))
-        let displayedItem = TemplateItem(
-            id: "carousel",
-            title: "Carousel",
-            coverImageURL: displayedImageURL,
-            coverVideoURL: displayedVideoURL,
-            orientation: .landscape
+    @MainActor
+    @Test func videoGenerationOptionsEncodeEveryUploadSetting() throws {
+        let options = PhotoReviveVideoGenerationOptions(
+            resolution: "480p",
+            aspectRatio: "9:16",
+            duration: 8,
+            sound: true,
+            multiShot: true
         )
+
+        let data = try JSONEncoder().encode(options)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["resolution"] as? String == "480p")
+        #expect(object["aspect_ratio"] as? String == "9:16")
+        #expect(object["duration"] as? Int == 8)
+        #expect(object["sound"] as? Bool == true)
+        #expect(object["multi_shot"] as? Bool == true)
+    }
+
+    @Test func cmsFixedFeatureRegistryMapsAllEightDestinationsExactly() throws {
+        let keys = [
+            "restore",
+            "enhance_video",
+            "photo_to_video",
+            "ai_image",
+            "enhance_photo",
+            "text_to_video",
+            "image_to_image",
+            "text_to_image"
+        ]
+
+        let features = try keys.map { key in
+            try #require(FixedFeature(cmsKey: key))
+        }
+
+        #expect(features == [
+            .oneTapRestore,
+            .enhanceVideo,
+            .photoToVideo,
+            .aiImage,
+            .enhancePhoto,
+            .textToVideo,
+            .imageToImage,
+            .textToImage
+        ])
+        #expect(FixedFeature(cmsKey: "unknown") == nil)
+    }
+
+    @Test func carouselCanTargetFixedFeatureWithoutTryNowItem() {
+        let entry = TemplateDetailEntry(
+            displayItem: TemplateItem(id: "fixed", title: "AI Image"),
+            tryNowItem: nil,
+            fixedFeatureTarget: .aiImage
+        )
+
+        #expect(entry.tryNowItem == nil)
+        #expect(entry.fixedFeatureTarget == .aiImage)
+    }
+
+    @Test func carouselTryNowUsesConfiguredFilterPreviewAndFullTemplateList() throws {
+        let targetPreviewURL = try #require(URL(string: "https://example.com/relife.mp4"))
         let targetItem = TemplateItem(
-            id: "target",
-            title: "Target",
+            id: "relife",
+            title: "Relife",
+            coverVideoURL: targetPreviewURL,
             generationKind: .video,
             imageReferenceCount: 2,
+            detailGroupID: "cms-section-42",
+            detailGroupTitle: "Revive Old Photos",
             promptTemplate: "Configured prompt",
             estimatedCredits: 60,
             modelType: "video",
             modelID: "configured-model"
         )
+        let siblingItem = TemplateItem(
+            id: "happy-moments",
+            title: "Happy Moments",
+            generationKind: .video,
+            detailGroupID: "cms-section-42",
+            detailGroupTitle: "Revive Old Photos"
+        )
 
-        let resolvedItem = targetItem.withPreviewMedia(from: displayedItem)
+        let launch = TemplateCreationLaunch(
+            template: targetItem,
+            templates: [targetItem, siblingItem]
+        )
 
-        #expect(resolvedItem.coverImageURL == displayedImageURL)
-        #expect(resolvedItem.coverVideoURL == displayedVideoURL)
-        #expect(resolvedItem.orientation == .landscape)
-        #expect(resolvedItem.id == targetItem.id)
-        #expect(resolvedItem.promptTemplate == targetItem.promptTemplate)
-        #expect(resolvedItem.imageReferenceCount == targetItem.imageReferenceCount)
-        #expect(resolvedItem.estimatedCredits == targetItem.estimatedCredits)
-        #expect(resolvedItem.modelType == targetItem.modelType)
-        #expect(resolvedItem.modelID == targetItem.modelID)
+        #expect(launch.template.id == "relife")
+        #expect(launch.template.coverVideoURL == targetPreviewURL)
+        #expect(launch.template.detailGroupTitle == "Revive Old Photos")
+        #expect(launch.templates.map(\.id) == ["relife", "happy-moments"])
     }
 
-    @Test func imageUploadCountUsesOneOrTwoSlots() {
+    @Test func imageUploadCountSupportsFusionThreeSlotLayout() {
         let oneImage = TemplateItem(
             id: "one-image",
             title: "One Image",
@@ -58,16 +118,23 @@ struct photoreviveaieditTests {
             generationKind: .image,
             imageReferenceCount: 2
         )
-        let invalidThreeImages = TemplateItem(
-            id: "invalid-three-images",
-            title: "Invalid Three Images",
+        let threeImages = TemplateItem(
+            id: "three-images",
+            title: "Three Images",
             generationKind: .image,
             imageReferenceCount: 3
+        )
+        let invalidFourImages = TemplateItem(
+            id: "invalid-four-images",
+            title: "Invalid Four Images",
+            generationKind: .image,
+            imageReferenceCount: 4
         )
 
         #expect(oneImage.imageUploadCount == 1)
         #expect(twoImages.imageUploadCount == 2)
-        #expect(invalidThreeImages.imageUploadCount == 2)
+        #expect(threeImages.imageUploadCount == 3)
+        #expect(invalidFourImages.imageUploadCount == 3)
     }
 
     @Test func videoTemplatePromptSwitchIsStoredAtTemplateLevel() {
@@ -84,20 +151,66 @@ struct photoreviveaieditTests {
             generationKind: .video,
             imageReferenceCount: 2,
             showsPrompt: true,
+            promptIsEditable: true,
             promptTemplate: "Use both references."
         )
 
         #expect(noPrompt.showsPrompt == false)
         #expect(noPrompt.imageUploadCount == 1)
         #expect(promptWithTwoImages.showsPrompt == true)
+        #expect(promptWithTwoImages.promptIsEditable == true)
         #expect(promptWithTwoImages.imageUploadCount == 2)
         #expect(promptWithTwoImages.promptTemplate == "Use both references.")
     }
 
-    @Test func localPhotoHeroTryNowItemsUseImageUploadFlow() {
-        #expect(TemplateCatalog.localPhotoHeroEntries.allSatisfy {
-            $0.displayItem.generationKind == .image && $0.tryNowItem?.generationKind == .image
-        })
+    @Test func sectionPromptSwitchAppliesToEveryFilterRegardlessOfPromptContent() {
+        let configuredPrompt = TemplateItem(
+            id: "configured-prompt",
+            title: "Configured Prompt",
+            showsPrompt: true,
+            promptTemplate: "Keep this generation prompt."
+        )
+        let emptyPrompt = TemplateItem(
+            id: "empty-prompt",
+            title: "Empty Prompt",
+            showsPrompt: false,
+            promptTemplate: nil
+        )
+
+        let hiddenSection = TemplateSection(
+            "Hidden",
+            showsPrompt: false,
+            items: [configuredPrompt, emptyPrompt]
+        )
+        let visibleSection = TemplateSection(
+            "Visible",
+            showsPrompt: true,
+            promptIsEditable: true,
+            items: [configuredPrompt, emptyPrompt]
+        )
+
+        #expect(hiddenSection.items.allSatisfy { !$0.showsPrompt })
+        #expect(visibleSection.items.allSatisfy { $0.showsPrompt })
+        #expect(visibleSection.items.allSatisfy { $0.promptIsEditable })
+        #expect(visibleSection.items[1].promptTemplate == nil)
+    }
+
+    @Test func uploadPlaceholderImagesStayAlignedWithImageReferences() throws {
+        let first = try #require(URL(string: "https://example.com/woman.jpg"))
+        let third = try #require(URL(string: "https://example.com/mountain.jpg"))
+        let item = TemplateItem(
+            id: "fusion",
+            title: "Fusion",
+            imageReferenceCount: 3,
+            promptTemplate: "@Image1 rides @Image2 through @Image3",
+            uploadPlaceholderURLs: [first, nil, third]
+        )
+
+        #expect(item.imageUploadCount == 3)
+        #expect(item.uploadPlaceholderURL(at: 0) == first)
+        #expect(item.uploadPlaceholderURL(at: 1) == nil)
+        #expect(item.uploadPlaceholderURL(at: 2) == third)
+        #expect(item.uploadPlaceholderURL(at: 3) == nil)
     }
 
     @Test func localVideoCatalogIncludesDearBabyFilters() throws {
@@ -137,13 +250,16 @@ struct photoreviveaieditTests {
     @Test func templateListBadgesFollowCmsOrder() {
         let first = TemplateSection("First", items: [])
         let second = TemplateSection("Second", items: [])
+        let automatic = TemplateSection("Automatic", badge: "auto", items: [])
         let configured = TemplateSection("Configured", badge: "new", items: [])
         let hidden = TemplateSection("Hidden", badge: "off", items: [])
 
         #expect(TemplateSectionBadgePolicy.badge(for: first, at: 0, on: .home) == "HOT")
         #expect(TemplateSectionBadgePolicy.badge(for: second, at: 1, on: .home) == "NEW")
         #expect(TemplateSectionBadgePolicy.badge(for: first, at: 0, on: .photo) == "HOT")
-        #expect(TemplateSectionBadgePolicy.badge(for: second, at: 1, on: .photo) == nil)
+        #expect(TemplateSectionBadgePolicy.badge(for: second, at: 1, on: .photo) == "NEW")
+        #expect(TemplateSectionBadgePolicy.badge(for: first, at: 0, on: .video) == "HOT")
+        #expect(TemplateSectionBadgePolicy.badge(for: automatic, at: 1, on: .home) == "NEW")
         #expect(TemplateSectionBadgePolicy.badge(for: configured, at: 0, on: .home) == "NEW")
         #expect(TemplateSectionBadgePolicy.badge(for: hidden, at: 0, on: .home) == nil)
     }
@@ -194,6 +310,14 @@ struct photoreviveaieditTests {
         #expect(TrackingAuthorizationPolicy.shouldBypassSystemPrompt(
             arguments: ["-forceOnboarding"]
         ))
+    }
+
+    @Test func googleNonceSendsHashToGoogleAndRawValueToBackend() {
+        let nonce = PhotoReviveGoogleNonce(rawValue: "test-nonce")
+
+        #expect(nonce.rawValue == "test-nonce")
+        #expect(nonce.hashedValue == "ed04c4e9ea6c49cf9ceb39098787c5b9842524f96b07ef45305476a11caec9b4")
+        #expect(nonce.hashedValue != nonce.rawValue)
     }
 
     @Test func returningOfferEligibility() {
@@ -306,6 +430,150 @@ struct photoreviveaieditTests {
             now: date.addingTimeInterval(86_400),
             calendar: calendar
         ))
+    }
+
+    @MainActor
+    @Test func serverCreditBalanceDecodesFromUserStatus() throws {
+        let data = try #require("""
+        {
+          "subscription_status": "active",
+          "credits_balance": 735,
+          "is_anonymous": false
+        }
+        """.data(using: .utf8))
+
+        let status = try JSONDecoder().decode(PhotoReviveUserStatus.self, from: data)
+
+        #expect(status.creditsBalance == 735)
+        #expect(status.subscriptionStatus == "active")
+        #expect(status.isAnonymous == false)
+    }
+
+    @MainActor
+    @Test func referralStatusSupportsNestedCodeAndMissingRedemption() throws {
+        let data = try #require("""
+        {
+          "code": { "code": "REVIVE88" },
+          "reward_config": {
+            "signup_referrer_credits": 80,
+            "signup_referred_credits": 40,
+            "subscription_referrer_credits": 200
+          },
+          "stats": {
+            "invited_count": 3,
+            "subscription_rewarded_count": 1
+          }
+        }
+        """.data(using: .utf8))
+
+        let status = try JSONDecoder().decode(ReferralStatus.self, from: data)
+
+        #expect(status.invitationCode == "REVIVE88")
+        #expect(status.rewardConfig?.signupReferrerCredits == 80)
+        #expect(status.stats.invitedCount == 3)
+        #expect(status.hasRedeemedReferral == false)
+        #expect(status.isActive)
+        #expect(status.sortOrder == 30)
+    }
+
+    @MainActor
+    @Test func rewardCenterConfigurationDecodesGroupAndItemOrdering() throws {
+        let data = try #require("""
+        {
+          "groups": [
+            { "group_key": "special_offer", "title": "Special Offer", "sort_order": 2, "is_active": false },
+            { "group_key": "daily_free_credits", "title": "Daily Free Credits", "sort_order": 1, "is_active": true },
+            { "group_key": "one_time_rewards", "title": "One-Time Rewards", "sort_order": 3, "is_active": true }
+          ],
+          "special_offer": { "is_active": false, "sort_order": 1 },
+          "tasks": [
+            {
+              "app_id": "photorevival",
+              "task_code": "share_creation",
+              "title": "Share a Creation",
+              "reward_credits": 10,
+              "verification_mode": "client_attested",
+              "repeat_policy": "daily",
+              "reward_center_group": "daily_free_credits",
+              "sort_order": 2,
+              "claim": null
+            }
+          ]
+        }
+        """.data(using: .utf8))
+
+        let status = try JSONDecoder().decode(RewardTasksStatus.self, from: data)
+
+        #expect(status.groups?.count == 3)
+        #expect(status.groups?.first?.isActive == false)
+        #expect(status.specialOffer?.isActive == false)
+        #expect(status.tasks.first?.rewardCenterGroup == .dailyFreeCredits)
+        #expect(status.tasks.first?.sortOrder == 2)
+    }
+
+    @MainActor
+    @Test func dailyCheckinAndInviteDisplayControlsDecode() throws {
+        let checkinData = try #require("""
+        {
+          "is_active": true,
+          "signed_today": false,
+          "claimable_day": 1,
+          "claimable_credits": 20,
+          "current_streak_day": 0,
+          "sort_order": 1,
+          "rewards": [
+            { "day": 1, "credits": 20, "status": "claimable" },
+            { "day": 2, "credits": 20, "status": "locked" },
+            { "day": 3, "credits": 50, "status": "locked" },
+            { "day": 4, "credits": 30, "status": "locked" },
+            { "day": 5, "credits": 30, "status": "locked" },
+            { "day": 6, "credits": 30, "status": "locked" },
+            { "day": 7, "credits": 100, "status": "locked" }
+          ]
+        }
+        """.data(using: .utf8))
+        let referralData = try #require("""
+        {
+          "code": { "code": "REVIVE88" },
+          "is_active": false,
+          "sort_order": 3,
+          "reward_config": null,
+          "stats": { "invited_count": 0, "subscription_rewarded_count": 0 }
+        }
+        """.data(using: .utf8))
+
+        let checkin = try JSONDecoder().decode(DailyCheckInStatus.self, from: checkinData)
+        let referral = try JSONDecoder().decode(ReferralStatus.self, from: referralData)
+
+        #expect(checkin.rewards.reduce(0) { $0 + $1.credits } == 280)
+        #expect(checkin.sortOrder == 1)
+        #expect(!referral.isActive)
+    }
+
+    @MainActor
+    @Test func videoHistoryUsesServerFirstFrameAsCover() throws {
+        let data = try #require("""
+        {
+          "id": "task-1",
+          "scene": "photo_to_video",
+          "status": "completed",
+          "output_url": "https://cdn.example.com/result.mp4",
+          "converted_url": null,
+          "thumbnail_url": "https://cdn.example.com/result-first-frame.jpg",
+          "thumbnail_source": "video_first_frame",
+          "credits_used": 20,
+          "created_at": "2026-08-25T00:00:00Z",
+          "content_type": "video",
+          "section_menu": "video",
+          "error_message": null
+        }
+        """.data(using: .utf8))
+
+        let task = try JSONDecoder().decode(GenerationHistoryTask.self, from: data)
+
+        #expect(task.isVideo)
+        #expect(task.coverURL?.absoluteString == "https://cdn.example.com/result-first-frame.jpg")
+        #expect(task.resultURL?.absoluteString == "https://cdn.example.com/result.mp4")
     }
 
 }

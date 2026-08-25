@@ -2,6 +2,7 @@ import AVFoundation
 import PhotosUI
 import SwiftUI
 import UIKit
+import UserNotifications
 
 struct MembershipPaywallView: View {
     @Environment(\.dismiss) private var dismiss
@@ -105,11 +106,8 @@ struct MembershipPaywallView: View {
             VStack(spacing: 0) {
                 Color.clear.frame(height: 299)
 
-                loggedInTierHeadings
-                    .frame(width: designWidth, height: 52)
-
-                loggedInBenefitCards
-                    .frame(width: designWidth, height: 190)
+                loggedInTierCarousel
+                    .frame(width: designWidth, height: 242)
 
                 Color.clear.frame(height: 30)
 
@@ -142,13 +140,16 @@ struct MembershipPaywallView: View {
 
     private var loggedInHero: some View {
         ZStack(alignment: .top) {
-            Image(tier.loggedInHeroAsset)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFill()
-                .frame(width: designWidth, height: 382)
-                .clipped()
-                .animation(.easeInOut(duration: 0.22), value: tier)
+            ForEach(MembershipTier.allCases) { option in
+                Image(option.loggedInHeroAsset)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFill()
+                    .frame(width: designWidth, height: 382)
+                    .clipped()
+                    .opacity(tier == option ? 1 : 0)
+            }
+            .animation(.easeInOut(duration: 0.18), value: tier)
 
             LinearGradient(
                 stops: [
@@ -188,74 +189,77 @@ struct MembershipPaywallView: View {
         .clipped()
     }
 
-    private var loggedInTierOffset: CGFloat {
-        tier == .pro ? 18 : -282
+    private var loggedInTierCarousel: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: 12) {
+                ForEach(MembershipTier.allCases) { option in
+                    VStack(spacing: 0) {
+                        loggedInTierHeading(option)
+                            .frame(height: 52)
+
+                        Button {
+                            withAnimation(.snappy(duration: 0.30, extraBounce: 0.06)) {
+                                tier = option
+                            }
+                        } label: {
+                            loggedInBenefitCard(option)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(option.title)
+                        .accessibilityAddTraits(tier == option ? .isSelected : [])
+                        .accessibilityIdentifier("membership-tier-\(option.rawValue)")
+                    }
+                    .frame(width: 315, height: 242, alignment: .top)
+                    .id(option)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .contentMargins(.leading, 18, for: .scrollContent)
+        .contentMargins(.trailing, 70, for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+        .scrollPosition(id: tierScrollPosition, anchor: .leading)
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
+        .accessibilityIdentifier("membership-tier-carousel")
     }
 
-    private var loggedInTierHeadings: some View {
-        HStack(spacing: 12) {
-            ForEach(MembershipTier.allCases) { option in
-                HStack(alignment: .center, spacing: 12) {
-                    Text(option.title)
-                        .font(.system(size: 30, weight: .heavy))
-                        .foregroundStyle(.white)
-
-                    HStack(spacing: 6) {
-                        Image("RewardsCreditToken")
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFit()
-                            .frame(width: 27, height: 27)
-
-                        Text("\(option.weeklyCredits)/week")
-                            .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.86))
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 38)
-                    .background(.ultraThinMaterial, in: Capsule())
-
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 1)
-                .frame(width: 315, height: 52)
+    private var tierScrollPosition: Binding<MembershipTier?> {
+        Binding(
+            get: { tier },
+            set: { newTier in
+                guard let newTier, tier != newTier else { return }
+                tier = newTier
             }
-        }
-        .offset(x: loggedInTierOffset)
-        .frame(width: designWidth, alignment: .leading)
-        .clipped()
-        .animation(.easeInOut(duration: 0.22), value: tier)
-    }
-
-    private var loggedInBenefitCards: some View {
-        HStack(spacing: 12) {
-            ForEach(MembershipTier.allCases) { option in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        tier = option
-                    }
-                } label: {
-                    loggedInBenefitCard(option)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(option.title)
-                .accessibilityAddTraits(tier == option ? .isSelected : [])
-                .accessibilityIdentifier("membership-tier-\(option.rawValue)")
-            }
-        }
-        .offset(x: loggedInTierOffset)
-        .frame(width: designWidth, alignment: .leading)
-        .clipped()
-        .animation(.easeInOut(duration: 0.22), value: tier)
-        .gesture(
-            DragGesture(minimumDistance: 24)
-                .onEnded { value in
-                    guard abs(value.translation.width) > 34 else { return }
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        tier = value.translation.width < 0 ? .proPlus : .pro
-                    }
-                }
         )
+    }
+
+    private func loggedInTierHeading(_ option: MembershipTier) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(option.title)
+                .font(.system(size: 30, weight: .heavy))
+                .foregroundStyle(.white)
+
+            HStack(spacing: 6) {
+                Image("RewardsCreditToken")
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 27, height: 27)
+
+                Text("\(option.weeklyCredits)/week")
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.86))
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 38)
+            .background(Color.black.opacity(0.52), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 1)
+        .frame(width: 315, height: 52)
     }
 
     private func loggedInBenefitCard(_ option: MembershipTier) -> some View {
@@ -798,15 +802,43 @@ struct MembershipPaywallView: View {
     }
 }
 
+private enum DailyFreeCreditEntry: Identifiable {
+    case checkIn(sortOrder: Int)
+    case task(RewardTask)
+    case invite(sortOrder: Int)
+
+    var id: String {
+        switch self {
+        case .checkIn: "daily-check-in"
+        case .task(let task): "task-\(task.id)"
+        case .invite: "invite-friends"
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .checkIn(let sortOrder), .invite(let sortOrder): sortOrder
+        case .task(let task): task.sortOrder
+        }
+    }
+}
+
 struct CreditCenterView: View {
     @Binding var credits: Int
+    @ObservedObject var accountStore: AppAccountStore
 
     @Environment(\.dismiss) private var dismiss
-    @State private var checkedIn = false
     @State private var showCheckInSuccess = false
     @State private var showMembership = false
+    @State private var isCheckingIn = false
+    @State private var claimingTaskID: String?
+    @State private var grantedCredits = 0
+    @State private var rewardError: String?
 
-    private let dailyCredits = [20, 20, 50, 30, 30, 30, 100]
+    init(credits: Binding<Int>, accountStore: AppAccountStore? = nil) {
+        _credits = credits
+        self.accountStore = accountStore ?? .shared
+    }
 
     var body: some View {
         NavigationStack {
@@ -818,102 +850,14 @@ struct CreditCenterView: View {
 
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("Daily Free Credits")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(RewardsPalette.brown)
-
-                            Text("up to 280 per week")
-                                .font(.system(size: 15, weight: .regular))
-                                .foregroundStyle(RewardsPalette.muted)
-                                .padding(.top, 6)
-
-                            dailyCheckInCard
-                                .padding(.top, 11)
-
-                            RewardsActionRow(
-                                title: "Welcome Gift",
-                                creditAmount: 35,
-                                icon: .asset("RewardsCreditToken", size: 32),
-                                actionTitle: "Claimed",
-                                enabled: false
-                            ) {}
-                            .padding(.top, 10)
-
-                            ShareLink(item: "I am creating with Photo Revive AI") {
-                                RewardsActionRow(
-                                    title: "Share a creation",
-                                    creditAmount: 10,
-                                    icon: .asset("RewardsShareIcon", size: 42),
-                                    actionTitle: "Claim",
-                                    enabled: true,
-                                    actionColor: RewardsPalette.red
-                                ) {}
+                            if shouldShowRewardLoadFailure {
+                                rewardLoadFailureBanner
+                                    .padding(.bottom, 18)
                             }
-                            .buttonStyle(.plain)
-                            .padding(.top, 10)
 
-                            NavigationLink {
-                                InviteFriendsView(credits: $credits)
-                            } label: {
-                                RewardsInviteBanner()
+                            ForEach(Array(orderedRewardGroups.enumerated()), id: \.element.id) { index, group in
+                                rewardGroup(group, isFirst: index == 0)
                             }
-                            .buttonStyle(TemplatePressStyle())
-                            .accessibilityIdentifier("invite-friends-link")
-                            .padding(.top, 10)
-
-                            sectionTitle("Special Offer")
-                                .padding(.top, 30)
-
-                            RewardsActionRow(
-                                title: "Save Up to 65%",
-                                creditAmount: 400,
-                                icon: .asset("RewardsGiftIcon", size: 42),
-                                actionTitle: "Get",
-                                enabled: true,
-                                highlightOffer: true
-                            ) {
-                                showMembership = true
-                            }
-                            .padding(.top, 10)
-
-                            sectionTitle("One-Time Rewards")
-                                .padding(.top, 30)
-
-                            RewardsActionRow(
-                                title: "Enable Notifications",
-                                creditAmount: 20,
-                                icon: .asset("RewardsBellIcon", size: 42),
-                                actionTitle: "Claimed",
-                                enabled: false
-                            ) {}
-                            .padding(.top, 10)
-
-                            RewardsActionRow(
-                                title: "Follow TikTok",
-                                creditAmount: 10,
-                                icon: .asset("RewardsTikTokIcon", size: 42),
-                                actionTitle: "Claimed",
-                                enabled: false
-                            ) {}
-                            .padding(.top, 10)
-
-                            RewardsActionRow(
-                                title: "Follow Instagram",
-                                creditAmount: 10,
-                                icon: .instagram,
-                                actionTitle: "Claimed",
-                                enabled: false
-                            ) {}
-                            .padding(.top, 10)
-
-                            RewardsActionRow(
-                                title: "Follow X",
-                                creditAmount: 10,
-                                icon: .x,
-                                actionTitle: "Claimed",
-                                enabled: false
-                            ) {}
-                            .padding(.top, 10)
                         }
                         .padding(.horizontal, 20)
                         .padding(.top, 21)
@@ -936,6 +880,19 @@ struct CreditCenterView: View {
         .preferredColorScheme(.light)
         .fullScreenCover(isPresented: $showMembership) {
             MembershipPaywallView()
+        }
+        .task {
+            await accountStore.prepareRewardSessionIfNeeded()
+            await accountStore.refreshCredits()
+            await accountStore.refreshRewards()
+        }
+        .alert("Reward unavailable", isPresented: Binding(
+            get: { rewardError != nil },
+            set: { if !$0 { rewardError = nil } }
+        )) {
+            Button("OK", role: .cancel) { rewardError = nil }
+        } message: {
+            Text(rewardError ?? "Please try again.")
         }
     }
 
@@ -969,26 +926,168 @@ struct CreditCenterView: View {
         .padding(.bottom, 23)
     }
 
+    private var shouldShowRewardLoadFailure: Bool {
+        accountStore.checkInStatus == nil
+            && accountStore.lastErrorMessage != nil
+            && !accountStore.isLoadingRewards
+    }
+
+    private var rewardLoadFailureBanner: some View {
+        Button {
+            Task {
+                await accountStore.prepareRewardSessionIfNeeded()
+                await accountStore.refreshCredits()
+                await accountStore.refreshRewards()
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 15, weight: .semibold))
+
+                Text("Unable to load rewards. Tap to retry.")
+                    .font(.system(size: 14, weight: .semibold))
+
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(RewardsPalette.red)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(TemplatePressStyle())
+        .accessibilityIdentifier("rewards-retry")
+    }
+
+    private var orderedRewardGroups: [RewardCenterGroup] {
+        let groups = accountStore.rewardGroups.isEmpty ? RewardCenterGroup.defaults : accountStore.rewardGroups
+        return groups.filter { $0.isActive ?? true }.sorted {
+            if $0.sortOrder == $1.sortOrder { return $0.key.rawValue < $1.key.rawValue }
+            return $0.sortOrder < $1.sortOrder
+        }
+    }
+
+    private var dailyFreeCreditEntries: [DailyFreeCreditEntry] {
+        var entries = tasks(in: .dailyFreeCredits).map(DailyFreeCreditEntry.task)
+        if accountStore.checkInStatus?.isActive ?? true {
+            entries.append(.checkIn(sortOrder: accountStore.checkInStatus?.sortOrder ?? 10))
+        }
+        if accountStore.referralStatus?.isActive ?? false {
+            entries.append(.invite(sortOrder: accountStore.referralStatus?.sortOrder ?? 30))
+        }
+        return entries.sorted {
+            if $0.sortOrder == $1.sortOrder { return $0.id < $1.id }
+            return $0.sortOrder < $1.sortOrder
+        }
+    }
+
+    private func tasks(in group: RewardCenterGroupKey) -> [RewardTask] {
+        accountStore.rewardTasks
+            .filter { task in
+                let fallback: RewardCenterGroupKey = task.taskCode == "share_creation"
+                    ? .dailyFreeCredits
+                    : .oneTimeRewards
+                return (task.rewardCenterGroup ?? fallback) == group
+            }
+            .sorted {
+                if $0.sortOrder == $1.sortOrder { return $0.taskCode < $1.taskCode }
+                return $0.sortOrder < $1.sortOrder
+            }
+    }
+
+    @ViewBuilder
+    private func rewardGroup(_ group: RewardCenterGroup, isFirst: Bool) -> some View {
+        sectionTitle(group.title)
+            .padding(.top, isFirst ? 0 : 30)
+
+        switch group.key {
+        case .dailyFreeCredits:
+            if accountStore.checkInStatus?.isActive ?? true {
+                Text("up to \(accountStore.checkInStatus?.rewards.reduce(0) { $0 + $1.credits } ?? 0) per week")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(RewardsPalette.muted)
+                    .padding(.top, 6)
+            }
+            ForEach(dailyFreeCreditEntries) { entry in
+                dailyFreeCreditRow(entry)
+                    .padding(.top, 10)
+            }
+
+        case .specialOffer:
+            if accountStore.specialOfferConfig.isActive {
+                RewardsActionRow(
+                    title: "Save Up to 65%",
+                    creditAmount: 400,
+                    icon: .asset("RewardsGiftIcon", size: 42),
+                    actionTitle: "Get",
+                    enabled: true,
+                    highlightOffer: true
+                ) {
+                    showMembership = true
+                }
+                .padding(.top, 10)
+            }
+
+        case .oneTimeRewards:
+            ForEach(tasks(in: .oneTimeRewards)) { task in
+                rewardTaskRow(task)
+                    .padding(.top, 10)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dailyFreeCreditRow(_ entry: DailyFreeCreditEntry) -> some View {
+        switch entry {
+        case .checkIn:
+            dailyCheckInCard
+        case .task(let task):
+            rewardTaskRow(task)
+        case .invite:
+            NavigationLink {
+                InviteFriendsView(credits: $credits, accountStore: accountStore)
+            } label: {
+                RewardsInviteBanner(
+                    creditAmount: accountStore.referralStatus?.rewardConfig?.signupReferrerCredits ?? 0
+                )
+            }
+            .buttonStyle(TemplatePressStyle())
+            .accessibilityIdentifier("invite-friends-link")
+        }
+    }
+
+    private func rewardTaskRow(_ task: RewardTask) -> some View {
+        RewardsActionRow(
+            title: task.title,
+            creditAmount: task.rewardCredits,
+            icon: rewardIcon(for: task.taskCode),
+            actionTitle: rewardActionTitle(for: task),
+            enabled: canClaim(task),
+            actionColor: RewardsPalette.red
+        ) {
+            claim(task)
+        }
+    }
+
     private var dailyCheckInCard: some View {
         VStack(spacing: 13) {
             HStack(spacing: 7) {
-                ForEach(Array(dailyCredits.enumerated()), id: \.offset) { index, amount in
-                    let isHighlighted = index == 2 || index == 6
-                    let isClaimedToday = checkedIn && index == 0
+                ForEach(accountStore.checkInStatus?.rewards ?? []) { reward in
+                    let isHighlighted = reward.status == "claimable"
+                    let isClaimed = reward.status == "signed" || reward.status == "signed_today"
 
                     VStack(spacing: 6) {
-                        Text("Day\(index + 1)")
+                        Text("Day\(reward.day)")
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(
                                 isHighlighted
                                     ? Color.white
-                                    : isClaimedToday
+                                    : isClaimed
                                         ? RewardsPalette.orange.opacity(0.36)
                                         : RewardsPalette.muted
                             )
 
                         Group {
-                            if isClaimedToday {
+                            if isClaimed {
                                 Image(systemName: "checkmark")
                                     .font(.system(size: 15, weight: .heavy))
                                     .foregroundStyle(.white)
@@ -1003,12 +1102,12 @@ struct CreditCenterView: View {
                         }
                         .frame(height: 24)
 
-                        Text("+\(amount)")
+                        Text("+\(reward.credits)")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(
                                 isHighlighted
                                     ? Color.white
-                                    : isClaimedToday
+                                    : isClaimed
                                         ? RewardsPalette.orange.opacity(0.36)
                                         : RewardsPalette.orange
                             )
@@ -1018,7 +1117,7 @@ struct CreditCenterView: View {
                     .background(
                         isHighlighted
                             ? RewardsPalette.selectedDay
-                            : isClaimedToday
+                            : isClaimed
                                 ? RewardsPalette.claimedDay
                                 : RewardsPalette.card,
                         in: RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -1026,29 +1125,38 @@ struct CreditCenterView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .stroke(
-                                index == 0 && !isClaimedToday
+                                isHighlighted
                                     ? RewardsPalette.orange
-                                    : RewardsPalette.orange.opacity(isClaimedToday ? 0.08 : 0.14),
-                                lineWidth: index == 0 && !isClaimedToday ? 1.2 : 1
+                                    : RewardsPalette.orange.opacity(isClaimed ? 0.08 : 0.14),
+                                lineWidth: isHighlighted ? 1.2 : 1
                             )
                     )
                 }
             }
 
             Button {
-                guard !checkedIn else { return }
-                checkedIn = true
-                credits += dailyCredits[0]
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showCheckInSuccess = true
+                guard canCheckIn else { return }
+                isCheckingIn = true
+                Task {
+                    defer { isCheckingIn = false }
+                    do {
+                        let result = try await accountStore.checkIn()
+                        credits = accountStore.creditsBalance
+                        grantedCredits = result.creditsGranted
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showCheckInSuccess = true
+                        }
+                    } catch {
+                        rewardError = error.localizedDescription
+                    }
                 }
             } label: {
-                Text(checkedIn ? "Come Tomorrow" : "Check In")
+                Text(checkInButtonTitle)
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 250, height: 44)
                     .background(
-                        checkedIn
+                        !canCheckIn
                             ? AnyShapeStyle(RewardsPalette.muted.opacity(0.55))
                             : AnyShapeStyle(
                                 LinearGradient(
@@ -1061,7 +1169,7 @@ struct CreditCenterView: View {
                     )
             }
             .buttonStyle(TemplatePressStyle())
-            .disabled(checkedIn)
+            .disabled(!canCheckIn)
             .accessibilityIdentifier("daily-check-in")
         }
         .padding(.horizontal, 11)
@@ -1088,7 +1196,7 @@ struct CreditCenterView: View {
                     Text("Check-in successful!")
                         .font(.title3.bold())
                         .foregroundStyle(AppPalette.brownInk)
-                    Text("+\(dailyCredits[0]) credits")
+                    Text("+\(grantedCredits) credits")
                         .font(.headline)
                         .foregroundStyle(AppPalette.orange)
                 }
@@ -1109,6 +1217,121 @@ struct CreditCenterView: View {
         Text(title)
             .font(.system(size: 18, weight: .bold))
             .foregroundStyle(RewardsPalette.brown)
+    }
+
+    private var canCheckIn: Bool {
+        guard let status = accountStore.checkInStatus else { return false }
+        return status.isActive && !status.signedToday && status.claimableDay != nil && !isCheckingIn
+    }
+
+    private var checkInButtonTitle: String {
+        guard let status = accountStore.checkInStatus else { return "Loading..." }
+        if !status.isActive { return "Unavailable" }
+        if status.signedToday { return "Come Tomorrow" }
+        return isCheckingIn ? "Checking In..." : "Check In"
+    }
+
+    private func canClaim(_ task: RewardTask) -> Bool {
+        !task.isClaimed && !task.requiresServerVerification && claimingTaskID == nil
+    }
+
+    private func rewardActionTitle(for task: RewardTask) -> String {
+        if task.isClaimed { return "Claimed" }
+        if task.requiresServerVerification { return "Pending" }
+        if claimingTaskID == task.id { return "Claiming" }
+        return "Start"
+    }
+
+    private func rewardIcon(for code: String) -> RewardsActionIcon {
+        switch code {
+        case let value where value.contains("share"):
+            .asset("RewardsShareIcon", size: 42)
+        case let value where value.contains("notification"):
+            .asset("RewardsBellIcon", size: 42)
+        case let value where value.contains("tiktok"):
+            .asset("RewardsTikTokIcon", size: 42)
+        case let value where value.contains("instagram"):
+            .instagram
+        case "follow_x", "follow_twitter":
+            .x
+        default:
+            .asset("RewardsCreditToken", size: 32)
+        }
+    }
+
+    private func claim(_ task: RewardTask) {
+        guard canClaim(task) else { return }
+        if task.taskCode == "enable_notifications" {
+            enableNotificationsAndClaim(task)
+            return
+        }
+
+        claimingTaskID = task.id
+        Task {
+            defer { claimingTaskID = nil }
+            do {
+                _ = try await accountStore.claimRewardTask(task)
+                credits = accountStore.creditsBalance
+            } catch {
+                rewardError = error.localizedDescription
+            }
+        }
+    }
+
+    private func enableNotificationsAndClaim(_ task: RewardTask) {
+        claimingTaskID = task.id
+        rewardError = nil
+
+        Task {
+            defer { claimingTaskID = nil }
+            do {
+                let notificationCenter = UNUserNotificationCenter.current()
+                var settings = await notificationCenter.notificationSettings()
+                if settings.authorizationStatus == .notDetermined {
+                    _ = try await notificationCenter.requestAuthorization(
+                        options: [.alert, .badge, .sound]
+                    )
+                    settings = await notificationCenter.notificationSettings()
+                }
+
+                guard let authorizationStatus = notificationRewardEvidence(
+                    for: settings.authorizationStatus
+                ) else {
+                    rewardError = "Please enable notifications in iOS Settings, then tap Start again."
+                    return
+                }
+
+                UIApplication.shared.registerForRemoteNotifications()
+                _ = try await accountStore.claimRewardTask(
+                    task,
+                    evidence: [
+                        "source": "ios_app",
+                        "notification_authorization_status": authorizationStatus,
+                        "notification_checked_at": ISO8601DateFormatter().string(from: Date()),
+                    ]
+                )
+                credits = accountStore.creditsBalance
+            } catch {
+                rewardError = error.localizedDescription
+            }
+        }
+    }
+
+    private func notificationRewardEvidence(
+        for status: UNAuthorizationStatus
+    ) -> String? {
+        switch status {
+        case .authorized:
+            "authorized"
+        case .provisional:
+            "provisional"
+        case .ephemeral:
+            "ephemeral"
+        case .denied, .notDetermined:
+            nil
+        @unknown default:
+            nil
+        }
     }
 }
 
@@ -1297,6 +1520,8 @@ private struct RewardsActionRow: View {
 }
 
 private struct RewardsInviteBanner: View {
+    let creditAmount: Int
+
     var body: some View {
         HStack(spacing: 10) {
             Image("RewardsInviteArtwork")
@@ -1315,7 +1540,7 @@ private struct RewardsInviteBanner: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 20, height: 20)
-                    Text("50")
+                    Text("\(creditAmount)")
                         .font(.system(size: 15, weight: .regular))
                 }
             }
@@ -1345,14 +1570,23 @@ private struct RewardsInviteBanner: View {
 
 struct InviteFriendsView: View {
     @Binding var credits: Int
+    @ObservedObject var accountStore: AppAccountStore
 
     @State private var redemptionCode = ""
     @State private var showInfo = false
     @State private var showCopied = false
     @State private var showRedeemed = false
+    @State private var isRedeeming = false
+    @State private var redemptionMessage = ""
 
-    private let invitationCode = "ydOGxtY"
-    private let invitationURL = URL(string: "https://example.com/invite/ydOGxtY")!
+    init(credits: Binding<Int>, accountStore: AppAccountStore? = nil) {
+        _credits = credits
+        self.accountStore = accountStore ?? .shared
+    }
+
+    private var invitationCode: String {
+        accountStore.referralStatus?.invitationCode ?? "Loading..."
+    }
 
     var body: some View {
         ZStack {
@@ -1399,13 +1633,15 @@ struct InviteFriendsView: View {
                         .frame(height: 58)
                         .background(AppPalette.backgroundTop, in: RoundedRectangle(cornerRadius: 10))
 
-                        ShareLink(item: invitationURL) {
-                            Label("Invite Now", systemImage: "arrow.right")
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 54)
-                                .background(AppPalette.orange, in: Capsule())
+                        if let code = accountStore.referralStatus?.invitationCode {
+                            ShareLink(item: "Join me on Photo Revive AI. Use invitation code \(code) when you sign in.") {
+                                Label("Invite Now", systemImage: "arrow.right")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 54)
+                                    .background(AppPalette.orange, in: Capsule())
+                            }
                         }
                     }
                     .padding(18)
@@ -1421,13 +1657,15 @@ struct InviteFriendsView: View {
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
 
-                            Button("Redeem") {
-                                credits += 50
-                                redemptionCode = ""
-                                showRedeemed = true
+                            Button(isRedeeming ? "Redeeming..." : "Redeem") {
+                                redeemInvitationCode()
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(redemptionCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(
+                                redemptionCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || isRedeeming
+                                    || accountStore.referralStatus?.hasRedeemedReferral == true
+                            )
                         }
                         .padding(12)
                         .background(.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 10))
@@ -1451,20 +1689,23 @@ struct InviteFriendsView: View {
                 .accessibilityLabel("Invitation information")
             }
         }
+        .task {
+            await accountStore.refreshRewards()
+        }
         .alert("Invitation rewards", isPresented: $showInfo) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Both people earn 50 credits after sign-up and 100 credits after a qualifying subscription.")
+            Text(referralInformationText)
         }
         .alert("Copied", isPresented: $showCopied) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("The invitation code is on your clipboard.")
         }
-        .alert("Credits added", isPresented: $showRedeemed) {
+        .alert("Invitation code", isPresented: $showRedeemed) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("50 credits were added for this local UI flow.")
+            Text(redemptionMessage)
         }
     }
 
@@ -1481,8 +1722,8 @@ struct InviteFriendsView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Label("50 credits each when a friend signs up", systemImage: "diamond.fill")
-                Label("100 credits each when a friend subscribes", systemImage: "diamond.fill")
+                Label(signupRewardText, systemImage: "diamond.fill")
+                Label(subscriptionRewardText, systemImage: "diamond.fill")
             }
             .font(.subheadline.weight(.medium))
             .foregroundStyle(AppPalette.brownInk)
@@ -1506,19 +1747,58 @@ struct InviteFriendsView: View {
         }
         .frame(maxWidth: .infinity)
     }
+
+    private var signupRewardText: String {
+        let config = accountStore.referralStatus?.rewardConfig
+        return "You earn \(config?.signupReferrerCredits ?? 0) credits and your friend earns \(config?.signupReferredCredits ?? 0) after sign-up"
+    }
+
+    private var subscriptionRewardText: String {
+        let amount = accountStore.referralStatus?.rewardConfig?.subscriptionReferrerCredits ?? 0
+        return "You earn \(amount) credits after a qualifying subscription"
+    }
+
+    private var referralInformationText: String {
+        "\(signupRewardText). \(subscriptionRewardText). Rewards are issued by the server and cannot be claimed twice."
+    }
+
+    private func redeemInvitationCode() {
+        let code = redemptionCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, !isRedeeming else { return }
+        isRedeeming = true
+        Task {
+            defer { isRedeeming = false }
+            do {
+                let result = try await accountStore.redeemReferral(code: code)
+                credits = accountStore.creditsBalance
+                redemptionCode = ""
+                let amount = result.referredRewardCredits ?? result.signupRewardCredits ?? 0
+                redemptionMessage = result.redeemed
+                    ? "Invitation accepted. \(amount) credits were added by the server."
+                    : "This invitation was already redeemed. No duplicate credits were issued."
+            } catch {
+                redemptionMessage = error.localizedDescription
+            }
+            showRedeemed = true
+        }
+    }
 }
 
 struct SuggestionView: View {
     @Environment(\.dismiss) private var dismiss
+    private let api = PhotoReviveAPIClient.shared
     @State private var suggestion = ""
     @State private var email = ""
     @State private var selectedScreenshot: PhotosPickerItem?
     @State private var screenshotImage: UIImage?
     @State private var showFAQ = false
     @State private var showSubmitted = false
+    @State private var isSubmitting = false
+    @State private var submissionError: String?
+    @State private var didPrefillEmail = false
 
     private var canSubmit: Bool {
-        !suggestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && email.contains("@")
+        !suggestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -1548,14 +1828,27 @@ struct SuggestionView: View {
                     }
 
                     Section("Your Email") {
-                        TextField(
-                            "",
-                            text: $email,
-                            prompt: Text("name@example.com").foregroundStyle(.tertiary)
-                        )
+                        HStack(spacing: 8) {
+                            TextField(
+                                "",
+                                text: $email,
+                                prompt: Text("name@example.com").foregroundStyle(.tertiary)
+                            )
                             .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+
+                            if !email.isEmpty {
+                                Button {
+                                    email = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Clear email")
+                            }
+                        }
                     }
 
                     Section("Screenshot") {
@@ -1584,15 +1877,21 @@ struct SuggestionView: View {
 
                     Section {
                         Button {
-                            showSubmitted = true
+                            submitSuggestion()
                         } label: {
-                            Text("Send Suggestion")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
+                            HStack(spacing: 10) {
+                                if isSubmitting {
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+                                Text(isSubmitting ? "Sending…" : "Send Suggestion")
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                        .disabled(!canSubmit)
+                        .disabled(!canSubmit || isSubmitting)
                         .listRowBackground(Color.clear)
                     }
                 }
@@ -1627,17 +1926,56 @@ struct SuggestionView: View {
         .onChange(of: selectedScreenshot) { _, item in
             loadScreenshot(from: item)
         }
+        .task {
+            guard !didPrefillEmail else { return }
+            didPrefillEmail = true
+            if email.isEmpty, let accountEmail = PhotoReviveAuthClient.shared.currentUserEmail {
+                email = accountEmail
+            }
+        }
         .alert("Suggestion FAQ", isPresented: $showFAQ) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Describe the style, subject and expected result. A reference screenshot is optional but helpful.")
         }
-        .alert("Suggestion ready", isPresented: $showSubmitted) {
+        .alert("Suggestion sent", isPresented: $showSubmitted) {
             Button("Done") {
                 dismiss()
             }
         } message: {
-            Text("The form UI is complete. Connect your feedback endpoint before shipping submissions.")
+            Text("Thanks for helping us improve Photo Revive AI.")
+        }
+        .alert(
+            "Unable to send suggestion",
+            isPresented: Binding(
+                get: { submissionError != nil },
+                set: { if !$0 { submissionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(submissionError ?? "Please try again.")
+        }
+    }
+
+    private func submitSuggestion() {
+        let trimmedSuggestion = suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSuggestion.isEmpty, !isSubmitting else { return }
+        isSubmitting = true
+
+        Task {
+            defer { isSubmitting = false }
+            do {
+                let screenshotData = screenshotImage?.jpegData(compressionQuality: 0.82)
+                _ = try await api.submitSuggestion(
+                    content: trimmedSuggestion,
+                    contactEmail: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    screenshotData: screenshotData
+                )
+                showSubmitted = true
+            } catch {
+                submissionError = error.localizedDescription
+            }
         }
     }
 

@@ -3,6 +3,18 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+private enum CreateFlowCropTarget: Identifiable {
+    case source
+    case videoSlot(Int)
+
+    var id: String {
+        switch self {
+        case .source: "source"
+        case let .videoSlot(index): "video-slot-\(index)"
+        }
+    }
+}
+
 struct CreateFlowView: View {
     let template: TemplateItem?
     let templates: [TemplateItem]?
@@ -15,6 +27,7 @@ struct CreateFlowView: View {
     @State private var selectedImage: UIImage?
     @State private var selectedVideoItems: [PhotosPickerItem] = []
     @State private var selectedVideoImages: [UIImage?]
+    @State private var prompt: String
     @State private var showOptions = false
     @State private var showCredits = false
     @State private var notice: CreationNotice?
@@ -22,11 +35,14 @@ struct CreateFlowView: View {
     @State private var soundEnabled = false
     @State private var multiShotEnabled = false
     @State private var duration = "5s"
-    @State private var videoResolution = "540p"
+    @State private var videoResolution = "480p"
     @State private var imageResolution = "1k"
     @State private var ratio = "9:16"
     @State private var outputCount = "1"
     @State private var showGenerationFlow = false
+    @State private var cropTarget: CreateFlowCropTarget?
+    @State private var generationTaskID: String?
+    @State private var generationError: String?
     @State private var showLogin = false
     @State private var pendingLoginAction: (() -> Void)?
 
@@ -40,6 +56,10 @@ struct CreateFlowView: View {
         _credits = credits
         _activeTemplate = State(initialValue: template)
         _selectedVideoImages = State(initialValue: Array(repeating: nil, count: max(1, template?.imageUploadCount ?? 1)))
+        _prompt = State(initialValue: CreationFlowConfiguration(
+            template: template,
+            templateOptions: templates
+        ).prompt)
     }
 
     var body: some View {
@@ -47,15 +67,21 @@ struct CreateFlowView: View {
             ZStack {
                 PaperTextureBackground()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        editorContent
+                if flow.family == .videoNoPrompt {
+                    GeometryReader { proxy in
+                        noPromptVideoEditor(viewportHeight: proxy.size.height)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                    .padding(.bottom, 16)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            editorContent
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .padding(.bottom, 16)
+                    }
+                    .scrollIndicators(.hidden)
                 }
-                .scrollIndicators(.hidden)
             }
             .navigationTitle(flow.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -112,9 +138,27 @@ struct CreateFlowView: View {
                 templateTitle: activeTemplate?.title ?? template?.title ?? "Generated Video",
                 videoName: activeTemplate?.videoName ?? template?.videoName,
                 template: activeTemplate ?? template,
+                taskID: generationTaskID,
                 onRegenerate: { showGenerationFlow = false },
                 onClose: { showGenerationFlow = false }
             )
+        }
+        .fullScreenCover(item: $cropTarget) { target in
+            switch target {
+            case .source:
+                if let selectedImage {
+                    FeaturePhotoCropView(image: selectedImage) { editedImage in
+                        self.selectedImage = editedImage
+                    }
+                }
+            case let .videoSlot(index):
+                if selectedVideoImages.indices.contains(index),
+                   let image = selectedVideoImages[index] {
+                    FeaturePhotoCropView(image: image) { editedImage in
+                        selectedVideoImages[index] = editedImage
+                    }
+                }
+            }
         }
         .fullScreenCover(isPresented: $showLogin, onDismiss: {
             if !isLoggedIn { pendingLoginAction = nil }
@@ -133,13 +177,24 @@ struct CreateFlowView: View {
                 dismissButton: .cancel(Text("OK"))
             )
         }
+        .alert(
+            "Generation failed",
+            isPresented: Binding(
+                get: { generationError != nil },
+                set: { if !$0 { generationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { generationError = nil }
+        } message: {
+            Text(generationError ?? "Please try again.")
+        }
     }
 
     @ViewBuilder
     private var editorContent: some View {
         switch flow.family {
         case .videoNoPrompt:
-            noPromptVideoEditor
+            noPromptVideoEditor(viewportHeight: 720)
         case .videoPrompt:
             guidedVideoEditor
         case .image:
@@ -149,20 +204,46 @@ struct CreateFlowView: View {
         }
     }
 
-    private var noPromptVideoEditor: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            largeSourcePreview(height: 428)
+    private func noPromptVideoEditor(viewportHeight: CGFloat) -> some View {
+        let usesCompactCards = viewportHeight < 650
+        let thumbnailWidth: CGFloat = usesCompactCards ? 88 : 96
+        let thumbnailHeight: CGFloat = usesCompactCards ? 94 : 108
+        let templateChooserHeight = thumbnailHeight + 40
+        let reservedHeight = templateChooserHeight + 55 + 61 + 44
+        let previewHeight = max(180, min(470, viewportHeight - reservedHeight))
 
-            templateChooser
+        return VStack(alignment: .leading, spacing: 10) {
+            largeSourcePreview(height: previewHeight)
+
+            templateChooser(
+                thumbnailWidth: thumbnailWidth,
+                thumbnailHeight: thumbnailHeight,
+                verticalSpacing: 7
+            )
+            .frame(height: templateChooserHeight, alignment: .top)
 
             settingsSummary
 
             creationButton
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
     }
 
     private var guidedVideoEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let activeTemplate {
+                FrostedTemplatePreview(item: activeTemplate)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 302)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppPalette.surfaceEdge.opacity(0.70), lineWidth: 1)
+                    )
+            }
+
             videoUploadSlots
 
             promptCard
@@ -171,7 +252,7 @@ struct CreateFlowView: View {
 
             creationButton
 
-            templateChooser
+            templateChooser()
         }
     }
 
@@ -194,7 +275,7 @@ struct CreateFlowView: View {
 
     private func largeSourcePreview(height: CGFloat) -> some View {
         ZStack(alignment: .bottom) {
-            sourceMedia
+            FrostedUploadPreview(image: selectedImage, template: activeTemplate)
                 .frame(maxWidth: .infinity)
                 .frame(height: height)
 
@@ -221,6 +302,14 @@ struct CreateFlowView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(AppPalette.surfaceEdge.opacity(0.70), lineWidth: 1)
         )
+        .overlay(alignment: .bottomTrailing) {
+            if selectedImage != nil {
+                PhotoEditButton {
+                    cropTarget = .source
+                }
+                .padding(14)
+            }
+        }
     }
 
     private func sourcePhotoPicker(width: CGFloat, height: CGFloat) -> some View {
@@ -255,12 +344,20 @@ struct CreateFlowView: View {
         }
         .buttonStyle(TemplatePressStyle())
         .accessibilityLabel(selectedImage == nil ? "Choose source photo" : "Change source photo")
+        .overlay(alignment: .bottomTrailing) {
+            if selectedImage != nil {
+                PhotoEditButton {
+                    cropTarget = .source
+                }
+                .padding(8)
+            }
+        }
     }
 
     private var outputPreview: some View {
         ZStack {
             if let activeTemplate {
-                TemplateMediaView(item: activeTemplate, gravity: .resizeAspect)
+                FrostedTemplatePreview(item: activeTemplate)
                     .frame(maxWidth: .infinity)
                     .frame(height: 316)
             } else {
@@ -298,27 +395,21 @@ struct CreateFlowView: View {
     }
 
     private var promptCard: some View {
-        ScrollView(.vertical) {
-            Text(flow.prompt)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .lineSpacing(4)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(16)
-        }
-        .scrollIndicators(.hidden)
-        .frame(maxWidth: .infinity)
-        .frame(height: 150, alignment: .top)
-        .background(Color(.systemBackground).opacity(0.70), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1)
+        FeaturePromptBox(
+            text: $prompt,
+            placeholder: "Describe how Image1, Image2 and Image3 should be combined.",
+            height: 150,
+            isEditable: flow.promptIsEditable
         )
         .accessibilityLabel("Generation prompt")
     }
 
-    private var templateChooser: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func templateChooser(
+        thumbnailWidth: CGFloat? = nil,
+        thumbnailHeight: CGFloat? = nil,
+        verticalSpacing: CGFloat = 12
+    ) -> some View {
+        VStack(alignment: .leading, spacing: verticalSpacing) {
             Text("Choose Template")
                 .font(.title2.bold())
                 .foregroundStyle(AppPalette.ink)
@@ -326,8 +417,8 @@ struct CreateFlowView: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 12) {
                     ForEach(flow.templates) { item in
-                        let thumbnailWidth: CGFloat = flow.family == .videoNoPrompt ? 150 : 158
-                        let thumbnailHeight: CGFloat = flow.family == .videoNoPrompt ? 150 : 214
+                        let resolvedWidth = thumbnailWidth ?? 158
+                        let resolvedHeight = thumbnailHeight ?? 214
 
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -335,10 +426,10 @@ struct CreateFlowView: View {
                             }
                         } label: {
                             ZStack(alignment: .bottom) {
-                                TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                                TemplateMediaView(item: item, gravity: .resizeAspectFill, playsVideo: false)
                                     .frame(
-                                        width: thumbnailWidth,
-                                        height: thumbnailHeight,
+                                        width: resolvedWidth,
+                                        height: resolvedHeight,
                                         alignment: flow.family == .videoNoPrompt ? .top : .center
                                     )
                                     .clipped()
@@ -352,7 +443,7 @@ struct CreateFlowView: View {
                                     .lineLimit(2)
                                     .padding(8)
                             }
-                            .frame(width: thumbnailWidth, height: thumbnailHeight)
+                            .frame(width: resolvedWidth, height: resolvedHeight)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -428,8 +519,8 @@ struct CreateFlowView: View {
                     return
                 }
 
-                credits -= flow.cost
                 if flow.isImageFlow {
+                    credits -= flow.cost
                     isCreating = true
                     Task {
                         try? await Task.sleep(for: .milliseconds(850))
@@ -437,7 +528,7 @@ struct CreateFlowView: View {
                         notice = .queued
                     }
                 } else {
-                    showGenerationFlow = true
+                    startVideoGeneration()
                 }
             }
         } label: {
@@ -484,6 +575,81 @@ struct CreateFlowView: View {
         action()
     }
 
+    private func startVideoGeneration() {
+        guard !isCreating else { return }
+
+        let images: [UIImage]
+        if flow.family == .videoNoPrompt {
+            images = selectedImage.map { [$0] } ?? []
+        } else {
+            images = selectedVideoImages.compactMap { $0 }
+        }
+        guard !images.isEmpty else {
+            generationError = "Please choose at least one source photo."
+            return
+        }
+
+        guard let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted)) else {
+            generationError = "The selected video duration is invalid."
+            return
+        }
+
+        let selectedTemplate = activeTemplate ?? template
+        guard let selectedTemplate else {
+            generationError = "Please choose a video template."
+            return
+        }
+
+        let editablePrompt: String?
+        if flow.promptIsEditable {
+            let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            editablePrompt = trimmedPrompt.isEmpty ? nil : trimmedPrompt
+        } else {
+            // Let the server use the canonical CMS template prompt. This also
+            // avoids sending stale prompt copies from an older App build.
+            editablePrompt = nil
+        }
+
+        let options = PhotoReviveVideoGenerationOptions(
+            resolution: videoResolution,
+            aspectRatio: ratio,
+            duration: seconds,
+            sound: soundEnabled,
+            multiShot: multiShotEnabled
+        )
+
+        isCreating = true
+        Task {
+            defer { isCreating = false }
+            do {
+                var imageURLs: [String] = []
+                for image in images {
+                    guard let imageData = image.jpegData(compressionQuality: 0.90) else {
+                        throw PhotoReviveAPIError.invalidResponse
+                    }
+                    let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(imageData)
+                    imageURLs.append(imageURL)
+                }
+
+                let appVersion = Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleShortVersionString"
+                ) as? String
+                let submission = try await PhotoReviveAPIClient.shared.createImageToVideo(
+                    itemID: selectedTemplate.id,
+                    imageURLs: imageURLs,
+                    prompt: editablePrompt,
+                    appVersion: appVersion,
+                    options: options
+                )
+                credits = submission.creditsBalance
+                generationTaskID = submission.taskID
+                showGenerationFlow = true
+            } catch {
+                generationError = error.localizedDescription
+            }
+        }
+    }
+
     private func loadImage(from item: PhotosPickerItem?) {
         guard let item else { return }
 
@@ -512,6 +678,7 @@ struct CreateFlowView: View {
 
     private func selectTemplate(_ item: TemplateItem) {
         activeTemplate = item
+        prompt = CreationFlowConfiguration(template: item, templateOptions: templates).prompt
         let count = max(1, item.imageUploadCount)
         if selectedVideoImages.count != count {
             selectedVideoImages = Array((selectedVideoImages + Array(repeating: nil, count: count)).prefix(count))
@@ -526,33 +693,160 @@ struct CreateFlowView: View {
             let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
             let slotWidth = uploadCount == 1
                 ? min(166, proxy.size.width)
-                : availableWidth / CGFloat(uploadCount)
+                : uploadCount == 2
+                    ? availableWidth / 2
+                    : 146
 
-            PhotosPicker(
-                selection: $selectedVideoItems,
-                maxSelectionCount: uploadCount,
-                matching: .images
-            ) {
-                HStack(spacing: spacing) {
-                    ForEach(0..<uploadCount, id: \.self) { index in
-                        ImageGenerationUploadSlot(
-                            image: selectedVideoImages.indices.contains(index) ? selectedVideoImages[index] : nil,
-                            label: "Image\(index + 1)",
-                            fallbackItem: activeTemplate
-                        )
-                        .frame(width: slotWidth, height: 214)
-                        .accessibilityIdentifier("video-image-upload-slot-\(index + 1)")
+            ScrollView(.horizontal) {
+                PhotosPicker(
+                    selection: $selectedVideoItems,
+                    maxSelectionCount: uploadCount,
+                    matching: .images
+                ) {
+                    HStack(spacing: spacing) {
+                        ForEach(0..<uploadCount, id: \.self) { index in
+                            ImageGenerationUploadSlot(
+                                image: selectedVideoImages.indices.contains(index) ? selectedVideoImages[index] : nil,
+                                label: "Image\(index + 1)",
+                                placeholderURL: activeTemplate?.uploadPlaceholderURL(at: index)
+                            )
+                            .frame(width: slotWidth, height: 214)
+                            .accessibilityIdentifier("video-image-upload-slot-\(index + 1)")
+                        }
                     }
+                    .frame(minWidth: proxy.size.width, alignment: .center)
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .buttonStyle(.plain)
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: spacing) {
+                        ForEach(0..<uploadCount, id: \.self) { index in
+                            UploadPhotoEditOverlay(
+                                hasImage: selectedVideoImages.indices.contains(index)
+                                    && selectedVideoImages[index] != nil,
+                                width: slotWidth,
+                                height: 214,
+                                action: { cropTarget = .videoSlot(index) }
+                            )
+                        }
+                    }
+                    .frame(minWidth: proxy.size.width, alignment: .center)
+                }
             }
-            .buttonStyle(.plain)
+            .scrollIndicators(.hidden)
         }
         .frame(height: 214)
     }
 
     private var flow: CreationFlowConfiguration {
         CreationFlowConfiguration(template: activeTemplate ?? template, templateOptions: templates)
+    }
+}
+
+/// Keeps every template sample fully visible on upload screens. Any unused
+/// space is filled with a softly blurred copy of the same image or video.
+private struct FrostedTemplatePreview: View {
+    let item: TemplateItem
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                FrostedTemplateBackdrop(item: item)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .blur(radius: 22)
+                    .scaleEffect(1.18)
+
+                Color.black.opacity(0.05)
+
+                TemplateMediaView(
+                    item: item,
+                    gravity: .resizeAspect,
+                    imageContentMode: .fit,
+                    aspectFitVideoBackgroundColor: .clear,
+                    showsLoadingPlaceholder: false
+                )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+        .background(Color(.systemGray4))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(item.title) sample preview")
+        .accessibilityIdentifier("upload-sample-preview")
+    }
+}
+
+/// A dedicated aspect-fill layer for the frosted surround. It intentionally
+/// bypasses the foreground's aspect-preservation rules used by comparison
+/// videos, otherwise those special templates would expose the page color.
+private struct FrostedTemplateBackdrop: View {
+    let item: TemplateItem
+
+    var body: some View {
+        Group {
+            if let comparisonCover = item.comparisonCover {
+                TemplateComparisonView(cover: comparisonCover, imageContentMode: .fill)
+            } else if !item.imageName.isEmpty {
+                Image(item.imageName)
+                    .resizable()
+                    .scaledToFill()
+            } else if let coverImageURL = item.coverImageURL {
+                AsyncImage(url: coverImageURL) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                    }
+                }
+            } else {
+                TemplateMediaView(item: item, gravity: .resizeAspectFill)
+            }
+        }
+        .clipped()
+        .allowsHitTesting(false)
+    }
+}
+
+private struct FrostedUploadPreview: View {
+    let image: UIImage?
+    let template: TemplateItem?
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .blur(radius: 22)
+                        .scaleEffect(1.18)
+
+                    Color.black.opacity(0.05)
+
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                } else if let template {
+                    FrostedTemplatePreview(item: template)
+                } else {
+                    ZStack {
+                        Color.white.opacity(0.55)
+                        Image(systemName: "photo.badge.plus")
+                            .font(.system(size: 42, weight: .light))
+                            .foregroundStyle(AppPalette.surfaceEdge)
+                    }
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+        .background(Color(.systemGray4))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("upload-sample-preview")
     }
 }
 
@@ -617,7 +911,7 @@ private struct GenerationOptionsSheet: View {
                         optionSection("Duration", values: ["5s", "8s", "10s"], selection: $duration, columns: 3)
                         optionSection(
                             "Resolution",
-                            values: ["540p", "720p", "1080p"],
+                            values: ["480p", "720p", "1080p"],
                             selection: $videoResolution,
                             columns: 3
                         )
@@ -787,12 +1081,14 @@ private struct CreationFlowConfiguration {
     var isImageFlow: Bool { family == .image }
     var showsHelp: Bool { family == .videoNoPrompt }
     var imageUploadCount: Int { template?.imageUploadCount ?? 1 }
+    var promptIsEditable: Bool { template?.promptIsEditable ?? false }
 }
 
 private enum VideoGenerationStage: Equatable {
     case loading
     case result
     case saved
+    case failed(String)
 }
 
 private struct VideoGenerationFlowView: View {
@@ -800,10 +1096,12 @@ private struct VideoGenerationFlowView: View {
     let templateTitle: String
     let videoName: String?
     let template: TemplateItem?
+    var taskID: String? = nil
     let onRegenerate: () -> Void
     let onClose: () -> Void
 
     @State private var stage: VideoGenerationStage = .loading
+    @State private var generatedVideoURL: URL?
     @State private var selectedTab: AppTab = .me
     @State private var showPreview = false
     @State private var showPaywall = false
@@ -820,6 +1118,8 @@ private struct VideoGenerationFlowView: View {
                     resultContent
                 case .saved:
                     savedContent
+                case .failed(let message):
+                    failedContent(message: message)
                 }
             }
         }
@@ -831,17 +1131,22 @@ private struct VideoGenerationFlowView: View {
         }
         .task(id: stage) {
             guard stage == .loading else { return }
-            // Keep the loading state visible long enough for the generation handoff to be observable.
-            try? await Task.sleep(for: .milliseconds(2_400))
-            guard !Task.isCancelled, stage == .loading else { return }
-            withAnimation(.easeInOut(duration: 0.24)) {
-                stage = .result
+            if let taskID {
+                await pollGenerationTask(taskID)
+            } else {
+                // Legacy preview-only callers keep their existing handoff.
+                try? await Task.sleep(for: .milliseconds(2_400))
+                guard !Task.isCancelled, stage == .loading else { return }
+                withAnimation(.easeInOut(duration: 0.24)) {
+                    stage = .result
+                }
             }
         }
         .fullScreenCover(isPresented: $showPreview) {
             VideoGenerationPreviewView(
                 videoName: videoName,
                 template: template,
+                generatedVideoURL: generatedVideoURL,
                 onClose: { showPreview = false },
                 onRegenerate: {
                     showPreview = false
@@ -1027,6 +1332,31 @@ private struct VideoGenerationFlowView: View {
         .scrollIndicators(.hidden)
     }
 
+    private func failedContent(message: String) -> some View {
+        VStack(spacing: 22) {
+            workspaceHeader
+            Spacer()
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(AppPalette.accent)
+            Text("Video generation failed")
+                .font(.system(size: 24, weight: .heavy))
+                .foregroundStyle(AppPalette.ink)
+            Text(message)
+                .font(.body)
+                .foregroundStyle(AppPalette.brownInk)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Button("Try Again", action: onRegenerate)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 28)
+                .frame(height: 50)
+                .background(AppPalette.accent, in: Capsule())
+            Spacer()
+        }
+    }
+
     private var generatedVideoCard: some View {
         ZStack(alignment: .bottomTrailing) {
             Color.black
@@ -1170,7 +1500,9 @@ private struct VideoGenerationFlowView: View {
 
     @ViewBuilder
     private func generationMedia(gravity: AVLayerVideoGravity) -> some View {
-        if let template {
+        if let generatedVideoURL {
+            RemoteLoopingVideoView(url: generatedVideoURL, videoGravity: gravity)
+        } else if let template {
             TemplateMediaView(item: template, gravity: gravity)
         } else if let videoName {
             LoopingVideoView(resourceName: videoName, videoGravity: gravity)
@@ -1178,11 +1510,45 @@ private struct VideoGenerationFlowView: View {
             Color.black
         }
     }
+
+    private func pollGenerationTask(_ taskID: String) async {
+        let maximumAttempts = 100
+        for attempt in 0..<maximumAttempts {
+            guard !Task.isCancelled else { return }
+            do {
+                let task = try await PhotoReviveAPIClient.shared.generationTask(id: taskID)
+                if task.status == "completed", let resultURL = task.resultURL {
+                    generatedVideoURL = resultURL
+                    withAnimation(.easeInOut(duration: 0.24)) {
+                        stage = .result
+                    }
+                    return
+                }
+                if task.status == "failed" {
+                    stage = .failed(task.errorMessage ?? "The model could not generate this video. Please try again.")
+                    return
+                }
+            } catch {
+                // A brief connection failure should not discard a task that is
+                // still running on the server. Surface it only after retries.
+                if attempt == maximumAttempts - 1 {
+                    stage = .failed(error.localizedDescription)
+                    return
+                }
+            }
+
+            try? await Task.sleep(for: .seconds(3))
+        }
+
+        guard !Task.isCancelled else { return }
+        stage = .failed("Generation is taking longer than expected. You can check it later in My Creations.")
+    }
 }
 
 private struct VideoGenerationPreviewView: View {
     let videoName: String?
     let template: TemplateItem?
+    let generatedVideoURL: URL?
     let onClose: () -> Void
     let onRegenerate: () -> Void
     let onSave: () -> Void
@@ -1235,7 +1601,9 @@ private struct VideoGenerationPreviewView: View {
 
     @ViewBuilder
     private var previewMedia: some View {
-        if let template {
+        if let generatedVideoURL {
+            RemoteLoopingVideoView(url: generatedVideoURL, videoGravity: .resizeAspect)
+        } else if let template {
             TemplateMediaView(item: template, gravity: .resizeAspect)
         } else if let videoName {
             LoopingVideoView(resourceName: videoName, videoGravity: .resizeAspect)
@@ -1330,7 +1698,16 @@ private struct VideoShareIcon: View {
 
 struct FixedFeatureView: View {
     let feature: FixedFeature
+    let quickActions: [HomeQuickAction]
     @Binding var credits: Int
+
+    private var photoToVideoCover: TemplateItem? {
+        quickActions.first { $0.feature == .photoToVideo }?.item
+    }
+
+    private var textToVideoCover: TemplateItem? {
+        quickActions.first { $0.feature == .textToVideo }?.item
+    }
 
     var body: some View {
         switch feature {
@@ -1341,13 +1718,21 @@ struct FixedFeatureView: View {
         case .enhanceVideo:
             FixedVideoEnhanceFeature(credits: $credits)
         case .photoToVideo:
-            FixedVideoGeneratorFeature(initialMode: .image, credits: $credits)
+            FixedVideoGeneratorFeature(
+                initialMode: .image,
+                credits: $credits,
+                imageCoverItem: photoToVideoCover,
+                textCoverItem: textToVideoCover
+            )
         case .textToVideo:
-            FixedVideoGeneratorFeature(initialMode: .text, credits: $credits)
+            FixedVideoGeneratorFeature(
+                initialMode: .text,
+                credits: $credits,
+                imageCoverItem: photoToVideoCover,
+                textCoverItem: textToVideoCover
+            )
         case .aiImage:
             FixedAIImageFeature(credits: $credits)
-        case .fusion:
-            FixedFusionFeature(credits: $credits)
         case .imageToImage:
             FixedAIImageFeature(credits: $credits, initialMode: .image)
         case .textToImage:
@@ -1598,7 +1983,9 @@ private struct FixedPhotoRestoreFeature: View {
         }
         .fullScreenCover(isPresented: $showCrop) {
             if let selectedImage {
-                FeaturePhotoCropView(image: selectedImage)
+                FeaturePhotoCropView(image: selectedImage) { editedImage in
+                    self.selectedImage = editedImage
+                }
             }
         }
         .onChange(of: selectedItem) { _, item in
@@ -2101,6 +2488,8 @@ private enum FixedVideoGeneratorMode: Hashable {
 
 private struct FixedVideoGeneratorFeature: View {
     let initialMode: FixedVideoGeneratorMode
+    let imageCoverItem: TemplateItem?
+    let textCoverItem: TemplateItem?
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
     @State private var mode: FixedVideoGeneratorMode
@@ -2114,15 +2503,27 @@ private struct FixedVideoGeneratorFeature: View {
     @State private var soundEnabled = false
     @State private var multiShotEnabled = false
     @State private var duration = "5s"
-    @State private var resolution = "540p"
+    @State private var resolution = "480p"
     @State private var ratio = "9:16"
     @State private var showGenerationFlow = false
 
-    init(initialMode: FixedVideoGeneratorMode, credits: Binding<Int>, initialImage: UIImage? = nil) {
+    init(
+        initialMode: FixedVideoGeneratorMode,
+        credits: Binding<Int>,
+        initialImage: UIImage? = nil,
+        imageCoverItem: TemplateItem? = nil,
+        textCoverItem: TemplateItem? = nil
+    ) {
         self.initialMode = initialMode
+        self.imageCoverItem = imageCoverItem
+        self.textCoverItem = textCoverItem
         _credits = credits
         _mode = State(initialValue: initialMode)
         _selectedImage = State(initialValue: initialImage)
+    }
+
+    private var activeCoverItem: TemplateItem? {
+        mode == .image ? imageCoverItem : textCoverItem
     }
 
     var body: some View {
@@ -2142,8 +2543,8 @@ private struct FixedVideoGeneratorFeature: View {
                         PhotosPicker(selection: $selectedItem, matching: .images) {
                             FeatureVideoGeneratorPreview(
                                 image: selectedImage,
-                                fallbackImageName: "PhotoToVideoExample",
-                                fallbackVideoName: nil,
+                                template: imageCoverItem,
+                                showsChoosePhoto: selectedImage == nil,
                                 prompt: selectedImage == nil ? "" : "Using uploaded subject, keep exact appearance, riding motorcycle on city street, goggles"
                             )
                         }
@@ -2164,8 +2565,8 @@ private struct FixedVideoGeneratorFeature: View {
                     } else {
                         FeatureVideoGeneratorPreview(
                             image: nil,
-                            fallbackImageName: "TextToVideoExample",
-                            fallbackVideoName: nil,
+                            template: textCoverItem,
+                            showsChoosePhoto: false,
                             prompt: ""
                         )
                         .padding(.horizontal, 20)
@@ -2214,14 +2615,18 @@ private struct FixedVideoGeneratorFeature: View {
             VideoGenerationFlowView(
                 title: "Video Generator",
                 templateTitle: mode == .image ? "Photo To Video" : "Text To Video",
-                videoName: mode == .text ? "text_to_video_whale_cover" : "school_wave",
-                template: nil,
+                videoName: nil,
+                template: activeCoverItem,
                 onRegenerate: { showGenerationFlow = false },
                 onClose: { showGenerationFlow = false }
             )
         }
         .fullScreenCover(isPresented: $showCrop) {
-            if let selectedImage { FeaturePhotoCropView(image: selectedImage) }
+            if let selectedImage {
+                FeaturePhotoCropView(image: selectedImage) { editedImage in
+                    self.selectedImage = editedImage
+                }
+            }
         }
     }
 
@@ -2240,8 +2645,8 @@ private struct FixedVideoGeneratorFeature: View {
 
 private struct FeatureVideoGeneratorPreview: View {
     let image: UIImage?
-    let fallbackImageName: String
-    let fallbackVideoName: String?
+    let template: TemplateItem?
+    let showsChoosePhoto: Bool
     let prompt: String
 
     var body: some View {
@@ -2249,12 +2654,47 @@ private struct FeatureVideoGeneratorPreview: View {
             Group {
                 if let image {
                     Image(uiImage: image).resizable().scaledToFill()
-                } else if let fallbackVideoName {
-                    LoopingVideoView(resourceName: fallbackVideoName, videoGravity: .resizeAspectFill)
-                        .allowsHitTesting(false)
+                } else if let template {
+                    TemplateMediaView(
+                        item: template,
+                        gravity: .resizeAspect,
+                        imageContentMode: .fit,
+                        fillsFitImageBackground: true,
+                        aspectFitVideoBackgroundColor: UIColor(
+                            red: 0.95,
+                            green: 0.82,
+                            blue: 0.64,
+                            alpha: 1
+                        )
+                    )
+                    .allowsHitTesting(false)
                 } else {
-                    Image(fallbackImageName).resizable().scaledToFill()
+                    ZStack {
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.98, green: 0.88, blue: 0.69),
+                                Color(red: 0.93, green: 0.77, blue: 0.55)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(AppPalette.surfaceEdge.opacity(0.34))
+                    }
                 }
+            }
+
+            if showsChoosePhoto {
+                Label("Choose Photo", systemImage: "photo.badge.plus")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 24)
+                    .frame(height: 48)
+                    .background(.black.opacity(0.48), in: Capsule())
+                    .overlay(Capsule().stroke(.white.opacity(0.84), lineWidth: 1.5))
+                    .padding(.bottom, 14)
             }
 
             if !prompt.isEmpty {
@@ -2309,6 +2749,7 @@ private struct FeaturePromptBox: View {
     @Binding var text: String
     let placeholder: String
     var height: CGFloat = 152
+    var isEditable = true
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -2320,12 +2761,11 @@ private struct FeaturePromptBox: View {
                     .padding(.top, 17)
             }
 
-            TextEditor(text: $text)
-                .font(.system(size: 18))
-                .foregroundStyle(AppPalette.brownInk)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .scrollContentBackground(.hidden)
+            ImageReferencePromptEditor(
+                text: $text,
+                isEditable: isEditable,
+                characterLimit: 2000
+            )
 
             Text("\(text.count)/2000")
                 .font(.system(size: 14))
@@ -2338,6 +2778,144 @@ private struct FeaturePromptBox: View {
         .frame(height: height)
         .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1.2))
+    }
+}
+
+private extension NSAttributedString.Key {
+    static let imageReferenceToken = NSAttributedString.Key("PhotoReviveImageReferenceToken")
+}
+
+/// Draws a rounded background behind `@ImageN` ranges without changing the raw
+/// prompt sent to the generation API.
+private final class ImageReferenceLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        guard let textStorage, let textContainer = textContainers.first else {
+            super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
+
+        let characterRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        textStorage.enumerateAttribute(
+            .imageReferenceToken,
+            in: characterRange,
+            options: []
+        ) { value, range, _ in
+            guard value != nil else { return }
+            let tokenGlyphRange = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            enumerateEnclosingRects(
+                forGlyphRange: tokenGlyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textContainer
+            ) { rect, _ in
+                let tokenRect = rect
+                    .offsetBy(dx: origin.x, dy: origin.y)
+                    .insetBy(dx: -4, dy: -2)
+                UIColor(red: 1.0, green: 0.83, blue: 0.58, alpha: 0.38).setFill()
+                UIBezierPath(roundedRect: tokenRect, cornerRadius: 9).fill()
+            }
+        }
+
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+}
+
+private struct ImageReferencePromptEditor: UIViewRepresentable {
+    @Binding var text: String
+    let isEditable: Bool
+    let characterLimit: Int
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let textStorage = NSTextStorage()
+        let layoutManager = ImageReferenceLayoutManager()
+        let textContainer = NSTextContainer(size: .zero)
+        textContainer.widthTracksTextView = true
+        textContainer.lineFragmentPadding = 0
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+
+        let textView = UITextView(frame: .zero, textContainer: textContainer)
+        textView.delegate = context.coordinator
+        textView.backgroundColor = .clear
+        textView.textContainerInset = UIEdgeInsets(top: 16, left: 18, bottom: 38, right: 18)
+        textView.isScrollEnabled = true
+        textView.isSelectable = true
+        textView.adjustsFontForContentSizeCategory = true
+        context.coordinator.render(text, in: textView, preservingSelection: false)
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        context.coordinator.parent = self
+        textView.isEditable = isEditable
+        textView.accessibilityTraits = isEditable ? [.allowsDirectInteraction] : [.staticText]
+        if textView.attributedText.string != text {
+            context.coordinator.render(text, in: textView, preservingSelection: true)
+        }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: ImageReferencePromptEditor
+        private var isRendering = false
+        private let referenceRegex = try! NSRegularExpression(
+            pattern: #"@Image\d+"#,
+            options: [.caseInsensitive]
+        )
+
+        init(parent: ImageReferencePromptEditor) {
+            self.parent = parent
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn range: NSRange,
+            replacementText replacement: String
+        ) -> Bool {
+            guard let swiftRange = Range(range, in: textView.text) else { return false }
+            let next = textView.text.replacingCharacters(in: swiftRange, with: replacement)
+            return next.count <= parent.characterLimit
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            guard !isRendering, textView.markedTextRange == nil else { return }
+            let rawText = String(textView.text.prefix(parent.characterLimit))
+            parent.text = rawText
+            render(rawText, in: textView, preservingSelection: true)
+        }
+
+        func render(_ rawText: String, in textView: UITextView, preservingSelection: Bool) {
+            isRendering = true
+            defer { isRendering = false }
+
+            let selectedRange = textView.selectedRange
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineSpacing = 4
+            let attributed = NSMutableAttributedString(
+                string: rawText,
+                attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .body),
+                    .foregroundColor: UIColor(AppPalette.brownInk),
+                    .paragraphStyle: paragraphStyle,
+                ]
+            )
+            let fullRange = NSRange(location: 0, length: attributed.length)
+            referenceRegex.enumerateMatches(in: rawText, range: fullRange) { match, _, _ in
+                guard let range = match?.range else { return }
+                attributed.addAttributes([
+                    .imageReferenceToken: true,
+                    .foregroundColor: UIColor(red: 0.72, green: 0.43, blue: 0.18, alpha: 1),
+                ], range: range)
+            }
+            textView.attributedText = attributed
+            if preservingSelection {
+                let location = min(selectedRange.location, attributed.length)
+                let length = min(selectedRange.length, attributed.length - location)
+                textView.selectedRange = NSRange(location: location, length: length)
+            }
+        }
     }
 }
 
@@ -2405,6 +2983,7 @@ struct ImageGenerationUploadView: View {
     @State private var showDataNotice = false
     @State private var showGenerationFlow = false
     @State private var showLogin = false
+    @State private var showCropIndex: Int?
     @State private var pendingLoginAction: (() -> Void)?
 
     init(template: TemplateItem, credits: Binding<Int>) {
@@ -2486,18 +3065,26 @@ struct ImageGenerationUploadView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: action ?? {})
             }
         }
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { showCropIndex != nil },
+                set: { if !$0 { showCropIndex = nil } }
+            )
+        ) {
+            if let index = showCropIndex,
+               selectedImages.indices.contains(index),
+               let image = selectedImages[index] {
+                FeaturePhotoCropView(image: image) { editedImage in
+                    selectedImages[index] = editedImage
+                }
+            }
+        }
         .preferredColorScheme(.light)
     }
 
     private var templatePreview: some View {
         ZStack(alignment: .bottom) {
-            TemplateMediaView(item: template, gravity: .resizeAspectFill)
-                .blur(radius: 22)
-                .scaleEffect(1.18)
-
-            Color.white.opacity(0.31)
-
-            TemplateMediaView(item: template, gravity: .resizeAspect)
+            FrostedTemplatePreview(item: template)
 
             HStack(spacing: 10) {
                 ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
@@ -2537,26 +3124,45 @@ struct ImageGenerationUploadView: View {
             let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
             let slotWidth = uploadCount == 1
                 ? min(151, proxy.size.width)
-                : availableWidth / CGFloat(uploadCount)
+                : uploadCount == 2
+                    ? availableWidth / 2
+                    : 146
 
-            PhotosPicker(
-                selection: $selectedItems,
-                maxSelectionCount: uploadCount,
-                matching: .images
-            ) {
-                HStack(spacing: spacing) {
-                    ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                        ImageGenerationUploadSlot(
-                            image: image,
-                            label: "Image\(index + 1)"
-                        )
-                        .frame(width: slotWidth)
-                        .accessibilityIdentifier("image-upload-slot-\(index + 1)")
+            ScrollView(.horizontal) {
+                PhotosPicker(
+                    selection: $selectedItems,
+                    maxSelectionCount: uploadCount,
+                    matching: .images
+                ) {
+                    HStack(spacing: spacing) {
+                        ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                            ImageGenerationUploadSlot(
+                                image: image,
+                                label: "Image\(index + 1)",
+                                placeholderURL: template.uploadPlaceholderURL(at: index)
+                            )
+                            .frame(width: slotWidth)
+                            .accessibilityIdentifier("image-upload-slot-\(index + 1)")
+                        }
                     }
+                    .frame(minWidth: proxy.size.width, alignment: .center)
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .buttonStyle(.plain)
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: spacing) {
+                        ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                            UploadPhotoEditOverlay(
+                                hasImage: image != nil,
+                                width: slotWidth,
+                                height: 188,
+                                action: { showCropIndex = index }
+                            )
+                        }
+                    }
+                    .frame(minWidth: proxy.size.width, alignment: .center)
+                }
             }
-            .buttonStyle(.plain)
+            .scrollIndicators(.hidden)
         }
         .frame(height: 188)
     }
@@ -2635,12 +3241,16 @@ private struct ImageGenerationPrimaryButton: View {
 private struct ImageGenerationUploadSlot: View {
     let image: UIImage?
     let label: String
-    let fallbackItem: TemplateItem?
+    let placeholderURL: URL?
 
-    init(image: UIImage?, label: String, fallbackItem: TemplateItem? = nil) {
+    init(
+        image: UIImage?,
+        label: String,
+        placeholderURL: URL? = nil
+    ) {
         self.image = image
         self.label = label
-        self.fallbackItem = fallbackItem
+        self.placeholderURL = placeholderURL
     }
 
     var body: some View {
@@ -2649,16 +3259,21 @@ private struct ImageGenerationUploadSlot: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-            } else if let fallbackItem {
-                TemplateFirstFrameView(item: fallbackItem)
+            } else if let placeholderURL {
+                AsyncImage(url: placeholderURL) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        uploadPlaceholder
+                    }
+                }
             } else {
-                Color(.systemGray4)
-                Image(systemName: "photo.badge.plus")
-                    .font(.system(size: 33, weight: .medium))
-                    .foregroundStyle(AppPalette.surfaceEdge)
+                uploadPlaceholder
             }
 
-            if image != nil || fallbackItem != nil {
+            if image != nil || placeholderURL != nil {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 35, weight: .regular))
                     .foregroundStyle(.white)
@@ -2675,11 +3290,6 @@ private struct ImageGenerationUploadSlot: View {
                         .background(.black.opacity(0.52), in: RoundedRectangle(cornerRadius: 5))
 
                     Spacer(minLength: 0)
-
-                    Image(systemName: "crop")
-                        .font(.system(size: 22, weight: .medium))
-                        .frame(width: 31, height: 31)
-                        .background(.black.opacity(0.70), in: RoundedRectangle(cornerRadius: 5))
                 }
                 .foregroundStyle(.white)
                 .padding(7)
@@ -2692,6 +3302,68 @@ private struct ImageGenerationUploadSlot: View {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .stroke(AppPalette.surfaceEdge.opacity(0.90), lineWidth: 1.1)
         )
+    }
+
+    private var uploadPlaceholder: some View {
+        ZStack {
+            Color(.systemGray4)
+            VStack(spacing: 8) {
+                Image(systemName: "photo.badge.plus")
+                    .font(.system(size: 33, weight: .medium))
+                Text("Upload Image")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(AppPalette.surfaceEdge)
+        }
+    }
+}
+
+private struct UploadPhotoEditOverlay: View {
+    let hasImage: Bool
+    let width: CGFloat
+    let height: CGFloat
+    var buttonSize: CGFloat = 31
+    var padding: CGFloat = 7
+    let action: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Color.clear
+                .allowsHitTesting(false)
+
+            if hasImage {
+                PhotoEditButton(
+                    size: buttonSize,
+                    cornerRadius: max(5, buttonSize * 0.2),
+                    action: action
+                )
+                .padding(padding)
+            }
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+private struct PhotoEditButton: View {
+    var size: CGFloat = 40
+    var cornerRadius: CGFloat = 8
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "crop")
+                .font(.system(size: max(17, size * 0.5), weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(.white.opacity(0.16), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit uploaded photo")
+        .accessibilityIdentifier("edit-uploaded-photo")
     }
 }
 
@@ -3206,13 +3878,26 @@ private struct FixedAIImageFeature: View {
                                     ForEach(0..<3, id: \.self) { index in
                                         FeatureImageSlot(
                                             image: selectedImages.indices.contains(index) ? selectedImages[index] : nil,
-                                            title: index == 0 ? nil : "Optional",
-                                            onEdit: selectedImages.indices.contains(index) ? { showCropIndex = index } : nil
+                                            title: index == 0 ? nil : "Optional"
                                         )
                                     }
                                 }
                             }
                             .buttonStyle(.plain)
+                            .overlay(alignment: .bottomLeading) {
+                                HStack(spacing: 14) {
+                                    ForEach(0..<3, id: \.self) { index in
+                                        UploadPhotoEditOverlay(
+                                            hasImage: selectedImages.indices.contains(index),
+                                            width: 158,
+                                            height: 218,
+                                            buttonSize: 34,
+                                            padding: 8,
+                                            action: { showCropIndex = index }
+                                        )
+                                    }
+                                }
+                            }
                         }
                         .scrollIndicators(.hidden)
                     }
@@ -3286,7 +3971,9 @@ private struct FixedAIImageFeature: View {
             )
         ) {
             if let index = showCropIndex, selectedImages.indices.contains(index) {
-                FeaturePhotoCropView(image: selectedImages[index])
+                FeaturePhotoCropView(image: selectedImages[index]) { editedImage in
+                    selectedImages[index] = editedImage
+                }
             }
         }
         .preferredColorScheme(.light)
@@ -3419,10 +4106,9 @@ private struct FeatureAddPhotoIcon: View {
 private struct FeatureImageSlot: View {
     let image: UIImage?
     let title: String?
-    let onEdit: (() -> Void)?
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             if let image {
                 Image(uiImage: image)
                     .resizable()
@@ -3437,17 +4123,6 @@ private struct FeatureImageSlot: View {
                     }
                 }
                 .foregroundStyle(AppPalette.surfaceEdge)
-            }
-
-            if let onEdit {
-                Button(action: onEdit) {
-                    Image(systemName: "crop")
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
-                }
-                .buttonStyle(.plain)
-                .padding(8)
             }
         }
         .frame(width: 158, height: 218)
@@ -3472,7 +4147,7 @@ private struct FixedFusionFeature: View {
     @State private var soundEnabled = false
     @State private var multiShotEnabled = false
     @State private var duration = "5s"
-    @State private var resolution = "540p"
+    @State private var resolution = "480p"
     @State private var ratio = "9:16"
     @State private var showGenerationFlow = false
 
@@ -3524,7 +4199,9 @@ private struct FixedFusionFeature: View {
             )
         ) {
             if let index = showCropIndex, selectedImages.indices.contains(index) {
-                FeaturePhotoCropView(image: selectedImages[index])
+                FeaturePhotoCropView(image: selectedImages[index]) { editedImage in
+                    selectedImages[index] = editedImage
+                }
             }
         }
     }
@@ -3582,13 +4259,26 @@ private struct FixedFusionFeature: View {
                             ForEach(0..<3, id: \.self) { index in
                                 FeatureImageSlot(
                                     image: selectedImages.indices.contains(index) ? selectedImages[index] : nil,
-                                    title: index == 0 ? "Image\(index + 1)" : "Optional",
-                                    onEdit: selectedImages.indices.contains(index) ? { showCropIndex = index } : nil
+                                    title: index == 0 ? "Image\(index + 1)" : "Optional"
                                 )
                             }
                         }
                     }
                     .buttonStyle(.plain)
+                    .overlay(alignment: .bottomLeading) {
+                        HStack(spacing: 14) {
+                            ForEach(0..<3, id: \.self) { index in
+                                UploadPhotoEditOverlay(
+                                    hasImage: selectedImages.indices.contains(index),
+                                    width: 158,
+                                    height: 218,
+                                    buttonSize: 34,
+                                    padding: 8,
+                                    action: { showCropIndex = index }
+                                )
+                            }
+                        }
+                    }
                 }
                 .scrollIndicators(.hidden)
 
@@ -3760,7 +4450,7 @@ private struct FeatureSettingsSheet: View {
                         settingToggle("Sounds", off: "speaker.slash.fill", on: "speaker.wave.2.fill", value: $soundEnabled)
                         settingToggle("Multi-Shot Video", off: "video.slash.fill", on: "video.badge.waveform.fill", value: $multiShotEnabled)
                         settingGrid("Duration", values: ["5s", "8s", "10s"], selection: $duration)
-                        settingGrid("Resolution", values: ["540p", "720p", "1080p"], selection: $resolution)
+                        settingGrid("Resolution", values: ["480p", "720p", "1080p"], selection: $resolution)
                         settingGrid("Ratio", values: ["16:9", "1:1", "9:16", "4:3", "3:4"], selection: $ratio)
                     } else {
                         settingGrid("Resolution", values: ["1k"], selection: $resolution)
@@ -3829,50 +4519,90 @@ private struct FeatureSettingsSheet: View {
 }
 
 private struct FeaturePhotoCropView: View {
-    let image: UIImage
     @Environment(\.dismiss) private var dismiss
-    @State private var ratio = "FREEFORM"
+    private let originalImage: UIImage
+    private let onSave: (UIImage) -> Void
 
-    private let ratios = ["ORIGINAL", "FREEFORM", "1:1", "1:2", "2:1", "3:4", "4:3"]
+    @State private var workingImage: UIImage
+    @State private var selectedAspect = PhotoCropAspect.freeform
+    @State private var freeformAspect: CGFloat
+    @State private var settledZoom: CGFloat = 1
+    @State private var settledOffset: CGSize = .zero
+    @State private var viewportSize: CGSize = .zero
+    @State private var resizeStartAspect: CGFloat?
+    @GestureState private var gestureZoom: CGFloat = 1
+    @GestureState private var gestureOffset: CGSize = .zero
+
+    init(image: UIImage, onSave: @escaping (UIImage) -> Void = { _ in }) {
+        let normalizedImage = PhotoCropRenderer.normalized(image)
+        originalImage = normalizedImage
+        self.onSave = onSave
+        _workingImage = State(initialValue: normalizedImage)
+        _freeformAspect = State(
+            initialValue: normalizedImage.size.height > 0
+                ? normalizedImage.size.width / normalizedImage.size.height
+                : 1
+        )
+    }
 
     var body: some View {
-        ZStack {
+        GeometryReader { proxy in
             Color(red: 0.06, green: 0.06, blue: 0.06).ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer(minLength: 30)
-
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .overlay(Rectangle().stroke(.white, lineWidth: 2))
-                    .padding(.horizontal, 14)
+                cropWorkspace(
+                    size: CGSize(
+                        width: max(1, proxy.size.width - 28),
+                        height: max(240, min(proxy.size.height * 0.60, proxy.size.height - 260))
+                    )
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: max(240, min(proxy.size.height * 0.60, proxy.size.height - 260)))
+                .padding(.top, 18)
 
                 HStack(spacing: 27) {
-                    Image(systemName: "rotate.left")
-                    Image(systemName: "triangle.lefthalf.filled")
+                    cropToolButton("rotate.right", label: "Rotate photo") {
+                        workingImage = PhotoCropRenderer.rotatedClockwise(workingImage)
+                        resetViewport()
+                    }
+
+                    cropToolButton("triangle.lefthalf.filled", label: "Flip photo") {
+                        workingImage = PhotoCropRenderer.flippedHorizontally(workingImage)
+                        resetViewport()
+                    }
+
                     Spacer()
-                    Image(systemName: "arrow.counterclockwise")
-                        .foregroundStyle(.gray)
+
+                    cropToolButton("arrow.counterclockwise", label: "Reset photo edits") {
+                        workingImage = originalImage
+                        freeformAspect = originalAspect
+                        selectedAspect = .freeform
+                        resetViewport()
+                    }
                 }
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(.white)
                 .padding(.horizontal, 44)
-                .padding(.top, 30)
+                .padding(.top, 22)
 
                 ScrollView(.horizontal) {
                     HStack(spacing: 18) {
-                        ForEach(ratios, id: \.self) { value in
-                            Button { ratio = value } label: {
-                                Text(value)
+                        ForEach(PhotoCropAspect.allCases) { aspect in
+                            Button {
+                                selectedAspect = aspect
+                                resetViewport()
+                            } label: {
+                                Text(aspect.rawValue)
                                     .font(.system(size: 19, weight: .medium))
-                                    .foregroundStyle(ratio == value ? .white : .gray)
-                                    .padding(.horizontal, ratio == value ? 16 : 0)
+                                    .foregroundStyle(selectedAspect == aspect ? .white : .gray)
+                                    .padding(.horizontal, selectedAspect == aspect ? 16 : 0)
                                     .frame(height: 44)
-                                    .background(ratio == value ? Color.gray.opacity(0.75) : .clear, in: Capsule())
+                                    .background(
+                                        selectedAspect == aspect ? Color.gray.opacity(0.75) : .clear,
+                                        in: Capsule()
+                                    )
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Crop ratio \(aspect.rawValue)")
+                            .accessibilityAddTraits(selectedAspect == aspect ? .isSelected : [])
                         }
                     }
                     .padding(.horizontal, 34)
@@ -3890,7 +4620,7 @@ private struct FeaturePhotoCropView: View {
 
                     Spacer()
 
-                    Button { dismiss() } label: {
+                    Button(action: applyEdits) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 28, weight: .bold))
                             .foregroundStyle(.white)
@@ -3898,12 +4628,202 @@ private struct FeaturePhotoCropView: View {
                             .background(AppPalette.accent, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Apply photo edits")
+                    .accessibilityIdentifier("apply-photo-edits")
                 }
                 .padding(.horizontal, 40)
-                .padding(.top, 38)
+                .padding(.top, 28)
                 .padding(.bottom, 24)
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private var originalAspect: CGFloat {
+        guard originalImage.size.height > 0 else { return 1 }
+        return originalImage.size.width / originalImage.size.height
+    }
+
+    private var currentAspect: CGFloat {
+        selectedAspect.value(for: workingImage.size, freeformValue: freeformAspect)
+    }
+
+    private var effectiveZoom: CGFloat {
+        min(max(settledZoom * gestureZoom, 1), 8)
+    }
+
+    private func cropWorkspace(size: CGSize) -> some View {
+        let cropSize = PhotoCropRenderer.cropFrameSize(in: size, aspectRatio: currentAspect)
+        let baseScale = max(
+            cropSize.width / workingImage.size.width,
+            cropSize.height / workingImage.size.height
+        )
+        let imageDisplaySize = CGSize(
+            width: workingImage.size.width * baseScale * effectiveZoom,
+            height: workingImage.size.height * baseScale * effectiveZoom
+        )
+        let proposedOffset = CGSize(
+            width: settledOffset.width + gestureOffset.width,
+            height: settledOffset.height + gestureOffset.height
+        )
+        let visibleOffset = PhotoCropRenderer.clampedOffset(
+            proposedOffset,
+            imageSize: workingImage.size,
+            viewportSize: cropSize,
+            zoom: effectiveZoom
+        )
+
+        return ZStack {
+            Color.black
+
+            Image(uiImage: workingImage)
+                .resizable()
+                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                .offset(visibleOffset)
+
+            PhotoCropGridOverlay()
+                .allowsHitTesting(false)
+        }
+        .frame(width: cropSize.width, height: cropSize.height)
+        .clipShape(Rectangle())
+        .overlay(Rectangle().stroke(.white, lineWidth: 2))
+        .contentShape(Rectangle())
+        .gesture(dragGesture(viewportSize: cropSize))
+        .simultaneousGesture(zoomGesture(viewportSize: cropSize))
+        .overlay(alignment: .bottomTrailing) {
+            if selectedAspect == .freeform {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 30, height: 30)
+                    .background(.white, in: Circle())
+                    .overlay(Circle().stroke(.black.opacity(0.25), lineWidth: 1))
+                    .offset(x: 12, y: 12)
+                    .contentShape(Rectangle())
+                    .gesture(freeformResizeGesture(availableSize: size))
+                    .accessibilityLabel("Resize freeform crop")
+            }
+        }
+        .onAppear { viewportSize = cropSize }
+        .onChange(of: cropSize) { _, newSize in
+            viewportSize = newSize
+            settledOffset = PhotoCropRenderer.clampedOffset(
+                settledOffset,
+                imageSize: workingImage.size,
+                viewportSize: newSize,
+                zoom: settledZoom
+            )
+        }
+    }
+
+    private func cropToolButton(
+        _ systemName: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func dragGesture(viewportSize: CGSize) -> some Gesture {
+        DragGesture()
+            .updating($gestureOffset) { value, state, _ in
+                state = value.translation
+            }
+            .onEnded { value in
+                let proposedOffset = CGSize(
+                    width: settledOffset.width + value.translation.width,
+                    height: settledOffset.height + value.translation.height
+                )
+                settledOffset = PhotoCropRenderer.clampedOffset(
+                    proposedOffset,
+                    imageSize: workingImage.size,
+                    viewportSize: viewportSize,
+                    zoom: settledZoom
+                )
+            }
+    }
+
+    private func zoomGesture(viewportSize: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .updating($gestureZoom) { value, state, _ in
+                state = value
+            }
+            .onEnded { value in
+                settledZoom = min(max(settledZoom * value, 1), 8)
+                settledOffset = PhotoCropRenderer.clampedOffset(
+                    settledOffset,
+                    imageSize: workingImage.size,
+                    viewportSize: viewportSize,
+                    zoom: settledZoom
+                )
+            }
+    }
+
+    private func freeformResizeGesture(availableSize: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let startingAspect = resizeStartAspect ?? freeformAspect
+                if resizeStartAspect == nil { resizeStartAspect = startingAspect }
+                let startingSize = PhotoCropRenderer.cropFrameSize(
+                    in: availableSize,
+                    aspectRatio: startingAspect
+                )
+                let proposedWidth = min(
+                    availableSize.width,
+                    max(96, startingSize.width + value.translation.width * 2)
+                )
+                let proposedHeight = min(
+                    availableSize.height,
+                    max(96, startingSize.height + value.translation.height * 2)
+                )
+                freeformAspect = proposedWidth / proposedHeight
+                resetViewport()
+            }
+            .onEnded { _ in
+                resizeStartAspect = nil
+            }
+    }
+
+    private func resetViewport() {
+        settledZoom = 1
+        settledOffset = .zero
+    }
+
+    private func applyEdits() {
+        guard let croppedImage = PhotoCropRenderer.croppedImage(
+            from: workingImage,
+            viewportSize: viewportSize,
+            zoom: settledZoom,
+            offset: settledOffset
+        ) else { return }
+        onSave(croppedImage)
+        dismiss()
+    }
+}
+
+private struct PhotoCropGridOverlay: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                for fraction in [1.0 / 3.0, 2.0 / 3.0] {
+                    let x = proxy.size.width * fraction
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: proxy.size.height))
+
+                    let y = proxy.size.height * fraction
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: proxy.size.width, y: y))
+                }
+            }
+            .stroke(.white.opacity(0.32), lineWidth: 0.7)
+        }
     }
 }

@@ -5,10 +5,12 @@ struct TemplateDetailView: View {
     let item: TemplateItem
     let detailItems: [TemplateItem]
     let configuredTryNowItem: TemplateItem?
+    let configuredTryNowItems: [TemplateItem]?
+    let creationItemsProvider: ((TemplateItem) -> [TemplateItem])?
     @Binding var credits: Int
     let onClose: () -> Void
     @State private var selectedID: String?
-    @State private var creatorItem: TemplateItem?
+    @State private var creationLaunch: TemplateCreationLaunch?
     @AppStorage("hasSeenTemplateDetailSwipeHint") private var hasSeenSwipeHint = false
     @State private var showSwipeHint = false
 
@@ -16,6 +18,8 @@ struct TemplateDetailView: View {
         item: TemplateItem,
         detailItems: [TemplateItem]? = nil,
         tryNowItem: TemplateItem? = nil,
+        tryNowItems: [TemplateItem]? = nil,
+        creationItemsProvider: ((TemplateItem) -> [TemplateItem])? = nil,
         credits: Binding<Int>,
         onClose: @escaping () -> Void
     ) {
@@ -35,6 +39,8 @@ struct TemplateDetailView: View {
             self.detailItems = [item] + sourceItems.filter { $0.id != item.id }
         }
         self.configuredTryNowItem = tryNowItem
+        self.configuredTryNowItems = tryNowItems
+        self.creationItemsProvider = creationItemsProvider
         self._credits = credits
         self.onClose = onClose
         self._selectedID = State(initialValue: item.id)
@@ -50,9 +56,18 @@ struct TemplateDetailView: View {
                                 item: detailItem,
                                 onClose: onClose,
                                 onTry: {
-                                    creatorItem = detailItem.id == item.id
-                                        ? configuredTryNowItem?.withPreviewMedia(from: detailItem) ?? detailItem
-                                        : detailItem
+                                    if detailItem.id == item.id,
+                                       let configuredTryNowItem {
+                                        creationLaunch = TemplateCreationLaunch(
+                                            template: configuredTryNowItem,
+                                            templates: configuredTryNowItems ?? [configuredTryNowItem]
+                                        )
+                                    } else {
+                                        creationLaunch = TemplateCreationLaunch(
+                                            template: detailItem,
+                                            templates: creationTemplates(for: detailItem)
+                                        )
+                                    }
                                 }
                             )
                             .containerRelativeFrame([.horizontal, .vertical])
@@ -94,11 +109,15 @@ struct TemplateDetailView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(item: $creatorItem) { creatorItem in
-            if creatorItem.generationKind == .image {
-                ImageGenerationUploadView(template: creatorItem, credits: $credits)
+        .fullScreenCover(item: $creationLaunch) { launch in
+            if launch.template.generationKind == .image {
+                ImageGenerationUploadView(template: launch.template, credits: $credits)
             } else {
-                CreateFlowView(template: creatorItem, templates: detailItems, credits: $credits)
+                CreateFlowView(
+                    template: launch.template,
+                    templates: launch.templates,
+                    credits: $credits
+                )
             }
         }
         .onAppear(perform: presentSwipeHintIfNeeded)
@@ -135,6 +154,34 @@ struct TemplateDetailView: View {
     private var isSwipeHintForced: Bool {
         ProcessInfo.processInfo.arguments.contains("-forceTemplateSwipeHint")
     }
+
+    private func creationTemplates(for detailItem: TemplateItem) -> [TemplateItem] {
+        if let creationItemsProvider {
+            return creationItemsProvider(detailItem)
+        }
+
+        guard let groupID = detailItem.detailGroupID else { return [detailItem] }
+
+        let groupItems = detailItems.filter {
+            $0.detailGroupID == groupID
+                && $0.generationKind == detailItem.generationKind
+        }
+        return groupItems.isEmpty ? [detailItem] : groupItems
+    }
+}
+
+struct TemplateCreationLaunch: Identifiable {
+    let template: TemplateItem
+    let templates: [TemplateItem]
+
+    var id: String { template.id }
+
+    init(template: TemplateItem, templates: [TemplateItem]) {
+        self.template = template
+        self.templates = templates.contains(where: { $0.id == template.id })
+            ? templates
+            : [template] + templates
+    }
 }
 
 private struct TemplateDetailPage: View {
@@ -151,7 +198,7 @@ private struct TemplateDetailPage: View {
                     TemplateComparisonView(
                         cover: comparisonCover,
                         allowsInteraction: true,
-                        imageContentMode: .fit
+                        imageContentMode: .fill
                     )
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()

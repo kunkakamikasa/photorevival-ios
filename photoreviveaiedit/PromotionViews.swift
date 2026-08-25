@@ -433,127 +433,142 @@ private struct CountdownView: View {
 }
 
 struct SummerSalePaywallView: View {
+    let offer: CMSCouponOffer
     @Environment(\.dismiss) private var dismiss
     @AppStorage("isSubscribed") private var isSubscribed = false
-    @State private var selectedPlan: SummerPlan = .annual
+    @State private var selectedPlan: CouponPlanKind = .annual
     @State private var isPurchasing = false
+    @State private var isRestoring = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
 
     var body: some View {
         ZStack {
             SummerBeachBackdrop()
 
-            LinearGradient(
-                colors: [.white.opacity(0.14), Color(red: 1, green: 0.94, blue: 0.80).opacity(0.82), .white.opacity(0.28)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            SummerPalmDecor()
-
             GeometryReader { proxy in
-                let horizontalPadding: CGFloat = 20
-                let continueHorizontalPadding: CGFloat = 29
-                let cardSpacing: CGFloat = 24
-                let cardWidth = (proxy.size.width - horizontalPadding * 2 - cardSpacing) / 2
+                let compact = proxy.size.height < 820
+                let horizontalPadding: CGFloat = compact ? 18 : 26
+                let signHeight = min(max(proxy.size.height * 0.255, 192), 248)
+                let cardHeight = min(max(proxy.size.height * 0.215, 176), 218)
 
-                ScrollView {
-                    VStack(spacing: 0) {
-                        HStack {
-                            closeButton
-                            Spacer()
-                            Button("Restore") { showInformationAlert() }
-                                .font(.headline)
-                                .foregroundStyle(Color(red: 0.45, green: 0.24, blue: 0.08))
-                                .padding(.horizontal, 18)
-                                .frame(height: 44)
-                                .background(.white.opacity(0.72), in: Capsule())
-                                .overlay(alignment: .trailing) {
-                                    LinearGradient(
-                                        colors: [.clear, .yellow.opacity(0.76), .white.opacity(0.10)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                    .frame(width: 34, height: 36)
-                                    .clipShape(Capsule())
-                                    .blur(radius: 2)
-                                    .allowsHitTesting(false)
-                                }
-                                .accessibilityIdentifier("summer-offer-restore")
-                        }
-                        .padding(.horizontal, horizontalPadding)
-
-                        Text("Congratulations")
-                            .font(.system(size: 34, weight: .heavy))
-                            .italic()
-                            .foregroundStyle(Color(red: 0.96, green: 0.58, blue: 0.02))
-                            .minimumScaleFactor(0.72)
-                            .lineLimit(1)
-                            .padding(.top, 15)
-
-                        HStack(spacing: 8) {
-                            Text("—✦")
-                                .foregroundStyle(AppPalette.orange)
-                            Text("You've got a Special gift!")
-                                .foregroundStyle(AppPalette.ink)
-                            Text("✦—")
-                                .foregroundStyle(AppPalette.orange)
-                        }
-                            .font(.headline)
-                            .minimumScaleFactor(0.78)
-                            .lineLimit(1)
-                            .padding(.top, 8)
-
-                        SummerCoupon()
-                            .frame(width: proxy.size.width, height: proxy.size.width * 780 / 1290)
-                            .padding(.top, 35)
-
-                        HStack(spacing: cardSpacing) {
-                            SummerPlanCard(plan: .weekly, selectedPlan: $selectedPlan)
-                                .frame(width: cardWidth)
-                            SummerPlanCard(plan: .annual, selectedPlan: $selectedPlan)
-                                .frame(width: cardWidth)
-                        }
-                        .padding(.top, 34)
-
-                        Spacer(minLength: 82)
-
-                        Button(action: beginPurchase) {
-                            HStack {
-                                Spacer()
-                                Text(isPurchasing ? "Connecting..." : "Continue")
-                                    .font(.title3.bold())
-                                Spacer()
-                                Image(systemName: "arrow.right")
-                                    .font(.title3.bold())
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 22)
-                            .frame(height: 56)
-                            .background(
-                                LinearGradient(colors: [AppPalette.orange, Color.red], startPoint: .leading, endPoint: .trailing),
-                                in: Capsule()
-                            )
+                VStack(spacing: 0) {
+                    HStack {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 27, weight: .light))
+                                .foregroundStyle(Color.black.opacity(0.88))
+                                .frame(width: 48, height: 48)
+                                .background(.white.opacity(0.82), in: Circle())
                         }
                         .buttonStyle(TemplatePressStyle())
-                        .disabled(isPurchasing)
-                        .accessibilityIdentifier("summer-offer-continue")
-                        .accessibilityValue(selectedPlan.productIdentifier.rawValue)
-                        .padding(.horizontal, continueHorizontalPadding)
+                        .accessibilityLabel("Close summer offer")
 
-                        Label("Cancel anytime", systemImage: "checkmark.shield")
-                            .font(.subheadline)
-                            .foregroundStyle(AppPalette.ink.opacity(0.75))
-                            .padding(.top, 12)
-                            .padding(.bottom, 12)
+                        Spacer()
+
+                        Button(action: restorePurchases) {
+                            Text(isRestoring ? "Restoring..." : "Restore")
+                                .font(.system(size: 19, weight: .bold))
+                                .foregroundStyle(Color(red: 0.55, green: 0.31, blue: 0.10))
+                                .padding(.horizontal, 22)
+                                .frame(height: 48)
+                                .background(.white.opacity(0.84), in: Capsule())
+                        }
+                        .buttonStyle(TemplatePressStyle())
+                        .disabled(isRestoring || isPurchasing)
+                        .accessibilityIdentifier("summer-offer-restore")
                     }
-                    .frame(width: proxy.size.width)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.top, compact ? 4 : 8)
+
+                    SummerPromotionHeadline(compact: compact)
+                        .padding(.top, compact ? 3 : 7)
+
+                    HStack(spacing: 8) {
+                        SummerSparkleRule()
+                        Text("You've got a Special gift!")
+                            .font(.system(size: compact ? 16 : 18, weight: .bold))
+                            .foregroundStyle(Color.black.opacity(0.84))
+                            .minimumScaleFactor(0.78)
+                            .lineLimit(1)
+                        SummerSparkleRule()
+                            .scaleEffect(x: -1, y: 1)
+                    }
+                    .padding(.horizontal, horizontalPadding + 12)
+                    .padding(.top, compact ? 0 : 3)
+
+                    SummerDiscountSign()
+                        .frame(height: signHeight)
+                        .padding(.horizontal, compact ? 7 : 11)
+                        .padding(.top, compact ? 1 : 5)
+
+                    HStack(spacing: compact ? 12 : 16) {
+                        SummerPlanCard(
+                            kind: .weekly,
+                            plan: offer.weeklyPlan,
+                            selectedPlan: $selectedPlan
+                        )
+                        SummerPlanCard(
+                            kind: .annual,
+                            plan: offer.annualPlan,
+                            selectedPlan: $selectedPlan
+                        )
+                    }
+                    .frame(height: cardHeight)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.top, compact ? 5 : 9)
+
+                    Spacer(minLength: compact ? 10 : 18)
+
+                    Button(action: beginPurchase) {
+                        HStack {
+                            Spacer()
+                            Text(isPurchasing ? "Connecting..." : "Continue")
+                                .font(.system(size: 22, weight: .bold))
+                            Spacer()
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 22, weight: .regular))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                        .frame(height: compact ? 56 : 62)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 1, green: 0.57, blue: 0), Color(red: 1, green: 0.20, blue: 0.16)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            in: Capsule()
+                        )
+                        .shadow(color: Color.orange.opacity(0.14), radius: 8, y: 5)
+                    }
+                    .buttonStyle(TemplatePressStyle())
+                    .disabled(isPurchasing || isRestoring)
+                    .accessibilityIdentifier("summer-offer-continue")
+                    .accessibilityValue(offer.plan(for: selectedPlan).productID)
+                    .padding(.horizontal, horizontalPadding + 2)
+
+                    Label("Cancel anytime", systemImage: "checkmark.shield")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(Color.black.opacity(0.68))
+                        .padding(.top, compact ? 7 : 10)
+                        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 8))
                 }
-                .scrollIndicators(.hidden)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+
+            if isPurchasing || isRestoring {
+                Color.black.opacity(0.16)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+                    .padding(18)
+                    .background(.black.opacity(0.42), in: Circle())
             }
         }
         .preferredColorScheme(.light)
+        .sensoryFeedback(.selection, trigger: selectedPlan)
         .accessibilityIdentifier("summer-sale-screen")
         .alert(item: $purchaseAlert) { alert in
             Alert(
@@ -567,7 +582,7 @@ struct SummerSalePaywallView: View {
     private func beginPurchase() {
         guard !isPurchasing else { return }
 
-        let productID = selectedPlan.productIdentifier
+        let productID = offer.plan(for: selectedPlan).productID
         isPurchasing = true
 
         Task {
@@ -588,7 +603,7 @@ struct SummerSalePaywallView: View {
             case .unavailable:
                 purchaseAlert = SubscriptionPurchaseAlert(
                     title: "Product Unavailable",
-                    message: "The App Store product \(productID.rawValue) is not available for this account."
+                    message: "The App Store product \(productID) is not available for this account."
                 )
             case .failed(let message):
                 purchaseAlert = SubscriptionPurchaseAlert(
@@ -599,160 +614,290 @@ struct SummerSalePaywallView: View {
         }
     }
 
-    private func showInformationAlert() {
-        purchaseAlert = SubscriptionPurchaseAlert(
-            title: "StoreKit connection needed",
-            message: "Restore still needs its production StoreKit restore flow."
-        )
-    }
+    private func restorePurchases() {
+        guard !isRestoring else { return }
+        isRestoring = true
 
-    private var closeButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "xmark")
-                .font(.title2.weight(.light))
-                .foregroundStyle(.black)
-                .frame(width: 44, height: 44)
-                .background(.white.opacity(0.72), in: Circle())
+        Task {
+            let outcome = await SubscriptionPurchaseService.restore()
+            isRestoring = false
+
+            switch outcome {
+            case .purchased:
+                isSubscribed = true
+                dismiss()
+            case .unavailable:
+                purchaseAlert = SubscriptionPurchaseAlert(
+                    title: "No Purchases Found",
+                    message: "No active subscription was found for this Apple ID."
+                )
+            case .failed(let message):
+                purchaseAlert = SubscriptionPurchaseAlert(
+                    title: "Restore Unavailable",
+                    message: message
+                )
+            case .cancelled, .pending:
+                break
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Close summer offer")
     }
 }
 
-private enum SummerPlan: String, CaseIterable, Identifiable {
-    case weekly
-    case annual
+private struct SummerPromotionHeadline: View {
+    let compact: Bool
 
-    var id: String { rawValue }
-    var title: String { self == .weekly ? "Weekly Plan" : "Annual Plan" }
-    var priceAmount: String { self == .weekly ? "$9.99" : "$39.99" }
-    var pricePeriod: String { self == .weekly ? "/week" : "/year" }
-    var dailyAmount: String { self == .weekly ? "$1.43" : "$0.11" }
-    var productIdentifier: SubscriptionProductID {
-        self == .weekly ? .specialGiftWeekly : .specialGiftYearly
+    var body: some View {
+        VStack(spacing: compact ? -9 : -7) {
+            HStack(spacing: 8) {
+                Capsule()
+                    .fill(Color(red: 1, green: 0.52, blue: 0.02))
+                    .frame(width: compact ? 24 : 31, height: 2)
+                Text("Congratulations")
+                    .font(.custom("SnellRoundhand-Bold", size: compact ? 42 : 49))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color(red: 1, green: 0.73, blue: 0.02), Color(red: 1, green: 0.43, blue: 0.01)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .minimumScaleFactor(0.72)
+                    .lineLimit(1)
+                Capsule()
+                    .fill(Color(red: 1, green: 0.52, blue: 0.02))
+                    .frame(width: compact ? 24 : 31, height: 2)
+            }
+
+            HStack(spacing: 5) {
+                Capsule().frame(width: compact ? 42 : 58, height: 1.5)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: compact ? 15 : 18))
+                Capsule().frame(width: compact ? 42 : 58, height: 1.5)
+            }
+            .foregroundStyle(Color(red: 1, green: 0.48, blue: 0.04))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Congratulations")
+    }
+}
+
+private struct SummerSparkleRule: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Capsule().frame(width: 18, height: 1.5)
+            Image(systemName: "sparkle")
+                .font(.system(size: 10, weight: .bold))
+        }
+        .foregroundStyle(Color(red: 1, green: 0.58, blue: 0.02))
     }
 }
 
 private struct SummerPlanCard: View {
-    let plan: SummerPlan
-    @Binding var selectedPlan: SummerPlan
+    let kind: CouponPlanKind
+    let plan: CMSCouponPlan
+    @Binding var selectedPlan: CouponPlanKind
+
+    private var title: String { kind == .weekly ? "Weekly Plan" : "Annual Plan" }
+    private var price: String { kind == .weekly ? "$9.99" : "$39.99" }
+    private var period: String { kind == .weekly ? "/week" : "/year" }
+    private var dailyPrice: String { kind == .weekly ? "$1.43" : "$0.11" }
+    private var accent: Color {
+        kind == .weekly
+            ? Color(red: 0.20, green: 0.68, blue: 0.86)
+            : Color(red: 1.00, green: 0.36, blue: 0.08)
+    }
+    private var bottomTint: Color {
+        kind == .weekly
+            ? Color(red: 0.75, green: 0.94, blue: 0.98)
+            : Color(red: 1.00, green: 0.90, blue: 0.50)
+    }
 
     var body: some View {
-        Button { selectedPlan = plan } label: {
-            VStack(spacing: 0) {
-                Text(plan.title)
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(.secondary)
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(plan.priceAmount)
-                        .font(.system(size: plan == .annual ? 23 : 21, weight: .heavy))
-                    Text(plan.pricePeriod)
-                        .font(.system(size: plan == .annual ? 15 : 14, weight: .regular))
-                }
+        Button {
+            withAnimation(.easeOut(duration: 0.18)) { selectedPlan = kind }
+        } label: {
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.white.opacity(0.91))
+
+                SummerWaveShape()
+                    .fill(bottomTint.opacity(0.80))
+                    .frame(height: 49)
+
+                VStack(spacing: 0) {
+                    Text(title)
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(Color.gray.opacity(0.86))
+
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text(price)
+                            .font(.system(size: kind == .annual ? 23 : 21, weight: .heavy))
+                        Text(period)
+                            .font(.system(size: kind == .annual ? 15 : 14, weight: .regular))
+                    }
                     .foregroundStyle(AppPalette.ink)
                     .minimumScaleFactor(0.75)
                     .lineLimit(1)
-                    .padding(.top, 14)
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(plan.dailyAmount)
-                        .font(.system(size: 17, weight: .semibold))
-                    Text("/day")
-                        .font(.system(size: 14, weight: .regular))
-                }
+                    .padding(.top, 15)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text(dailyPrice)
+                            .font(.system(size: 17, weight: .semibold))
+                        Text("/day")
+                            .font(.system(size: 14, weight: .regular))
+                    }
                     .foregroundStyle(AppPalette.ink)
                     .padding(.top, 12)
-                Spacer(minLength: 0)
-                HStack(spacing: 6) {
-                    Image("RewardsCreditToken")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 20, height: 20)
-                    Text("400 per week")
-                }
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: 6) {
+                        Image("RewardsCreditToken")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 20, height: 20)
+                        Text("400 per week")
+                    }
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(Color(red: 0.38, green: 0.29, blue: 0.20))
                     .frame(maxWidth: .infinity)
-                    .frame(height: 39)
-                    .background(Color.yellow.opacity(0.24))
+                    .frame(height: 42)
+                }
+                .padding(.top, 28)
             }
-            .padding(.top, 32)
             .frame(maxWidth: .infinity)
-            .frame(height: 188)
-            .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 20))
+            .frame(maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
-                    .stroke(selectedPlan == plan ? Color.red : AppPalette.orange.opacity(0.7), lineWidth: selectedPlan == plan ? 4 : 1)
+                    .stroke(accent.opacity(selectedPlan == kind ? 1 : 0.68), lineWidth: selectedPlan == kind ? 3.5 : 1.5)
             )
+            .shadow(color: selectedPlan == kind ? accent.opacity(0.18) : .clear, radius: 8, y: 4)
             .overlay(alignment: .top) {
-                if plan == .annual {
-                    ZStack(alignment: .center) {
-                        Image("SummerFlame")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 68, height: 58)
-                            .offset(x: -48, y: -50)
-
-                        Text("Most popular")
-                            .font(.subheadline.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .frame(height: 36)
-                            .background(LinearGradient(colors: [Color.red, AppPalette.accent], startPoint: .top, endPoint: .bottom), in: Capsule())
-                    }
-                    .offset(y: -18)
+                if kind == .annual {
+                    Text("Most popular")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .frame(height: 34)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 1, green: 0.31, blue: 0.22), Color(red: 1, green: 0.18, blue: 0.14)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            in: Capsule()
+                        )
+                        .offset(y: -17)
+                } else {
+                    Image("SummerPromoShell")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 48, height: 48)
+                        .offset(y: -23)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if kind == .annual {
+                    Image("SummerPromoStarfish")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 51, height: 51)
+                        .offset(x: 8, y: -22)
                 }
             }
         }
         .buttonStyle(TemplatePressStyle())
-        .accessibilityLabel(plan.title)
-        .accessibilityValue(selectedPlan == plan ? "Selected" : "Not selected")
+        .accessibilityLabel(title)
+        .accessibilityValue(selectedPlan == kind ? "Selected" : "Not selected")
     }
 }
 
-private struct SummerCoupon: View {
+private struct SummerDiscountSign: View {
     var body: some View {
-        Image("SummerCouponArtwork")
-            .resizable()
-            .scaledToFit()
+        GeometryReader { proxy in
+            ZStack {
+                Image("SummerPromoSign")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+
+                VStack(spacing: proxy.size.height * 0.025) {
+                    Text("65% OFF")
+                        .font(.system(size: min(proxy.size.width * 0.145, 61), weight: .black, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [Color(red: 1.00, green: 0.65, blue: 0.02), Color(red: 1.00, green: 0.20, blue: 0.02)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .shadow(color: .white.opacity(0.78), radius: 0, y: 2)
+                        .minimumScaleFactor(0.76)
+                        .lineLimit(1)
+
+                    Text("LIMITED TIME ONLY")
+                        .font(.system(size: min(proxy.size.width * 0.038, 16), weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                        .frame(height: min(proxy.size.height * 0.16, 35))
+                        .background(Color(red: 0.04, green: 0.55, blue: 0.70), in: SummerRibbonShape())
+                }
+                .offset(y: proxy.size.height * 0.045)
+                .padding(.horizontal, proxy.size.width * 0.21)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("65 percent off, limited time only")
     }
 }
 
-struct SummerCampaignHero: View {
-    var body: some View {
-        Image("HomeDiscountCarousel")
-            .resizable()
-            .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .accessibilityIdentifier("summer-campaign-hero")
+private struct SummerRibbonShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let notch = min(rect.height * 0.28, rect.width * 0.08)
+        var path = Path()
+        path.move(to: CGPoint(x: notch, y: 0))
+        path.addLine(to: CGPoint(x: rect.maxX - notch, y: 0))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX - notch, y: rect.maxY))
+        path.addLine(to: CGPoint(x: notch, y: rect.maxY))
+        path.addLine(to: CGPoint(x: 0, y: rect.midY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct SummerWaveShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: rect.height * 0.25))
+        path.addCurve(
+            to: CGPoint(x: rect.width * 0.5, y: rect.height * 0.20),
+            control1: CGPoint(x: rect.width * 0.17, y: -rect.height * 0.05),
+            control2: CGPoint(x: rect.width * 0.33, y: rect.height * 0.48)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.maxX, y: rect.height * 0.13),
+            control1: CGPoint(x: rect.width * 0.67, y: -rect.height * 0.03),
+            control2: CGPoint(x: rect.width * 0.82, y: rect.height * 0.42)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: 0, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 
 private struct SummerBeachBackdrop: View {
     var body: some View {
         GeometryReader { proxy in
-            Image("SummerBeachBackground")
+            Image("SummerPromoBackgroundV2")
                 .resizable()
                 .scaledToFill()
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipped()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
         }
         .ignoresSafeArea()
-    }
-}
-
-private struct SummerPalmDecor: View {
-    var body: some View {
-        GeometryReader { proxy in
-            Image("SummerPalmRight")
-                .resizable()
-                .scaledToFit()
-                .frame(width: proxy.size.width * 200 / 1290)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
     }
 }
 

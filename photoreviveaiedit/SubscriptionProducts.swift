@@ -30,14 +30,26 @@ enum SubscriptionPurchaseOutcome {
 
 enum SubscriptionPurchaseService {
     static func purchase(_ productID: SubscriptionProductID) async -> SubscriptionPurchaseOutcome {
+        await purchase(productID.rawValue)
+    }
+
+    static func purchase(_ productID: String) async -> SubscriptionPurchaseOutcome {
         do {
-            let products = try await Product.products(for: [productID.rawValue])
+            let products = try await Product.products(for: [productID])
             guard let product = products.first else { return .unavailable }
 
             switch try await product.purchase() {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
+                    let serverVerification = try await PhotoReviveAPIClient.shared.verifySubscription(
+                        transactionID: String(transaction.id),
+                        signedTransactionInfo: verification.jwsRepresentation
+                    )
+                    guard serverVerification.success,
+                          serverVerification.subscriptionStatus == "active" else {
+                        return .failed(serverVerification.message ?? "Apple confirmed the purchase, but membership activation is still pending. Please try again.")
+                    }
                     AdjustService.shared.trackSubscribe(
                         productID: product.id,
                         revenue: NSDecimalNumber(decimal: product.price).doubleValue,
@@ -57,6 +69,41 @@ enum SubscriptionPurchaseService {
             @unknown default:
                 return .failed("Apple returned an unknown purchase result. Please try again.")
             }
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    static func restore() async -> SubscriptionPurchaseOutcome {
+        do {
+            try await AppStore.sync()
+            var lastVerificationError: String?
+
+            for await verification in Transaction.currentEntitlements {
+                switch verification {
+                case .verified(let transaction):
+                    do {
+                        let serverVerification = try await PhotoReviveAPIClient.shared.verifySubscription(
+                            transactionID: String(transaction.id),
+                            signedTransactionInfo: verification.jwsRepresentation
+                        )
+                        if serverVerification.success,
+                           serverVerification.subscriptionStatus == "active" {
+                            return .purchased
+                        }
+                        lastVerificationError = serverVerification.message
+                    } catch {
+                        lastVerificationError = error.localizedDescription
+                    }
+                case .unverified(_, let error):
+                    lastVerificationError = error.localizedDescription
+                }
+            }
+
+            if let lastVerificationError {
+                return .failed(lastVerificationError)
+            }
+            return .unavailable
         } catch {
             return .failed(error.localizedDescription)
         }

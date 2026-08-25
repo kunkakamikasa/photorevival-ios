@@ -6,16 +6,19 @@ import UIKit
 struct LoopingVideoView: UIViewRepresentable {
     let resourceName: String
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
+    var aspectFitBackgroundColor: UIColor = .black
 
     func makeUIView(context: Context) -> LoopingPlayerUIView {
         let view = LoopingPlayerUIView()
         view.videoGravity = videoGravity
+        view.aspectFitBackgroundColor = aspectFitBackgroundColor
         view.configure(resourceName: resourceName)
         return view
     }
 
     func updateUIView(_ uiView: LoopingPlayerUIView, context: Context) {
         uiView.videoGravity = videoGravity
+        uiView.aspectFitBackgroundColor = aspectFitBackgroundColor
         uiView.play()
     }
 
@@ -27,16 +30,19 @@ struct LoopingVideoView: UIViewRepresentable {
 struct RemoteLoopingVideoView: UIViewRepresentable {
     let url: URL
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
+    var aspectFitBackgroundColor: UIColor = .black
 
     func makeUIView(context: Context) -> LoopingPlayerUIView {
         let view = LoopingPlayerUIView()
         view.videoGravity = videoGravity
+        view.aspectFitBackgroundColor = aspectFitBackgroundColor
         view.configure(url: url)
         return view
     }
 
     func updateUIView(_ uiView: LoopingPlayerUIView, context: Context) {
         uiView.videoGravity = videoGravity
+        uiView.aspectFitBackgroundColor = aspectFitBackgroundColor
         uiView.configure(url: url)
     }
 
@@ -76,10 +82,18 @@ final class LoopingPlayerUIView: UIView {
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill {
         didSet {
             playerLayer.videoGravity = videoGravity
-            playerLayer.backgroundColor = videoGravity == .resizeAspect
-                ? UIColor.black.cgColor
-                : UIColor.clear.cgColor
+            updatePlayerBackground()
         }
+    }
+
+    var aspectFitBackgroundColor: UIColor = .black {
+        didSet { updatePlayerBackground() }
+    }
+
+    private func updatePlayerBackground() {
+        playerLayer.backgroundColor = videoGravity == .resizeAspect
+            ? aspectFitBackgroundColor.cgColor
+            : UIColor.clear.cgColor
     }
 
     func configure(resourceName: String) {
@@ -114,14 +128,19 @@ final class LoopingPlayerUIView: UIView {
             return
         }
 
-        // Start playback immediately. The same URL is cached in the background
-        // so opening Try Now can use the completed local file without another download.
-        configurePlayer(url: url)
+        // Download once, then play the local file. Previously AVPlayer streamed
+        // the remote URL while a second task downloaded the same video for the
+        // cache, doubling bandwidth exactly while image covers were loading.
         remoteVideoTask = Task { [weak self] in
             do {
-                _ = try await TemplateVideoCache.shared.localURL(for: url)
+                let localURL = try await TemplateVideoCache.shared.localURL(for: url)
+                guard !Task.isCancelled, self?.currentURL == url else { return }
+                self?.configurePlayer(url: localURL)
             } catch {
-                // AVPlayer can continue streaming from the remote URL if caching fails.
+                guard !Task.isCancelled, self?.currentURL == url else { return }
+                // If persistence is unavailable, retain streaming as a final
+                // fallback so a transient disk error does not hide the preview.
+                self?.configurePlayer(url: url)
             }
             self?.remoteVideoTask = nil
         }
@@ -180,11 +199,29 @@ private actor TemplateVideoCache {
 
     private var downloads: [URL: Task<URL, Error>] = [:]
 
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = false
+        configuration.timeoutIntervalForRequest = 45
+        configuration.timeoutIntervalForResource = 180
+        configuration.httpMaximumConnectionsPerHost = 3
+        return URLSession(configuration: configuration)
+    }()
+
+    private init() {
+        Task.detached(priority: .background) {
+            Self.trimDiskCacheIfNeeded()
+        }
+    }
+
     static func cachedURL(for remoteURL: URL) -> URL? {
         let destinationURL = destinationURL(for: remoteURL)
-        return FileManager.default.fileExists(atPath: destinationURL.path)
-            ? destinationURL
-            : nil
+        guard FileManager.default.fileExists(atPath: destinationURL.path) else { return nil }
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: destinationURL.path
+        )
+        return destinationURL
     }
 
     func localURL(for remoteURL: URL) async throws -> URL {
@@ -198,24 +235,31 @@ private actor TemplateVideoCache {
         }
 
         let download = Task.detached(priority: .utility) {
-            let (temporaryURL, response) = try await URLSession.shared.download(from: remoteURL)
-            guard let response = response as? HTTPURLResponse,
-                  (200..<300).contains(response.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
+            await TemplateVideoTransferGate.shared.acquire()
+            do {
+                let (temporaryURL, response) = try await Self.session.download(from: remoteURL)
+                guard let response = response as? HTTPURLResponse,
+                      (200..<300).contains(response.statusCode) else {
+                    throw URLError(.badServerResponse)
+                }
 
-            let fileManager = FileManager.default
-            try fileManager.createDirectory(
-                at: destinationURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+                let fileManager = FileManager.default
+                try fileManager.createDirectory(
+                    at: destinationURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
 
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try? fileManager.removeItem(at: temporaryURL)
-            } else {
-                try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    try? fileManager.removeItem(at: temporaryURL)
+                } else {
+                    try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+                }
+                await TemplateVideoTransferGate.shared.release()
+                return destinationURL
+            } catch {
+                await TemplateVideoTransferGate.shared.release()
+                throw error
             }
-            return destinationURL
         }
         downloads[remoteURL] = download
 
@@ -234,9 +278,66 @@ private actor TemplateVideoCache {
             .map { String(format: "%02x", $0) }
             .joined()
         let fileExtension = remoteURL.pathExtension.isEmpty ? "mp4" : remoteURL.pathExtension
-        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TemplateVideoCache", isDirectory: true)
+        return cacheDirectory
             .appendingPathComponent(digest)
             .appendingPathExtension(fileExtension)
+    }
+
+    private static var cacheDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TemplateVideoCache", isDirectory: true)
+    }
+
+    private static func trimDiskCacheIfNeeded() {
+        let fileManager = FileManager.default
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: cacheDirectory,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let entries = files.compactMap { url -> (url: URL, size: Int, date: Date)? in
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else {
+                return nil
+            }
+            return (url, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast)
+        }
+        let limit = 768 * 1_024 * 1_024
+        var total = entries.reduce(0) { $0 + $1.size }
+        guard total > limit else { return }
+
+        for entry in entries.sorted(by: { $0.date < $1.date }) where total > limit * 3 / 4 {
+            try? fileManager.removeItem(at: entry.url)
+            total -= entry.size
+        }
+    }
+}
+
+/// Catalog videos are substantially larger than their still covers. Bounded
+/// downloading keeps a row of autoplay previews from starving every image on
+/// the screen; completed files remain available through TemplateVideoCache.
+private actor TemplateVideoTransferGate {
+    static let shared = TemplateVideoTransferGate()
+
+    private let limit = 2
+    private var activeTransfers = 0
+    private var waiters = [CheckedContinuation<Void, Never>]()
+
+    func acquire() async {
+        if activeTransfers < limit {
+            activeTransfers += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            activeTransfers = max(0, activeTransfers - 1)
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }
