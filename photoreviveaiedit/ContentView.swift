@@ -6,6 +6,7 @@ struct ContentView: View {
     @AppStorage("isSubscribed") private var isSubscribed = false
     @AppStorage("isLoggedIn") private var storedIsLoggedIn = false
     @AppStorage("returningOfferLastPresentedDay") private var returningOfferLastPresentedDay = 0.0
+    @AppStorage("subscriberScratchCompletedCampaignVersion") private var subscriberScratchCompletedCampaignVersion = 0
     @State private var selectedTab: AppTab = .home
     @State private var selectedTemplateRoute: TemplateDetailRoute?
     @State private var showSettings = false
@@ -15,6 +16,7 @@ struct ContentView: View {
     @State private var showHomeOfferBanner = true
     @StateObject private var accountStore = AppAccountStore.shared
     @State private var returningOffer: ReturningOfferVariant?
+    @State private var showSubscriberScratchOffer = false
     @State private var hasEvaluatedReturningOffer = false
     @ObservedObject private var featureConfigStore: FeatureConfigStore
     @State private var pendingLoginAction: (() -> Void)?
@@ -193,6 +195,14 @@ struct ContentView: View {
         .fullScreenCover(item: $returningOffer) { variant in
             ReturningPromotionFlowView(variant: variant)
         }
+        .fullScreenCover(isPresented: $showSubscriberScratchOffer) {
+            SubscriberScratchOfferView(
+                accountStore: accountStore,
+                onRewardClaimed: {
+                    subscriberScratchCompletedCampaignVersion = SubscriberScratchCampaign.version
+                }
+            )
+        }
         .preferredColorScheme(.light)
         .onAppear {
             trackSelectedTab()
@@ -239,14 +249,29 @@ struct ContentView: View {
             guard !hasEvaluatedReturningOffer else { return }
             hasEvaluatedReturningOffer = true
 
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("-resetSubscriberScratchEligibility") {
+                subscriberScratchCompletedCampaignVersion = 0
+            }
+            if SubscriberScratchEligibility.shouldPresent(
+                isReturningSession: isReturningSession,
+                isSubscribed: isSubscribed,
+                completedCampaignVersion: subscriberScratchCompletedCampaignVersion,
+                arguments: arguments
+            ) {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                showSubscriberScratchOffer = true
+                return
+            }
+
             let shouldPresent = ReturningOfferEligibility.shouldPresent(
                 isReturningSession: isReturningSession,
                 isSubscribed: isSubscribed,
-                arguments: ProcessInfo.processInfo.arguments
+                arguments: arguments
             )
 
             guard shouldPresent else { return }
-            let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-resetReturningOfferEligibility") {
                 returningOfferLastPresentedDay = 0
             }

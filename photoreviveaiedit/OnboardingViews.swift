@@ -12,6 +12,9 @@ struct AppRootView: View {
     @State private var initialMembershipWasClosed = false
     @State private var initialFollowUpOffer: PaywallFollowUpOffer?
     @State private var isShowingStartupVideo = true
+#if DEBUG
+    @AppStorage("debugTestUserStateOverrideEnabled") private var debugStateOverrideEnabled = false
+#endif
 
     private let arguments = ProcessInfo.processInfo.arguments
 
@@ -54,6 +57,12 @@ struct AppRootView: View {
         .fullScreenCover(item: $initialFollowUpOffer) { offer in
             PaywallFollowUpOfferView(offer: offer)
         }
+#if DEBUG
+        .background {
+            DebugTestWindowInstaller()
+                .frame(width: 0, height: 0)
+        }
+#endif
         .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
             Task {
                 await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
@@ -66,7 +75,13 @@ struct AppRootView: View {
             let featureLoadTask = Task {
                 await featureConfigStore.load()
             }
+#if DEBUG
+            if !debugStateOverrideEnabled {
+                isSubscribed = await SubscriptionPurchaseService.hasActiveStoreEntitlement()
+            }
+#else
             isSubscribed = await SubscriptionPurchaseService.hasActiveStoreEntitlement()
+#endif
             AppAnalytics.updateSubscription(isSubscribed: isSubscribed)
             await trackingAuthorization.requestAuthorizationIfNeeded()
             guard !Task.isCancelled else { return }

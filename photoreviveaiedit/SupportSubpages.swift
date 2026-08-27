@@ -12,11 +12,13 @@ struct MembershipPaywallView: View {
     private let isLoggedInOverride: Bool?
     private let showsFirstLaunchVideoBackground: Bool
     private let analyticsSource: String
-    @State private var tier: MembershipTier = .pro
-    @State private var billing: MembershipBilling = .annual
+    private let upgradingFromLevel: SubscriptionPlanLevel?
+    @State private var tier: MembershipTier
+    @State private var billing: MembershipBilling
     @State private var isPurchasing = false
     @State private var isRestoring = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+    @State private var legalDocument: LegalDocument?
 
     private let designWidth: CGFloat = 430
     private let designHeight: CGFloat = 862
@@ -28,11 +30,16 @@ struct MembershipPaywallView: View {
         isLoggedIn: Bool? = nil,
         showsFirstLaunchVideoBackground: Bool = false,
         analyticsSource: String = "membership_entry",
+        upgradingFromProductID: String? = nil,
         onClose: (() -> Void)? = nil
     ) {
         self.isLoggedInOverride = isLoggedIn
         self.showsFirstLaunchVideoBackground = showsFirstLaunchVideoBackground
         self.analyticsSource = analyticsSource
+        let upgradingFromLevel = SubscriptionPlanLevel(productID: upgradingFromProductID)
+        self.upgradingFromLevel = upgradingFromLevel
+        _tier = State(initialValue: upgradingFromLevel == nil ? .pro : .proPlus)
+        _billing = State(initialValue: .annual)
         self.onClose = onClose
     }
 
@@ -55,6 +62,32 @@ struct MembershipPaywallView: View {
             offerVariant: tier.rawValue,
             billingPeriod: billing.rawValue
         )
+    }
+
+    private var visibleLoggedInTiers: [MembershipTier] {
+        guard upgradingFromLevel != nil else { return MembershipTier.allCases }
+        return MembershipTier.allCases.filter { option in
+            MembershipBilling.allCases.contains { isUpgradeOption(tier: option, billing: $0) }
+        }
+    }
+
+    private func isUpgradeOption(
+        tier optionTier: MembershipTier,
+        billing optionBilling: MembershipBilling
+    ) -> Bool {
+        guard let upgradingFromLevel else { return true }
+        return optionBilling.planLevel(for: optionTier) > upgradingFromLevel
+    }
+
+    private func selectTier(_ option: MembershipTier) {
+        guard visibleLoggedInTiers.contains(option) else { return }
+        tier = option
+        if !isUpgradeOption(tier: option, billing: billing),
+           let firstUpgrade = MembershipBilling.allCases.first(where: {
+               isUpgradeOption(tier: option, billing: $0)
+           }) {
+            billing = firstUpgrade
+        }
     }
 
     private var paywallHeaderHeight: CGFloat {
@@ -119,6 +152,10 @@ struct MembershipPaywallView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
         }
     }
 
@@ -244,14 +281,14 @@ struct MembershipPaywallView: View {
     private var loggedInTierCarousel: some View {
         ScrollView(.horizontal) {
             LazyHStack(alignment: .top, spacing: 12) {
-                ForEach(MembershipTier.allCases) { option in
+                ForEach(visibleLoggedInTiers) { option in
                     VStack(spacing: 0) {
                         loggedInTierHeading(option)
                             .frame(height: 52)
 
                         Button {
                             withAnimation(.snappy(duration: 0.30, extraBounce: 0.06)) {
-                                tier = option
+                                selectTier(option)
                             }
                         } label: {
                             loggedInBenefitCard(option)
@@ -281,7 +318,7 @@ struct MembershipPaywallView: View {
             get: { tier },
             set: { newTier in
                 guard let newTier, tier != newTier else { return }
-                tier = newTier
+                selectTier(newTier)
             }
         )
     }
@@ -375,7 +412,10 @@ struct MembershipPaywallView: View {
     }
 
     private func loggedInMembershipPlanRow(_ option: MembershipBilling) -> some View {
-        Button {
+        let canSelect = isUpgradeOption(tier: tier, billing: option)
+
+        return Button {
+            guard canSelect else { return }
             billing = option
         } label: {
             HStack(spacing: 13) {
@@ -430,6 +470,8 @@ struct MembershipPaywallView: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(!canSelect)
+        .opacity(canSelect ? 1 : 0.34)
         .accessibilityLabel("\(option.loggedInTitle), \(option.loggedInTrailingPrice(for: tier))")
         .accessibilityValue(option.productIdentifier(for: tier, isLoggedIn: true).rawValue)
         .accessibilityAddTraits(billing == option ? .isSelected : [])
@@ -472,7 +514,9 @@ struct MembershipPaywallView: View {
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
         .buttonStyle(TemplatePressStyle())
-        .disabled(isPurchasing || isRestoring)
+        .disabled(
+            isPurchasing || isRestoring || !isUpgradeOption(tier: tier, billing: billing)
+        )
         .accessibilityIdentifier("membership-continue")
         .accessibilityValue(billing.productIdentifier(for: tier, isLoggedIn: true).rawValue)
     }
@@ -824,9 +868,9 @@ struct MembershipPaywallView: View {
 
     private var footerLinks: some View {
         HStack(spacing: 12) {
-            Button("Privacy") { showInformationAlert() }
+            Button("Privacy") { showPrivacyInformationAlert() }
             Text("|")
-            Button("Terms") { showInformationAlert() }
+            Button("Terms") { legalDocument = .termsOfService }
 
             Spacer()
 
@@ -841,7 +885,8 @@ struct MembershipPaywallView: View {
     }
 
     private func beginPurchase() {
-        guard !isPurchasing else { return }
+        guard !isPurchasing,
+              isUpgradeOption(tier: tier, billing: billing) else { return }
 
         let productID = billing.productIdentifier(for: tier, isLoggedIn: usesLoggedInPaywall)
         isPurchasing = true
@@ -878,10 +923,10 @@ struct MembershipPaywallView: View {
         }
     }
 
-    private func showInformationAlert() {
+    private func showPrivacyInformationAlert() {
         purchaseAlert = SubscriptionPurchaseAlert(
             title: "Coming Soon",
-            message: "Privacy and terms destinations still need their production URLs."
+            message: "The Privacy Policy destination will be connected when its production URL is available."
         )
     }
 
@@ -2207,6 +2252,15 @@ private enum MembershipBilling: String, CaseIterable, Identifiable {
         case (.annual, .proPlus): "$1.73/week"
         case (.weekly, .pro): "$9.99/week"
         case (.weekly, .proPlus): "$17.99/week"
+        }
+    }
+
+    func planLevel(for tier: MembershipTier) -> SubscriptionPlanLevel {
+        switch (self, tier) {
+        case (.weekly, .pro): .proWeekly
+        case (.annual, .pro): .proAnnual
+        case (.weekly, .proPlus): .proPlusWeekly
+        case (.annual, .proPlus): .proPlusAnnual
         }
     }
 

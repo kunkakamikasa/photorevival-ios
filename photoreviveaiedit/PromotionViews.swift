@@ -27,9 +27,14 @@ struct PaywallOfferFlowView: View {
     @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
     @State private var followUpOffer: PaywallFollowUpOffer?
     private let analyticsSource: String
+    private let upgradingFromProductID: String?
 
-    init(analyticsSource: String = "membership_entry") {
+    init(
+        analyticsSource: String = "membership_entry",
+        upgradingFromProductID: String? = nil
+    ) {
         self.analyticsSource = analyticsSource
+        self.upgradingFromProductID = upgradingFromProductID
     }
 
     var body: some View {
@@ -42,7 +47,9 @@ struct PaywallOfferFlowView: View {
                 )
             } else {
                 MembershipPaywallView(
+                    isLoggedIn: upgradingFromProductID == nil ? nil : true,
                     analyticsSource: analyticsSource,
+                    upgradingFromProductID: upgradingFromProductID,
                     onClose: presentFollowUpOffer
                 )
             }
@@ -389,7 +396,12 @@ struct LimitedTimeOfferPopup: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.58)
+            LinearGradient(
+                colors: [LimitedOfferPalette.backdropTop, LimitedOfferPalette.backdropBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+                .opacity(0.92)
                 .ignoresSafeArea()
                 .onTapGesture(perform: onClose)
 
@@ -402,10 +414,15 @@ struct LimitedTimeOfferPopup: View {
                         Button(action: onClose) {
                             Image(systemName: "xmark")
                                 .font(.title3)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(LimitedOfferPalette.onAccentText)
                                 .frame(width: 46, height: 46)
-                                .background(Color.black.opacity(0.48), in: Circle())
-                                .overlay(Circle().stroke(.white.opacity(0.75), lineWidth: 1))
+                                .background(LimitedOfferPalette.closeButton, in: Circle())
+                                .overlay(
+                                    Circle().stroke(
+                                        LimitedOfferPalette.orange.opacity(0.70),
+                                        lineWidth: 1
+                                    )
+                                )
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close limited offer")
@@ -447,9 +464,9 @@ struct LimitedTimeOfferPopup: View {
                 .font(.system(size: 32, weight: .heavy))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [Color(red: 1, green: 0.65, blue: 0.12), Color(red: 0.65, green: 0.29, blue: 0.02)],
-                        startPoint: .top,
-                        endPoint: .bottom
+                        colors: [LimitedOfferPalette.coral, LimitedOfferPalette.orange],
+                        startPoint: .leading,
+                        endPoint: .trailing
                     )
                 )
                 .minimumScaleFactor(0.72)
@@ -458,10 +475,17 @@ struct LimitedTimeOfferPopup: View {
             VStack(spacing: 10) {
                 Text("◆ PRO")
                     .font(.headline.bold())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(LimitedOfferPalette.onAccentText)
                     .padding(.horizontal, 22)
                     .frame(height: 36)
-                    .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 8))
+                    .background(
+                        LinearGradient(
+                            colors: [LimitedOfferPalette.coral, LimitedOfferPalette.orange],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
                     .offset(y: -20)
 
                 VStack(alignment: .leading, spacing: 7) {
@@ -476,8 +500,11 @@ struct LimitedTimeOfferPopup: View {
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
-            .background(.white, in: RoundedRectangle(cornerRadius: 13))
-            .overlay(RoundedRectangle(cornerRadius: 13).stroke(Color.orange.opacity(0.55), lineWidth: 1))
+            .background(LimitedOfferPalette.benefitSurface, in: RoundedRectangle(cornerRadius: 13))
+            .overlay(
+                RoundedRectangle(cornerRadius: 13)
+                    .stroke(LimitedOfferPalette.warmStroke.opacity(0.55), lineWidth: 1)
+            )
 
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text("50%")
@@ -486,7 +513,11 @@ struct LimitedTimeOfferPopup: View {
                     .font(.system(size: 32, weight: .heavy))
             }
             .foregroundStyle(
-                LinearGradient(colors: [AppPalette.accent, AppPalette.orange], startPoint: .leading, endPoint: .trailing)
+                LinearGradient(
+                    colors: [LimitedOfferPalette.coral, LimitedOfferPalette.orange],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
             )
 
             VStack(spacing: 4) {
@@ -496,9 +527,10 @@ struct LimitedTimeOfferPopup: View {
                     Text("first year")
                         .font(.headline)
                 }
+                .foregroundStyle(LimitedOfferPalette.primaryText)
                 Text("Then $49.99/year")
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LimitedOfferPalette.secondaryText)
             }
 
             CountdownView(hundredths: remainingHundredths)
@@ -508,10 +540,18 @@ struct LimitedTimeOfferPopup: View {
             } label: {
                 Text(isPurchasing ? "Connecting..." : "Try Now")
                     .font(.title2.bold())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(LimitedOfferPalette.onAccentText)
                     .frame(maxWidth: .infinity)
                     .frame(height: 58)
-                    .background(Color.black.opacity(0.88), in: Capsule())
+                    .background(
+                        LinearGradient(
+                            colors: [LimitedOfferPalette.buttonStart, LimitedOfferPalette.buttonEnd],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        in: Capsule()
+                    )
+                    .overlay(Capsule().stroke(.white.opacity(0.20), lineWidth: 1))
             }
             .buttonStyle(TemplatePressStyle())
             .disabled(isPurchasing)
@@ -519,10 +559,18 @@ struct LimitedTimeOfferPopup: View {
         }
         .padding(22)
         .background(
-            LinearGradient(colors: [Color(red: 1, green: 0.96, blue: 0.84), .white], startPoint: .top, endPoint: .center),
+            LinearGradient(
+                colors: [LimitedOfferPalette.cardTop, LimitedOfferPalette.cardBottom],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
             in: RoundedRectangle(cornerRadius: 24)
         )
-        .shadow(color: .black.opacity(0.24), radius: 22, y: 10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(LimitedOfferPalette.warmStroke.opacity(0.44), lineWidth: 1)
+        )
+        .shadow(color: LimitedOfferPalette.coral.opacity(0.18), radius: 24, y: 10)
     }
 
     private func beginPurchase() {
@@ -566,13 +614,30 @@ struct LimitedTimeOfferPopup: View {
             ForEach(items, id: \.self) { item in
                 Text("- \(item)")
                     .font(.subheadline)
-                    .foregroundStyle(AppPalette.ink)
+                    .foregroundStyle(LimitedOfferPalette.primaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
+
+private enum LimitedOfferPalette {
+    static let backdropTop = Color(red: 0.13, green: 0.08, blue: 0.04)
+    static let backdropBottom = Color(red: 0.04, green: 0.025, blue: 0.015)
+    static let cardTop = AppPalette.backgroundTop
+    static let cardBottom = AppPalette.surfaceCenter
+    static let benefitSurface = Color.white.opacity(0.76)
+    static let closeButton = AppPalette.ink.opacity(0.88)
+    static let primaryText = AppPalette.ink
+    static let secondaryText = AppPalette.brownInk.opacity(0.72)
+    static let onAccentText = Color.white
+    static let coral = AppPalette.accent
+    static let orange = AppPalette.orange
+    static let warmStroke = AppPalette.surfaceEdge
+    static let buttonStart = AppPalette.ink
+    static let buttonEnd = AppPalette.brownInk
 }
 
 private struct CountdownView: View {
@@ -594,13 +659,20 @@ private struct CountdownView: View {
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 Text(part)
                     .font(.system(size: 28, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(LimitedOfferPalette.onAccentText)
                     .frame(width: 62, height: 52)
-                    .background(AppPalette.accent.opacity(0.92), in: RoundedRectangle(cornerRadius: 8))
+                    .background(
+                        LinearGradient(
+                            colors: [LimitedOfferPalette.coral, LimitedOfferPalette.orange],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
                 if index < parts.count - 1 {
                     Text(":")
                         .font(.title2.bold())
-                        .foregroundStyle(AppPalette.accent)
+                        .foregroundStyle(LimitedOfferPalette.coral)
                 }
             }
         }

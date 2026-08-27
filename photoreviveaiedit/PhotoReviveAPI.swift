@@ -19,6 +19,7 @@ struct PhotoReviveUserStatus: Decodable {
     let subscriptionStatus: String?
     let subscriptionExpireAt: String?
     let planType: String?
+    let productID: String?
     let creditsBalance: Int
     let isAnonymous: Bool?
 
@@ -26,6 +27,7 @@ struct PhotoReviveUserStatus: Decodable {
         case subscriptionStatus = "subscription_status"
         case subscriptionExpireAt = "subscription_expire_at"
         case planType = "plan_type"
+        case productID = "product_id"
         case creditsBalance = "credits_balance"
         case isAnonymous = "is_anonymous"
     }
@@ -36,6 +38,7 @@ struct SubscriptionVerificationResult: Decodable {
     let subscriptionStatus: String?
     let subscriptionExpireAt: String?
     let planType: String?
+    let productID: String?
     let creditsBalance: Int?
     let creditsGranted: Int?
     let message: String?
@@ -45,6 +48,7 @@ struct SubscriptionVerificationResult: Decodable {
         case subscriptionStatus = "subscription_status"
         case subscriptionExpireAt = "subscription_expire_at"
         case planType = "plan_type"
+        case productID = "product_id"
         case creditsBalance = "credits_balance"
         case creditsGranted = "credits_granted"
     }
@@ -443,6 +447,11 @@ struct SuggestionSubmissionResult: Decodable {
     }
 }
 
+struct AccountDeletionResult: Decodable {
+    let success: Bool
+    let message: String?
+}
+
 @MainActor
 final class PhotoReviveAPIClient {
     static let shared = PhotoReviveAPIClient()
@@ -552,6 +561,26 @@ final class PhotoReviveAPIClient {
         return response.imageURL
     }
 
+    func uploadProfileAvatar(_ imageData: Data) async throws -> String {
+        let boundary = "PhotoReviveAvatarBoundary-\(UUID().uuidString)"
+        var body = Data()
+        body.appendUTF8("--\(boundary)\r\n")
+        body.appendUTF8("Content-Disposition: form-data; name=\"file\"; filename=\"profile-avatar.jpg\"\r\n")
+        body.appendUTF8("Content-Type: image/jpeg\r\n\r\n")
+        body.append(imageData)
+        body.appendUTF8("\r\n--\(boundary)--\r\n")
+
+        var request = URLRequest(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/upload-image")
+        )
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+
+        let response: PhotoReviveImageUploadResponse = try await send(request)
+        return response.imageURL
+    }
+
     func createImageToVideo(
         itemID: String,
         imageURLs: [String],
@@ -586,10 +615,45 @@ final class PhotoReviveAPIClient {
         let _: DeleteTaskResponse = try await post("delete-task", body: DeleteTaskRequest(taskID: id))
     }
 
+    func deleteAccount() async throws -> AccountDeletionResult {
+        var request = URLRequest(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/delete-account")
+        )
+        request.httpMethod = "DELETE"
+        return try await send(request)
+    }
+
     func submitSuggestion(
         content: String,
         contactEmail: String,
         screenshotData: Data?
+    ) async throws -> SuggestionSubmissionResult {
+        try await submitFeedbackRequest(
+            content: content,
+            contactEmail: contactEmail,
+            screenshotData: screenshotData,
+            feedbackType: "suggestion"
+        )
+    }
+
+    func submitFeedback(
+        content: String,
+        contactEmail: String,
+        screenshotData: Data?
+    ) async throws -> SuggestionSubmissionResult {
+        try await submitFeedbackRequest(
+            content: content,
+            contactEmail: contactEmail,
+            screenshotData: screenshotData,
+            feedbackType: "feedback"
+        )
+    }
+
+    private func submitFeedbackRequest(
+        content: String,
+        contactEmail: String,
+        screenshotData: Data?,
+        feedbackType: String
     ) async throws -> SuggestionSubmissionResult {
         let token = try await authClient.feedbackAccessToken()
         let attachmentURL: String?
@@ -613,7 +677,7 @@ final class PhotoReviveAPIClient {
             SuggestionSubmissionRequest(
                 content: content,
                 contactEmail: contactEmail,
-                feedbackType: "suggestion",
+                feedbackType: feedbackType,
                 attachmentURL: attachmentURL,
                 appVersion: Bundle.main.object(
                     forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -1057,6 +1121,22 @@ final class AppAccountStore: ObservableObject {
             hasLoadedCredits = true
         }
         rewardTasks = try await api.rewardTasksStatus().tasks
+        await refreshCreditTransactions()
+        return result
+    }
+
+    func claimSubscriberScratchReward() async throws -> RewardTaskClaimResult {
+        let result = try await api.claimRewardTask(
+            code: SubscriberScratchCampaign.rewardTaskCode,
+            evidence: [
+                "source": "subscriber_return_scratch",
+                "campaign_version": String(SubscriberScratchCampaign.version)
+            ]
+        )
+        if let balance = result.creditsBalance {
+            creditsBalance = balance
+            hasLoadedCredits = true
+        }
         await refreshCreditTransactions()
         return result
     }

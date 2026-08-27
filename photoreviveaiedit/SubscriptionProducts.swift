@@ -20,6 +20,40 @@ enum SubscriptionProductID: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum SubscriptionPlanLevel: Int, Comparable {
+    case proWeekly = 0
+    case proAnnual = 1
+    case proPlusWeekly = 2
+    case proPlusAnnual = 3
+
+    static func < (lhs: SubscriptionPlanLevel, rhs: SubscriptionPlanLevel) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    init?(productID: String?) {
+        guard let productID else { return nil }
+        let normalized = productID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "loged_", with: "")
+
+        switch normalized {
+        case "pro_weekly", "special_gift_weekly", "family_exclusive_weekly", "super_prize_weekly":
+            self = .proWeekly
+        case "pro_yearly", "limited_time_offer_yearly", "special_gift_yearly", "3dayfreetrial_yearly":
+            self = .proAnnual
+        case "proplus_weekly":
+            self = .proPlusWeekly
+        case "proplus_yearly":
+            self = .proPlusAnnual
+        default:
+            return nil
+        }
+    }
+
+    var isHighest: Bool { self == .proPlusAnnual }
+}
+
 enum SubscriptionPurchaseOutcome {
     case purchased
     case cancelled
@@ -227,6 +261,33 @@ enum SubscriptionPurchaseService {
             return true
         }
         return false
+    }
+
+    static func activeProductID(now: Date = Date()) async -> String? {
+        var bestMatch: (id: String, level: SubscriptionPlanLevel)?
+        var fallbackProductID: String?
+
+        for await verification in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = verification,
+                  transaction.productType == .autoRenewable,
+                  transaction.revocationDate == nil else {
+                continue
+            }
+            if let expirationDate = transaction.expirationDate,
+               expirationDate <= now {
+                continue
+            }
+
+            guard let level = SubscriptionPlanLevel(productID: transaction.productID) else {
+                fallbackProductID = fallbackProductID ?? transaction.productID
+                continue
+            }
+            if bestMatch.map({ level > $0.level }) ?? true {
+                bestMatch = (transaction.productID, level)
+            }
+        }
+
+        return bestMatch?.id ?? fallbackProductID
     }
 }
 

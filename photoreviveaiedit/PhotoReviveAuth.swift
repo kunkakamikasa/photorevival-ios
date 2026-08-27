@@ -112,6 +112,14 @@ private struct PhotoReviveAdjustAttributionResponse: Decodable {
     let success: Bool
 }
 
+private struct PhotoReviveProfileUpdateRequest: Encodable {
+    let data: [String: String]
+}
+
+private struct PhotoReviveUpdatedUser: Decodable {
+    let id: String
+}
+
 enum PhotoReviveAuthError: LocalizedError {
     case invalidResponse
     case requestFailed(statusCode: Int, message: String)
@@ -271,6 +279,33 @@ final class PhotoReviveAuthClient {
         return normalized.isEmpty ? nil : normalized
     }
 
+    var currentUserDisplayName: String? {
+        guard let metadata = currentUserMetadata else { return nil }
+        for key in ["display_name", "full_name", "name"] {
+            guard let value = metadata[key] as? String else { continue }
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty { return normalized }
+        }
+        return nil
+    }
+
+    var currentUserAvatarURL: URL? {
+        guard let metadata = currentUserMetadata else { return nil }
+        for key in ["avatar_url", "picture"] {
+            guard let value = metadata[key] as? String,
+                  let url = URL(string: value),
+                  !value.isEmpty else { continue }
+            return url
+        }
+        return nil
+    }
+
+    private var currentUserMetadata: [String: Any]? {
+        guard let accessToken = cachedSession?.accessToken,
+              let payload = Self.tokenPayload(from: accessToken) else { return nil }
+        return payload["user_metadata"] as? [String: Any]
+    }
+
     func signInWithApple(idToken: String, nonce: String) async throws -> PhotoReviveSession {
         try await signInWithOpenID(
             provider: .apple,
@@ -362,6 +397,43 @@ final class PhotoReviveAuthClient {
         boundTimeZoneIdentifier = Self.currentTimeZoneIdentifier
         persist(session)
         return session.accessToken
+    }
+
+    func updateProfile(displayName: String? = nil, avatarURL: String? = nil) async throws {
+        var metadata: [String: String] = [:]
+        if let displayName {
+            let normalized = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else {
+                throw PhotoReviveAuthError.requestFailed(
+                    statusCode: 400,
+                    message: "Name cannot be empty."
+                )
+            }
+            metadata["display_name"] = String(normalized.prefix(50))
+        }
+        if let avatarURL {
+            metadata["avatar_url"] = avatarURL
+        }
+        guard !metadata.isEmpty else { return }
+
+        let token = try await accessToken()
+        var request = URLRequest(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("auth/v1/user")
+        )
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(
+            PhotoReviveProfileUpdateRequest(data: metadata)
+        )
+
+        let _: PhotoReviveUpdatedUser = try await send(request)
+
+        // Refresh so subsequent screens receive the updated user_metadata from
+        // the access token instead of relying only on local UI state.
+        if let refreshToken = cachedSession?.refreshToken, !refreshToken.isEmpty {
+            _ = try? await refreshSession(refreshToken: refreshToken)
+        }
     }
 
     /// Persist the current Adjust attribution against the authenticated user.

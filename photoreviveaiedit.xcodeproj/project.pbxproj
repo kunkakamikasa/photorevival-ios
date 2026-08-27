@@ -9,9 +9,9 @@
 /* Begin PBXBuildFile section */
 		ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = ABCD0002AA00000100000001 /* GoogleSignIn */; };
 		E1230001E1230001E1230001 /* AdjustSdk in Frameworks */ = {isa = PBXBuildFile; productRef = E1230002E1230002E1230002 /* AdjustSdk */; };
-		FBA30001FBA30001FBA30001 /* FacebookCore in Frameworks */ = {isa = PBXBuildFile; productRef = FBA30002FBA30002FBA30002 /* FacebookCore */; };
 		F1A20001F1A20001F1A20001 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = F1A20002F1A20002F1A20002 /* FirebaseAnalytics */; };
 		F1A20004F1A20004F1A20004 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = F1A20005F1A20005F1A20005 /* GoogleService-Info.plist */; };
+		FBA30001FBA30001FBA30001 /* FacebookCore in Frameworks */ = {isa = PBXBuildFile; productRef = FBA30002FBA30002FBA30002 /* FacebookCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */

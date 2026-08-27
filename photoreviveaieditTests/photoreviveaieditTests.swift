@@ -386,6 +386,45 @@ struct photoreviveaieditTests {
         ))
     }
 
+    @Test func subscriberScratchEligibility() {
+        #expect(SubscriberScratchEligibility.shouldPresent(
+            isReturningSession: true,
+            isSubscribed: true,
+            completedCampaignVersion: 0,
+            arguments: []
+        ))
+        #expect(!SubscriberScratchEligibility.shouldPresent(
+            isReturningSession: false,
+            isSubscribed: true,
+            completedCampaignVersion: 0,
+            arguments: []
+        ))
+        #expect(!SubscriberScratchEligibility.shouldPresent(
+            isReturningSession: true,
+            isSubscribed: false,
+            completedCampaignVersion: 0,
+            arguments: []
+        ))
+        #expect(!SubscriberScratchEligibility.shouldPresent(
+            isReturningSession: true,
+            isSubscribed: true,
+            completedCampaignVersion: SubscriberScratchCampaign.version,
+            arguments: []
+        ))
+        #expect(SubscriberScratchEligibility.shouldPresent(
+            isReturningSession: false,
+            isSubscribed: false,
+            completedCampaignVersion: SubscriberScratchCampaign.version,
+            arguments: ["-forceSubscriberScratchOffer"]
+        ))
+        #expect(!SubscriberScratchEligibility.shouldPresent(
+            isReturningSession: true,
+            isSubscribed: true,
+            completedCampaignVersion: 0,
+            arguments: ["-skipOnboarding"]
+        ))
+    }
+
     @Test func subscriptionProductIDs() {
         #expect(SubscriptionProductID.proYearly.rawValue == "pro_yearly")
         #expect(SubscriptionProductID.proWeekly.rawValue == "pro_weekly")
@@ -522,6 +561,7 @@ struct photoreviveaieditTests {
             subscriptionStatus: "active",
             subscriptionExpireAt: nil,
             planType: "pro_weekly",
+            productID: "pro_weekly",
             creditsBalance: 400,
             creditsGranted: 400,
             message: nil
@@ -658,6 +698,14 @@ struct photoreviveaieditTests {
         #expect(task.isVideo)
         #expect(task.coverURL?.absoluteString == "https://cdn.example.com/result-first-frame.jpg")
         #expect(task.resultURL?.absoluteString == "https://cdn.example.com/result.mp4")
+    }
+
+    @MainActor
+    @Test func termsOfServiceUsesAppleStandardEULA() {
+        #expect(
+            LegalDocument.termsOfService.url.absoluteString
+                == "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/"
+        )
     }
 
 }

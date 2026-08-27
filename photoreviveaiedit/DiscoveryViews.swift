@@ -1482,18 +1482,17 @@ struct TemplateComparisonView: View {
                     if allowsInteraction {
                         comparisonContent(width: width, height: height, progress: progress)
                             .contentShape(Rectangle())
-                            .simultaneousGesture(
-                                DragGesture(minimumDistance: 8)
-                                    .onChanged { value in
-                                        guard abs(value.translation.width) > abs(value.translation.height) else {
-                                            return
-                                        }
-                                        draggedProgress = clampedProgress(value.location.x / max(width, 1))
-                                    }
-                                    .onEnded { _ in
+                            .overlay {
+                                HorizontalComparisonDragSurface(
+                                    onChanged: { locationX in
+                                        draggedProgress = clampedProgress(locationX / max(width, 1))
+                                    },
+                                    onEnded: {
                                         draggedProgress = nil
                                     }
-                            )
+                                )
+                                .accessibilityHidden(true)
+                            }
                     } else {
                         comparisonContent(width: width, height: height, progress: progress)
                     }
@@ -1538,6 +1537,79 @@ struct TemplateComparisonView: View {
                 .frame(width: 2, height: height)
                 .offset(x: min(max(width * progress - 1, 0), max(width - 2, 0)))
                 .shadow(color: .black.opacity(0.30), radius: 1)
+        }
+    }
+}
+
+/// Bridges the comparison scrubber to UIKit so a vertical drag can fail before
+/// it competes with the detail screen's vertical paging scroll view. A SwiftUI
+/// `DragGesture` enters recognition for every direction; ignoring vertical
+/// values in `onChanged` does not return that gesture to the parent scroll view.
+private struct HorizontalComparisonDragSurface: UIViewRepresentable {
+    let onChanged: (CGFloat) -> Void
+    let onEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChanged: onChanged, onEnded: onEnded)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isOpaque = false
+
+        let panGesture = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePan(_:))
+        )
+        panGesture.cancelsTouchesInView = false
+        panGesture.maximumNumberOfTouches = 1
+        panGesture.delegate = context.coordinator
+        view.addGestureRecognizer(panGesture)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGFloat) -> Void
+        var onEnded: () -> Void
+
+        init(onChanged: @escaping (CGFloat) -> Void, onEnded: @escaping () -> Void) {
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard let view = gesture.view else { return }
+
+            switch gesture.state {
+            case .began, .changed:
+                onChanged(gesture.location(in: view).x)
+            case .ended, .cancelled, .failed:
+                onEnded()
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let panGesture = gestureRecognizer as? UIPanGestureRecognizer else {
+                return true
+            }
+
+            let velocity = panGesture.velocity(in: panGesture.view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
     }
 }

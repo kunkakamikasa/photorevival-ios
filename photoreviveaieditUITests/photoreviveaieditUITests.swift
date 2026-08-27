@@ -23,6 +23,114 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsSupportRowsAndFeedbackForm() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-loggedIn",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let meTab = app.buttons["Me"]
+        XCTAssertTrue(meTab.waitForExistence(timeout: 5))
+        meTab.tap()
+
+        let settings = app.buttons["Open settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        settings.tap()
+
+        XCTAssertFalse(app.buttons["settings-row-language"].exists)
+        XCTAssertFalse(app.buttons["settings-row-faq"].exists)
+        XCTAssertFalse(app.buttons["settings-row-referral-code"].exists)
+        XCTAssertTrue(app.buttons["settings-row-rate-us"].exists)
+        XCTAssertTrue(app.buttons["settings-row-terms-of-service"].exists)
+
+        let feedback = app.buttons["settings-row-feedback"]
+        XCTAssertTrue(feedback.exists)
+        feedback.tap()
+
+        XCTAssertTrue(app.staticTexts["Feedback"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-content"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["feedback-email"].exists)
+        XCTAssertTrue(app.buttons["feedback-submit"].exists)
+    }
+
+    @MainActor
+    func testCreditStoreAndExitOfferFlow() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-loggedIn",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let meTab = app.buttons["Me"]
+        XCTAssertTrue(meTab.waitForExistence(timeout: 5))
+        meTab.tap()
+
+        let settings = app.buttons["Open settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        settings.tap()
+
+        let creditDetail = app.buttons["settings-row-credit-detail"]
+        XCTAssertTrue(creditDetail.waitForExistence(timeout: 3))
+        creditDetail.tap()
+
+        let moreCredits = app.buttons["more-credits-button"]
+        XCTAssertTrue(moreCredits.waitForExistence(timeout: 3))
+        moreCredits.tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["credit-store-screen"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["credit-pack-creator"].isSelected)
+        attachScreenshot(named: "Credit Store", app: app)
+
+        app.buttons["credit-store-close"].tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["credit-exit-offer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["credit-exit-offer-claim"].exists)
+        attachScreenshot(named: "Credit Exit Offer", app: app)
+    }
+
+    @MainActor
+    func testSubscriberScratchMarketingFlow() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-forceSubscriberScratchOffer",
+            "-simulateSubscriberScratchClaim",
+            "-resetSubscriberScratchEligibility",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let freeCard = app.descendants(matching: .any)["subscriber-scratch-card-free"]
+        XCTAssertTrue(freeCard.waitForExistence(timeout: 5))
+        attachScreenshot(named: "Subscriber Scratch Free Gift", app: app)
+        scratch(card: freeCard)
+
+        let claimFree = app.buttons["subscriber-scratch-claim-free"]
+        XCTAssertTrue(claimFree.waitForExistence(timeout: 3))
+        claimFree.tap()
+
+        let paidCard = app.descendants(matching: .any)["subscriber-scratch-card-1600"]
+        XCTAssertTrue(paidCard.waitForExistence(timeout: 4))
+        scratch(card: paidCard)
+
+        let purchase = app.buttons["subscriber-scratch-purchase"]
+        XCTAssertTrue(purchase.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["subscriber-scratch-close"].exists)
+        attachScreenshot(named: "Subscriber Scratch 1600 Offer", app: app)
+    }
+
+    @MainActor
     func testMainNavigationAndCreateFlow() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-skipOnboarding", "-loggedIn"]
@@ -776,6 +884,20 @@ final class photoreviveaieditUITests: XCTestCase {
             let app = XCUIApplication()
             app.launchArguments.append("-skipOnboarding")
             app.launch()
+        }
+    }
+
+    private func scratch(card: XCUIElement) {
+        let yOffsets: [CGFloat] = [0.20, 0.36, 0.52, 0.68, 0.82]
+        for (index, y) in yOffsets.enumerated() {
+            guard card.exists else { break }
+            let left = card.coordinate(withNormalizedOffset: CGVector(dx: 0.10, dy: y))
+            let right = card.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: y))
+            if index.isMultiple(of: 2) {
+                left.press(forDuration: 0.04, thenDragTo: right)
+            } else {
+                right.press(forDuration: 0.04, thenDragTo: left)
+            }
         }
     }
 }

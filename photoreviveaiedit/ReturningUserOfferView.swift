@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct ReturningOfferEligibility {
@@ -71,6 +72,7 @@ struct ReturningUserOfferFlowView: View {
     @State private var screen: ReturningOfferScreen = .family
     @State private var isPurchasing = false
     @State private var purchaseAlert: ReturningOfferPurchaseAlert?
+    @State private var legalDocument: LegalDocument?
 
     private let designSize = CGSize(width: 430, height: 932)
     private let analyticsSource: String
@@ -88,12 +90,17 @@ struct ReturningUserOfferFlowView: View {
             let layout = AspectFillLayout(source: designSize, destination: proxy.size)
 
             ZStack {
-                Image(screen.assetName)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
+                if screen == .family {
+                    familyOfferBackground(size: proxy.size)
+                    familyOfferContent(using: layout)
+                } else {
+                    Image(screen.assetName)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                }
 
                 controls(using: layout)
 
@@ -122,6 +129,197 @@ struct ReturningUserOfferFlowView: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
+        }
+    }
+
+    private func familyOfferBackground(size: CGSize) -> some View {
+        ZStack {
+            Color.black
+
+            LoopingVideoView(
+                resourceName: "ReturningOfferFamilyBackgroundVideo",
+                videoGravity: .resizeAspectFill
+            )
+            .accessibilityHidden(true)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.20), location: 0),
+                    .init(color: .clear, location: 0.30),
+                    .init(color: .black.opacity(0.16), location: 0.43),
+                    .init(color: Color(red: 0.24, green: 0.08, blue: 0.03).opacity(0.62), location: 0.67),
+                    .init(color: Color(red: 0.12, green: 0.03, blue: 0.02).opacity(0.90), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+    }
+
+    private func familyOfferContent(using layout: AspectFillLayout) -> some View {
+        familyOfferDesign
+            .frame(width: designSize.width, height: designSize.height)
+            .scaleEffect(layout.scale)
+            .position(
+                x: layout.origin.x + (designSize.width * layout.scale / 2),
+                y: layout.origin.y + (designSize.height * layout.scale / 2)
+            )
+            .allowsHitTesting(false)
+    }
+
+    private var familyOfferDesign: some View {
+        ZStack {
+            Image(systemName: "xmark")
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(.white)
+                .frame(width: 48, height: 48)
+                .background(.black.opacity(0.22), in: Circle())
+                .overlay(Circle().stroke(.white.opacity(0.76), lineWidth: 1))
+                .position(x: 37, y: 65)
+
+            VStack(spacing: 5) {
+                Text("Family Exclusive")
+                    .font(.system(size: 31, weight: .heavy))
+                    .shadow(color: offerRed.opacity(0.96), radius: 0, x: 0, y: 2)
+
+                Text("Special offer for your family's memories")
+                    .font(.system(size: 16, weight: .bold))
+            }
+            .foregroundStyle(.white)
+            .position(x: 215, y: 397)
+
+            familyOfferCard
+                .frame(width: 390, height: 282)
+                .position(x: 215, y: 620)
+
+            HStack(spacing: 0) {
+                Spacer()
+                Text("Claim My Offer")
+                    .font(.system(size: 22, weight: .bold))
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 24, weight: .semibold))
+                    .padding(.trailing, 24)
+            }
+            .foregroundStyle(.white)
+            .frame(width: 382, height: 70)
+            .background(offerRed, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.black.opacity(0.68), lineWidth: 1)
+            )
+            .position(x: 215, y: 839)
+
+            HStack(spacing: 13) {
+                Text("Privacy Policy")
+                Text("|")
+                Text("Terms of Service")
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(.white.opacity(0.82))
+            .position(x: 215, y: 890)
+        }
+    }
+
+    private var familyOfferCard: some View {
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .light)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.48))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.88), lineWidth: 1)
+                )
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text("One-Time Offer")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .frame(height: 27)
+                    .background(offerRed, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+
+                HStack(alignment: .lastTextBaseline, spacing: 5) {
+                    Text("$")
+                        .font(.system(size: 18, weight: .heavy))
+                    Text("1.28")
+                        .font(.system(size: 49, weight: .heavy))
+                    Text("per day")
+                        .font(.system(size: 18, weight: .bold))
+                }
+                .foregroundStyle(offerRed)
+                .shadow(color: .white.opacity(0.72), radius: 1, y: 1)
+                .frame(height: 58)
+
+                Text("$8.99/week")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.82))
+
+                VStack(alignment: .leading, spacing: 11) {
+                    familyFeatureRow(highlight: "400", suffix: " Credits Per week")
+                    familyFeatureRow(highlight: "800+", suffix: " Style", prefix: "Priority & ")
+                    familyFeatureRow(highlight: nil, suffix: "Ad-free & No Watermark")
+                    familyFeatureRow(highlight: "30%", suffix: " OFF Lifetime Credits")
+                }
+                .padding(.top, 14)
+            }
+            .padding(.leading, 20)
+            .padding(.top, 17)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            Image(systemName: "gift.fill")
+                .font(.system(size: 72, weight: .bold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color.orange, Color.pink, offerRed],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: .black.opacity(0.20), radius: 7, y: 5)
+                .padding(.top, 12)
+                .padding(.trailing, 18)
+        }
+    }
+
+    private func familyFeatureRow(
+        highlight: String?,
+        suffix: String,
+        prefix: String = ""
+    ) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(offerRed)
+                .frame(width: 18)
+
+            HStack(spacing: 0) {
+                if !prefix.isEmpty {
+                    Text(prefix)
+                }
+                if let highlight {
+                    Text(highlight)
+                        .fontWeight(.heavy)
+                        .foregroundStyle(offerRed)
+                }
+                Text(suffix)
+            }
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(Color.black.opacity(0.82))
+        }
+    }
+
+    private var offerRed: Color {
+        Color(red: 0.93, green: 0.24, blue: 0.17)
     }
 
     @ViewBuilder
@@ -147,6 +345,8 @@ struct ReturningUserOfferFlowView: View {
                 beginPurchase(.weekly, origin: .family)
             }
 
+            termsHotspot(using: layout)
+
         case .retention:
             hotspot(
                 label: "Continue with weekly offer",
@@ -166,6 +366,8 @@ struct ReturningUserOfferFlowView: View {
                 layout: layout,
                 action: dismiss.callAsFunction
             )
+
+            termsHotspot(using: layout)
 
         case .trial:
             hotspot(
@@ -187,6 +389,18 @@ struct ReturningUserOfferFlowView: View {
                 beginPurchase(.annual, origin: .trial)
             }
 
+        }
+    }
+
+    private func termsHotspot(using layout: AspectFillLayout) -> some View {
+        hotspot(
+            label: "Terms of Service",
+            identifier: "returning-offer-terms",
+            center: CGPoint(x: 285, y: 890),
+            size: CGSize(width: 150, height: 34),
+            layout: layout
+        ) {
+            legalDocument = .termsOfService
         }
     }
 
