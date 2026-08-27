@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Photo Revive AI</string>
+	<string>Photo Revival</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -30,7 +30,21 @@
 				<string>$(PHOTO_REVIVE_GOOGLE_REVERSED_CLIENT_ID)</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fb29314349348154327</string>
+			</array>
+		</dict>
 	</array>
+	<key>FacebookAppID</key>
+	<string>29314349348154327</string>
+	<key>FacebookClientToken</key>
+	<string>1ac8941288801affd01b3c5c8fea23dc</string>
+	<key>FacebookDisplayName</key>
+	<string>Photo revival</string>
 	<key>GIDClientID</key>
 	<string>$(PHOTO_REVIVE_GOOGLE_IOS_CLIENT_ID)</string>
 	<key>GIDServerClientID</key>
@@ -52,7 +66,10 @@
 	<key>NSUserTrackingUsageDescription</key>
 	<string>We use device data to measure advertising performance and improve Photo Revival.</string>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

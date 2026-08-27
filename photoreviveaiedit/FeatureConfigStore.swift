@@ -9,6 +9,7 @@ final class FeatureConfigStore: ObservableObject {
     @Published private(set) var photoCarouselEntries: [TemplateDetailEntry] = []
     @Published private(set) var videoCarouselEntries: [TemplateDetailEntry] = []
     @Published private(set) var homeQuickActions: [HomeQuickAction] = []
+    @Published private(set) var creditPricing = AppCreditPricing.defaultValue
     @Published private(set) var homeHeroOffer: CMSCouponOffer?
     @Published private(set) var homeBottomOffer: CMSCouponOffer?
     @Published private(set) var isLoading = true
@@ -133,6 +134,7 @@ final class FeatureConfigStore: ObservableObject {
             photoCarouselEntries = TemplateCatalog.photoHeroItems.map(TemplateDetailEntry.init(item:))
             videoCarouselEntries = TemplateCatalog.videoHeroItems.map(TemplateDetailEntry.init(item:))
             homeQuickActions = TemplateCatalog.homeQuickActions
+            creditPricing = .defaultValue
             homeHeroOffer = nil
             homeBottomOffer = nil
             return
@@ -188,11 +190,12 @@ final class FeatureConfigStore: ObservableObject {
         }
 
         do {
-            let quickActions = try await fetchedQuickActions
+            let fixedFeatures = try await fetchedQuickActions
             guard generation == loadGeneration else { return }
             // The endpoint only returns enabled features. Accept partial and empty
             // responses so CMS switches can hide one shortcut or the entire row.
-            homeQuickActions = quickActions
+            homeQuickActions = fixedFeatures.quickActions
+            creditPricing = fixedFeatures.creditPricing
             prefetchInitialCovers()
         } catch {
             // Do not restore bundled covers: Home keeps the CMS-only result.
@@ -221,7 +224,7 @@ final class FeatureConfigStore: ObservableObject {
         TemplateMediaPreloader.prefetchImages(urls)
     }
 
-    private func fetchQuickActions() async throws -> [HomeQuickAction] {
+    private func fetchQuickActions() async throws -> FixedFeatureLoadResult {
         var components = URLComponents(
             url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/get-app-fixed-features"),
             resolvingAgainstBaseURL: false
@@ -236,7 +239,10 @@ final class FeatureConfigStore: ObservableObject {
         }
 
         let payload = try JSONDecoder().decode(RemoteFixedFeatureResponse.self, from: data)
-        return payload.items.compactMap(\.quickAction)
+        return FixedFeatureLoadResult(
+            quickActions: payload.items.compactMap(\.quickAction),
+            creditPricing: payload.creditPricing ?? .defaultValue
+        )
     }
 
     private func fetchSections(
@@ -387,6 +393,17 @@ private struct CarouselLoadResult {
 
 private struct RemoteFixedFeatureResponse: Decodable {
     let items: [RemoteFixedFeatureItem]
+    let creditPricing: AppCreditPricing?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case creditPricing = "credit_pricing"
+    }
+}
+
+private struct FixedFeatureLoadResult {
+    let quickActions: [HomeQuickAction]
+    let creditPricing: AppCreditPricing
 }
 
 private enum RemoteFixedFeatureCoverType: String, Decodable {

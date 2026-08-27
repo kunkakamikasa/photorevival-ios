@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = ABCD0002AA00000100000001 /* GoogleSignIn */; };
 		E1230001E1230001E1230001 /* AdjustSdk in Frameworks */ = {isa = PBXBuildFile; productRef = E1230002E1230002E1230002 /* AdjustSdk */; };
+		FBA30001FBA30001FBA30001 /* FacebookCore in Frameworks */ = {isa = PBXBuildFile; productRef = FBA30002FBA30002FBA30002 /* FacebookCore */; };
+		F1A20001F1A20001F1A20001 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = F1A20002F1A20002F1A20002 /* FirebaseAnalytics */; };
+		F1A20004F1A20004F1A20004 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = F1A20005F1A20005F1A20005 /* GoogleService-Info.plist */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +35,7 @@
 		9BDFA8CA30301E5200499773 /* photoreviveaiedit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = photoreviveaiedit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9BDFA8D730301E5300499773 /* photoreviveaieditTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = photoreviveaieditTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9BDFA8E130301E5300499773 /* photoreviveaieditUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = photoreviveaieditUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1A20005F1A20005F1A20005 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -57,6 +61,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FBA30001FBA30001FBA30001 /* FacebookCore in Frameworks */,
+				F1A20001F1A20001F1A20001 /* FirebaseAnalytics in Frameworks */,
 				ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */,
 				E1230001E1230001E1230001 /* AdjustSdk in Frameworks */,
 			);
@@ -82,6 +88,7 @@
 		9BDFA8C130301E5200499773 = {
 			isa = PBXGroup;
 			children = (
+				F1A20005F1A20005F1A20005 /* GoogleService-Info.plist */,
 				9BDFA8CC30301E5200499773 /* photoreviveaiedit */,
 				9BDFA8DA30301E5300499773 /* photoreviveaieditTests */,
 				9BDFA8E430301E5300499773 /* photoreviveaieditUITests */,
@@ -119,6 +126,8 @@
 			);
 			name = photoreviveaiedit;
 			packageProductDependencies = (
+				FBA30002FBA30002FBA30002 /* FacebookCore */,
+				F1A20002F1A20002F1A20002 /* FirebaseAnalytics */,
 				ABCD0002AA00000100000001 /* GoogleSignIn */,
 				E1230002E1230002E1230002 /* AdjustSdk */,
 			);
@@ -205,6 +214,8 @@
 			mainGroup = 9BDFA8C130301E5200499773;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				FBA30003FBA30003FBA30003 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */,
+				F1A20003F1A20003F1A20003 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				ABCD0003AA00000100000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */,
 			);
@@ -225,6 +236,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F1A20004F1A20004F1A20004 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -627,6 +639,22 @@
 				minimumVersion = 5.8.0;
 			};
 		};
+		F1A20003F1A20003F1A20003 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.18.0;
+			};
+		};
+		FBA30003FBA30003FBA30003 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/facebook/facebook-ios-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 18.1.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -639,6 +667,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */;
 			productName = AdjustSdk;
+		};
+		F1A20002F1A20002F1A20002 /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F1A20003F1A20003F1A20003 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+		FBA30002FBA30002FBA30002 /* FacebookCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FBA30003FBA30003FBA30003 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

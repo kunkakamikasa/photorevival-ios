@@ -3,10 +3,14 @@ import SwiftUI
 struct AppRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @AppStorage("isSubscribed") private var isSubscribed = false
+    @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
     @StateObject private var trackingAuthorization = TrackingAuthorizationManager()
     @StateObject private var featureConfigStore = FeatureConfigStore()
     @State private var completedOnboardingThisSession = false
     @State private var showInitialMembership = false
+    @State private var initialMembershipWasClosed = false
+    @State private var initialFollowUpOffer: PaywallFollowUpOffer?
     @State private var isShowingStartupVideo = true
 
     private let arguments = ProcessInfo.processInfo.arguments
@@ -31,13 +35,24 @@ struct AppRootView: View {
             } else {
                 ContentView(
                     featureConfigStore: featureConfigStore,
-                    startupPresentationsAllowed: trackingAuthorization.hasFinishedInitialRequest
+                    startupPresentationsAllowed: trackingAuthorization.hasFinishedInitialRequest,
+                    isReturningSession: hasCompletedOnboarding && !completedOnboardingThisSession
                 )
                     .transition(.opacity)
             }
         }
-        .fullScreenCover(isPresented: $showInitialMembership) {
-            MembershipPaywallView()
+        .fullScreenCover(isPresented: $showInitialMembership, onDismiss: handleInitialMembershipDismissed) {
+            MembershipPaywallView(
+                showsFirstLaunchVideoBackground: true,
+                analyticsSource: "onboarding",
+                onClose: {
+                    initialMembershipWasClosed = true
+                    showInitialMembership = false
+                }
+            )
+        }
+        .fullScreenCover(item: $initialFollowUpOffer) { offer in
+            PaywallFollowUpOfferView(offer: offer)
         }
         .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
             Task {
@@ -51,6 +66,8 @@ struct AppRootView: View {
             let featureLoadTask = Task {
                 await featureConfigStore.load()
             }
+            isSubscribed = await SubscriptionPurchaseService.hasActiveStoreEntitlement()
+            AppAnalytics.updateSubscription(isSubscribed: isSubscribed)
             await trackingAuthorization.requestAuthorizationIfNeeded()
             guard !Task.isCancelled else { return }
             AdjustService.shared.startIfNeeded(
@@ -78,7 +95,35 @@ struct AppRootView: View {
         withAnimation(.easeInOut(duration: 0.35)) {
             completedOnboardingThisSession = true
         }
+        initialMembershipWasClosed = false
         showInitialMembership = true
+    }
+
+    private func handleInitialMembershipDismissed() {
+        guard initialMembershipWasClosed, !isSubscribed else {
+            initialMembershipWasClosed = false
+            return
+        }
+        initialMembershipWasClosed = false
+
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, !isSubscribed else { return }
+
+            if arguments.contains("-resetLimitedOfferEligibility") {
+                limitedOfferLastPresentedDay = 0
+            }
+            let limitedTimeAvailable = LimitedOfferEligibility.canPresent(
+                lastPresentedDay: limitedOfferLastPresentedDay
+            )
+            let offer = PaywallFollowUpOffer.select(
+                limitedTimeAvailable: limitedTimeAvailable
+            )
+            if offer == .limitedTime {
+                limitedOfferLastPresentedDay = LimitedOfferEligibility.dayKey(for: Date())
+            }
+            initialFollowUpOffer = offer
+        }
     }
 }
 
@@ -92,7 +137,10 @@ private struct LaunchExperienceView: View {
 
     var body: some View {
         ZStack {
-            LaunchBackgroundMedia(imageName: page.imageName, videoName: page.videoName)
+            LaunchBackgroundMedia(
+                videoName: page.videoName,
+                mediaAspectRatio: page.mediaAspectRatio
+            )
 
             if page != .welcome {
                 LinearGradient(
@@ -115,6 +163,12 @@ private struct LaunchExperienceView: View {
         .transition(.opacity)
         .animation(.easeInOut(duration: 0.38), value: currentPage)
         .preferredColorScheme(page.colorScheme)
+        .task(id: currentPage) {
+            AppAnalytics.onboardingStepViewed(
+                name: page.analyticsName,
+                index: page.rawValue
+            )
+        }
     }
 
     private func advance() {
@@ -123,6 +177,7 @@ private struct LaunchExperienceView: View {
                 currentPage += 1
             }
         } else {
+            AppAnalytics.onboardingCompleted()
             onComplete()
         }
     }
@@ -134,12 +189,12 @@ private enum LaunchPage: Int {
     case pet
     case fusion
 
-    var imageName: String {
+    var analyticsName: String {
         switch self {
-        case .welcome: "OnboardingWelcomeBackground"
-        case .restore: "OnboardingRestoreBackground"
-        case .pet: "OnboardingPetBackground"
-        case .fusion: "OnboardingFusionBackground"
+        case .welcome: "welcome"
+        case .restore: "restore"
+        case .pet: "pet"
+        case .fusion: "fusion"
         }
     }
 
@@ -149,6 +204,16 @@ private enum LaunchPage: Int {
         case .restore: "OnboardingRestoreVideo"
         case .pet: "OnboardingPetVideo"
         case .fusion: "OnboardingFusionVideo"
+        }
+    }
+
+    /// The three guide videos are authored at 9:16. Fitting that exact canvas
+    /// to the screen width preserves the side margins baked into the footage;
+    /// any extra height on taller devices is absorbed by the black lower area.
+    var mediaAspectRatio: CGFloat? {
+        switch self {
+        case .welcome: nil
+        case .restore, .pet, .fusion: 9.0 / 16.0
         }
     }
 
@@ -213,31 +278,48 @@ private enum LaunchPage: Int {
 private struct StartupAnimationView: View {
     var body: some View {
         LaunchBackgroundMedia(
-            imageName: "OnboardingEffectBackground",
             videoName: "OnboardingLaunchVideo"
         )
-        .accessibilityLabel("Photo Revive startup animation")
+        .accessibilityLabel("Photo Revival startup animation")
         .preferredColorScheme(.light)
     }
 }
 
 private struct LaunchBackgroundMedia: View {
-    let imageName: String
-    let videoName: String?
+    let videoName: String
+    var mediaAspectRatio: CGFloat? = nil
 
+    @ViewBuilder
     var body: some View {
-        ZStack {
-            Image(imageName)
-                .resizable()
-                .scaledToFill()
+        if let mediaAspectRatio {
+            GeometryReader { proxy in
+                ZStack(alignment: .top) {
+                    // Stay image-free until AVPlayerLayer is ready. A bundled
+                    // poster here would briefly expose stale onboarding art.
+                    Color.black
 
-            if let videoName {
-                LoopingVideoView(resourceName: videoName)
+                    LoopingVideoView(
+                        resourceName: videoName,
+                        videoAspectRatio: mediaAspectRatio
+                    )
+                }
             }
+            .ignoresSafeArea()
+        } else {
+            mediaLayers
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .ignoresSafeArea()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .ignoresSafeArea()
+    }
+
+    private var mediaLayers: some View {
+        ZStack {
+            // Match the system launch color without introducing a poster frame.
+            Color.black
+
+            LoopingVideoView(resourceName: videoName)
+        }
     }
 }
 

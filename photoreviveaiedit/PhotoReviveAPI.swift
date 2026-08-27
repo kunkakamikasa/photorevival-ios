@@ -911,9 +911,34 @@ final class AppAccountStore: ObservableObject {
             userStatus = status
             creditsBalance = status.creditsBalance
             hasLoadedCredits = true
+            reconcileSubscriptionStatus(status.subscriptionStatus)
         } catch {
             lastErrorMessage = error.localizedDescription
         }
+    }
+
+    func applySubscriptionVerification(_ result: SubscriptionVerificationResult) {
+        if let balance = result.creditsBalance {
+            creditsBalance = balance
+            hasLoadedCredits = true
+        }
+        reconcileSubscriptionStatus(result.subscriptionStatus)
+    }
+
+    private func reconcileSubscriptionStatus(_ rawStatus: String?) {
+        guard let status = rawStatus?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+              !status.isEmpty else { return }
+
+        let entitledStatuses: Set<String> = [
+            "active",
+            "trial",
+            "trialing",
+            "grace_period",
+            "billing_retry"
+        ]
+        UserDefaults.standard.set(entitledStatuses.contains(status), forKey: "isSubscribed")
     }
 
     func refreshRewards() async {

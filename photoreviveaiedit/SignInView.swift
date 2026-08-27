@@ -13,11 +13,9 @@ struct SignInView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                Image("SignInBackground")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
+                // Do not restore a static poster: it flashes before the video
+                // player's first current frame becomes ready.
+                Color.black
 
                 LoopingVideoView(resourceName: "SignInBackgroundVideo")
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -64,7 +62,7 @@ struct SignInView: View {
                 .accessibilityLabel("Close sign in")
                 .position(x: 35, y: proxy.size.height * 0.088)
 
-                Text("Welcome to\nPhoto Revive AI")
+                Text("Welcome to\nPhoto Revival")
                     .font(.system(size: 25, weight: .bold))
                     .multilineTextAlignment(.center)
                     .lineSpacing(0)
@@ -101,6 +99,9 @@ struct SignInView: View {
         }
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
+        .onAppear {
+            AppAnalytics.screen("sign_in", className: "SignInView")
+        }
         .onChange(of: authStore.didAuthenticate) { _, didAuthenticate in
             guard didAuthenticate else { return }
             isLoggedIn = true

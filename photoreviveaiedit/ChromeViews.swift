@@ -591,7 +591,7 @@ private struct MeVideoWatermarkPattern: View {
     var body: some View {
         GeometryReader { proxy in
             ForEach(Array(placements.enumerated()), id: \.offset) { _, placement in
-                Text("Photo Revive AI")
+                Text("Photo Revival")
                     .font(.system(size: max(10, proxy.size.width * 0.025), weight: .medium))
                     .foregroundStyle(.white.opacity(0.34))
                     .rotationEffect(.degrees(-17))
@@ -627,7 +627,7 @@ private struct MeSharePanel: View {
     }
 
     private func shareLink(symbol: String, color: Color, label: String) -> some View {
-        ShareLink(item: "I am sharing a Photo Revive AI video") {
+        ShareLink(item: "I am sharing a Photo Revival video") {
             Image(systemName: symbol)
                 .font(.system(size: 21, weight: .bold))
                 .foregroundStyle(.white)
@@ -676,85 +676,5 @@ private struct MeVideoPreviewView: View {
             }
         }
         .preferredColorScheme(.dark)
-    }
-}
-
-enum UtilitySheet: String, Identifiable {
-    case membership
-    case credits
-    case gift
-    case settings
-
-    var id: String { rawValue }
-}
-
-struct UtilitySheetView: View {
-    let sheet: UtilitySheet
-    @Binding var credits: Int
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 18) {
-                Image(systemName: icon)
-                    .font(.system(size: 46, weight: .bold))
-                    .foregroundStyle(AppPalette.orange)
-                Text(title)
-                    .font(.title2.bold())
-                Text(message)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                if sheet == .gift {
-                    Button("Claim Gift") {
-                        credits += 20
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                } else if sheet == .membership {
-                    Button("Start 7-day free trial") { dismiss() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                }
-            }
-            .padding(28)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle(sheet == .settings ? "Settings" : title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .tint(AppPalette.accent)
-    }
-
-    private var title: String {
-        switch sheet {
-        case .membership: "Unlock Photo Revive Pro"
-        case .credits: "\(credits) Credits"
-        case .gift: "Daily Gift"
-        case .settings: "App Settings"
-        }
-    }
-
-    private var message: String {
-        switch sheet {
-        case .membership: "Create more videos, remove watermarks and unlock every template."
-        case .credits: "Credits are used when an AI photo or video is rendered."
-        case .gift: "Claim 20 free credits and come back tomorrow for more."
-        case .settings: "Notification, export and account settings will appear here."
-        }
-    }
-
-    private var icon: String {
-        switch sheet {
-        case .membership: "sparkles"
-        case .credits: "diamond.fill"
-        case .gift: "gift.fill"
-        case .settings: "gearshape.fill"
-        }
     }
 }

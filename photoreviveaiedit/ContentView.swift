@@ -2,16 +2,14 @@ import SwiftUI
 
 struct ContentView: View {
     private let startupPresentationsAllowed: Bool
+    private let isReturningSession: Bool
     @AppStorage("isSubscribed") private var isSubscribed = false
     @AppStorage("isLoggedIn") private var storedIsLoggedIn = false
-    @AppStorage("hasOpenedMainExperience") private var hasOpenedMainExperience = false
     @AppStorage("returningOfferLastPresentedDay") private var returningOfferLastPresentedDay = 0.0
     @State private var selectedTab: AppTab = .home
     @State private var selectedTemplateRoute: TemplateDetailRoute?
     @State private var showSettings = false
     @State private var fullScreenDestination: AppDestination?
-    @State private var postDismissAction: PostDismissAction?
-    @State private var showLimitedOfferPopup = false
     @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
     @State private var showQuickCreator = false
     @State private var showHomeOfferBanner = true
@@ -23,10 +21,12 @@ struct ContentView: View {
 
     init(
         featureConfigStore: FeatureConfigStore,
-        startupPresentationsAllowed: Bool = true
+        startupPresentationsAllowed: Bool = true,
+        isReturningSession: Bool = false
     ) {
         _featureConfigStore = ObservedObject(wrappedValue: featureConfigStore)
         self.startupPresentationsAllowed = startupPresentationsAllowed
+        self.isReturningSession = isReturningSession
     }
 
     var body: some View {
@@ -49,10 +49,14 @@ struct ContentView: View {
                         heroEntries: featureConfigStore.heroEntries(for: selectedTab),
                         homeQuickActions: featureConfigStore.homeQuickActions,
                         videoModeActions: featureConfigStore.videoModeActions,
-                        homeHeroOffer: featureConfigStore.homeHeroOffer,
+                        homeHeroOffer: isSubscribed ? nil : featureConfigStore.homeHeroOffer,
                         isLoadingTemplates: featureConfigStore.isLoading,
                         credits: accountStore.creditsBalance,
                         onSelectTemplate: { template in
+                            AppAnalytics.templateSelected(
+                                template,
+                                source: "\(selectedTab.rawValue)_grid"
+                            )
                             selectedTemplateRoute = TemplateDetailRoute(
                                 item: template,
                                 detailItems: featureConfigStore.browsingItems(
@@ -63,10 +67,18 @@ struct ContentView: View {
                         },
                         onSelectCarousel: { entry in
                             if let feature = entry.fixedFeatureTarget {
+                                AppAnalytics.fixedFeatureSelected(
+                                    feature,
+                                    source: "\(selectedTab.rawValue)_hero"
+                                )
                                 fullScreenDestination = .fixedFeature(feature)
                                 return
                             }
                             guard let tryNowItem = entry.tryNowItem else { return }
+                            AppAnalytics.templateSelected(
+                                tryNowItem,
+                                source: "\(selectedTab.rawValue)_hero"
+                            )
                             selectedTemplateRoute = TemplateDetailRoute(
                                 item: entry.displayItem,
                                 detailItems: featureConfigStore.browsingItems(
@@ -88,6 +100,10 @@ struct ContentView: View {
                         isLoggedIn: isLoggedIn,
                         onLogin: { requireLogin {} },
                         onFixedFeature: { feature in
+                            AppAnalytics.fixedFeatureSelected(
+                                feature,
+                                source: "\(selectedTab.rawValue)_quick_action"
+                            )
                             fullScreenDestination = .fixedFeature(feature)
                         }
                     )
@@ -108,6 +124,7 @@ struct ContentView: View {
                 }
 
                 if selectedTab == .home,
+                   !isSubscribed,
                    showHomeOfferBanner,
                    let offer = featureConfigStore.homeBottomOffer {
                     HomeDiscountBannerView(
@@ -124,17 +141,6 @@ struct ContentView: View {
                 }
             }
         }
-        .overlay {
-            if showLimitedOfferPopup {
-                LimitedTimeOfferPopup {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        showLimitedOfferPopup = false
-                    }
-                }
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                .zIndex(10)
-            }
-        }
         .sensoryFeedback(.selection, trigger: selectedTab)
         .fullScreenCover(item: $selectedTemplateRoute) { route in
             TemplateDetailView(
@@ -145,6 +151,7 @@ struct ContentView: View {
                 creationItemsProvider: { item in
                     featureConfigStore.detailItems(for: item)
                 },
+                creditPricing: featureConfigStore.creditPricing,
                 credits: creditsBinding
             ) {
                 selectedTemplateRoute = nil
@@ -153,15 +160,7 @@ struct ContentView: View {
         .fullScreenCover(item: $fullScreenDestination, onDismiss: handleDestinationDismissed) { destination in
             switch destination {
             case .membership:
-                MembershipPaywallView {
-                    postDismissAction = .limitedOffer
-                    fullScreenDestination = nil
-                }
-            case .superPrize:
-                SuperPrizeOfferView {
-                    postDismissAction = .limitedOffer
-                    fullScreenDestination = nil
-                }
+                PaywallOfferFlowView(analyticsSource: "home_membership")
             case .summerSale(let offer):
                 SummerSalePaywallView(offer: offer)
             case .credits:
@@ -176,6 +175,7 @@ struct ContentView: View {
                 FixedFeatureView(
                     feature: feature,
                     quickActions: featureConfigStore.homeQuickActions,
+                    creditPricing: featureConfigStore.creditPricing,
                     credits: creditsBinding
                 )
             }
@@ -184,19 +184,22 @@ struct ContentView: View {
             SettingsView(credits: creditsBinding)
         }
         .fullScreenCover(isPresented: $showQuickCreator) {
-            CreateFlowView(template: nil, credits: creditsBinding)
+            CreateFlowView(
+                template: nil,
+                creditPricing: featureConfigStore.creditPricing,
+                credits: creditsBinding
+            )
         }
         .fullScreenCover(item: $returningOffer) { variant in
-            switch variant {
-            case .familyExclusive:
-                ReturningUserOfferFlowView()
-            case .superPrize:
-                SuperPrizeOfferView {
-                    returningOffer = nil
-                }
-            }
+            ReturningPromotionFlowView(variant: variant)
         }
         .preferredColorScheme(.light)
+        .onAppear {
+            trackSelectedTab()
+        }
+        .onChange(of: selectedTab) { _, _ in
+            trackSelectedTab()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
             Task {
                 await featureConfigStore.reloadAfterAttributionChange()
@@ -237,17 +240,18 @@ struct ContentView: View {
             hasEvaluatedReturningOffer = true
 
             let shouldPresent = ReturningOfferEligibility.shouldPresent(
-                hasOpenedMainExperience: hasOpenedMainExperience,
+                isReturningSession: isReturningSession,
                 isSubscribed: isSubscribed,
-                isLoggedIn: isLoggedIn,
                 arguments: ProcessInfo.processInfo.arguments
             )
-            hasOpenedMainExperience = true
 
             guard shouldPresent else { return }
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-resetReturningOfferEligibility") {
                 returningOfferLastPresentedDay = 0
+            }
+            if arguments.contains("-resetLimitedOfferEligibility") {
+                limitedOfferLastPresentedDay = 0
             }
 
             let forcePresentation = arguments.contains("-forceReturningOffer")
@@ -258,7 +262,17 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             returningOfferLastPresentedDay = LimitedOfferEligibility.dayKey(for: Date())
-            returningOffer = ReturningOfferVariant.select(arguments: arguments)
+            let limitedTimeAvailable = LimitedOfferEligibility.canPresent(
+                lastPresentedDay: limitedOfferLastPresentedDay
+            )
+            let selectedOffer = ReturningOfferVariant.select(
+                arguments: arguments,
+                limitedTimeAvailable: limitedTimeAvailable
+            )
+            if selectedOffer == .limitedTime {
+                limitedOfferLastPresentedDay = LimitedOfferEligibility.dayKey(for: Date())
+            }
+            returningOffer = selectedOffer
         }
     }
 
@@ -294,7 +308,15 @@ struct ContentView: View {
         }
 
         pendingLoginAction = action
+        AppAnalytics.authGateShown(source: "restricted_action")
         fullScreenDestination = .login
+    }
+
+    private func trackSelectedTab() {
+        AppAnalytics.screen(
+            "tab_\(selectedTab.rawValue)",
+            className: "ContentView"
+        )
     }
 
     private func handleDestinationDismissed() {
@@ -305,37 +327,6 @@ struct ContentView: View {
             pendingLoginAction = nil
         }
 
-        let action = postDismissAction
-        postDismissAction = nil
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-            switch action {
-            case .superPrize:
-                fullScreenDestination = .superPrize
-            case .limitedOffer:
-                presentLimitedOfferIfEligible()
-            case nil:
-                break
-            }
-        }
-    }
-
-    private func presentLimitedOfferIfEligible() {
-        guard !isSubscribed else { return }
-
-        let arguments = ProcessInfo.processInfo.arguments
-        let forcePresentation = arguments.contains("-forceLimitedOffer")
-        if arguments.contains("-resetLimitedOfferEligibility") {
-            limitedOfferLastPresentedDay = 0
-        }
-
-        let today = LimitedOfferEligibility.dayKey(for: Date())
-        guard forcePresentation || LimitedOfferEligibility.canPresent(lastPresentedDay: limitedOfferLastPresentedDay) else { return }
-
-        limitedOfferLastPresentedDay = today
-        withAnimation(.easeOut(duration: 0.22)) {
-            showLimitedOfferPopup = true
-        }
     }
 }
 
@@ -362,7 +353,6 @@ private struct TemplateDetailRoute: Identifiable {
 
 private enum AppDestination: Identifiable {
     case membership
-    case superPrize
     case summerSale(CMSCouponOffer)
     case credits
     case suggestion
@@ -372,7 +362,6 @@ private enum AppDestination: Identifiable {
     var id: String {
         switch self {
         case .membership: "membership"
-        case .superPrize: "superPrize"
         case .summerSale(let offer): "summerSale-\(offer.id)"
         case .credits: "credits"
         case .suggestion: "suggestion"
@@ -380,11 +369,6 @@ private enum AppDestination: Identifiable {
         case .fixedFeature(let feature): "fixedFeature-\(feature.id)"
         }
     }
-}
-
-private enum PostDismissAction {
-    case superPrize
-    case limitedOffer
 }
 
 #Preview {

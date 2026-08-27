@@ -14,3 +14,10 @@ xcuserdata/
 # Local/generated media assets (CMS supplies production template media)
 /remotion-restore-cover/
 /photoreviveaiedit/TemplateVideos/
+
+# Local audits and Supabase CLI linkage
+/artifacts/
+/supabase/.temp/
+
+# Local signing identity (contains private key material)
+/selfIdentity.plist

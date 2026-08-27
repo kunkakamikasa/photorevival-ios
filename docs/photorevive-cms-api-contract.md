@@ -93,11 +93,16 @@
 4. 固定功能配置新增 CMS item 绑定。`get-app-fixed-features` 返回稳定的
    `generation_target`（含 `item_id`、scene、model、积分和生成 endpoint），
    无需再增加一套专用生成接口。
-5. `photorevive-history` 为视频返回 Cloudinary 第 0 秒 JPG
+5. 新增 CMS 应用级 `credit_pricing`。客户端与生成接口共用该配置：Restore
+   35、视频增强每秒 10、图/文生视频按时长/分辨率/声音/多镜头组合计价、
+   其他视频 60、图片生成统一 30。所有展示声音、多镜头、时长和分辨率设置的
+   Image/Text to Video 模板与滤镜均使用相同的动态组合计价；60 分仅用于没有
+   这组输出设置的其他视频能力。
+6. `photorevive-history` 为视频返回 Cloudinary 第 0 秒 JPG
    `thumbnail_url`；App 列表只加载封面，点击后才播放结果视频。
-6. `upload-image` 以 `image_url` 为规范字段，同时返回相同值的 `url`
+7. `upload-image` 以 `image_url` 为规范字段，同时返回相同值的 `url`
    兼容别名；客户端按 `image_url ?? url` 读取。
-7. 邀请按本版产品决定只保留手动邀请码，继续复用 `referral-status` 和
+8. 邀请按本版产品决定只保留手动邀请码，继续复用 `referral-status` 和
    `redeem-referral`，未增加 Deep Link 自动归因。
 
 ### 后续非阻塞建议

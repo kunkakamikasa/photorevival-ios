@@ -1,10 +1,137 @@
 import SwiftUI
 
+enum PaywallFollowUpOffer: String, Identifiable, Equatable {
+    case limitedTime
+    case threeDayTrial
+
+    var id: String { rawValue }
+
+    static func select(
+        limitedTimeAvailable: Bool,
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        randomValue: Bool = Bool.random()
+    ) -> Self {
+        if arguments.contains("-forceThreeDayTrialOffer") {
+            return .threeDayTrial
+        }
+        if arguments.contains("-forceLimitedOffer"), limitedTimeAvailable {
+            return .limitedTime
+        }
+        return limitedTimeAvailable && randomValue ? .limitedTime : .threeDayTrial
+    }
+}
+
+struct PaywallOfferFlowView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("isSubscribed") private var isSubscribed = false
+    @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
+    @State private var followUpOffer: PaywallFollowUpOffer?
+    private let analyticsSource: String
+
+    init(analyticsSource: String = "membership_entry") {
+        self.analyticsSource = analyticsSource
+    }
+
+    var body: some View {
+        Group {
+            if let followUpOffer {
+                PaywallFollowUpOfferContent(
+                    offer: followUpOffer,
+                    analyticsSource: "membership_follow_up",
+                    onFinish: { dismiss() }
+                )
+            } else {
+                MembershipPaywallView(
+                    analyticsSource: analyticsSource,
+                    onClose: presentFollowUpOffer
+                )
+            }
+        }
+    }
+
+    private func presentFollowUpOffer() {
+        guard !isSubscribed else {
+            dismiss()
+            return
+        }
+
+        if ProcessInfo.processInfo.arguments.contains("-resetLimitedOfferEligibility") {
+            limitedOfferLastPresentedDay = 0
+        }
+        let limitedTimeAvailable = LimitedOfferEligibility.canPresent(
+            lastPresentedDay: limitedOfferLastPresentedDay
+        )
+        let offer = PaywallFollowUpOffer.select(
+            limitedTimeAvailable: limitedTimeAvailable
+        )
+        if offer == .limitedTime {
+            limitedOfferLastPresentedDay = LimitedOfferEligibility.dayKey(for: Date())
+        }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            followUpOffer = offer
+        }
+    }
+}
+
+struct PaywallFollowUpOfferView: View {
+    let offer: PaywallFollowUpOffer
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        PaywallFollowUpOfferContent(
+            offer: offer,
+            analyticsSource: "follow_up_offer",
+            onFinish: { dismiss() }
+        )
+    }
+}
+
+private struct PaywallFollowUpOfferContent: View {
+    let offer: PaywallFollowUpOffer
+    let analyticsSource: String
+    let onFinish: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        switch offer {
+        case .limitedTime:
+            LimitedTimeOfferPopup(
+                onClose: onFinish,
+                onPurchased: onFinish,
+                analyticsSource: analyticsSource
+            )
+        case .threeDayTrial:
+            ReturningUserOfferFlowView(
+                startsAtTrial: true,
+                analyticsSource: analyticsSource
+            )
+        }
+    }
+}
+
 struct SuperPrizeOfferView: View {
     let onClose: () -> Void
+    let onPurchased: () -> Void
     @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var isPurchasing = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+
+    private let promotionContext = AppAnalytics.PromotionContext(
+        promotionID: "super_prize",
+        promotionName: "returning_offer",
+        creativeName: "super_prize_ticket",
+        creativeSlot: "returning_offer",
+        offerVariant: "super_prize",
+        billingPeriod: "weekly"
+    )
+
+    init(
+        onClose: @escaping () -> Void,
+        onPurchased: (() -> Void)? = nil
+    ) {
+        self.onClose = onClose
+        self.onPurchased = onPurchased ?? onClose
+    }
 
     var body: some View {
         ZStack {
@@ -112,6 +239,14 @@ struct SuperPrizeOfferView: View {
         }
         .preferredColorScheme(.dark)
         .accessibilityIdentifier("super-prize-screen")
+        .onAppear {
+            AppAnalytics.paywallViewed(
+                variant: "super_prize",
+                source: "returning_offer",
+                productID: SubscriptionProductID.superPrizeWeekly.rawValue,
+                promotion: promotionContext
+            )
+        }
         .alert(item: $purchaseAlert) { alert in
             Alert(
                 title: Text(alert.title),
@@ -126,13 +261,16 @@ struct SuperPrizeOfferView: View {
 
         isPurchasing = true
         Task {
-            let outcome = await SubscriptionPurchaseService.purchase(.superPrizeWeekly)
+            let outcome = await SubscriptionPurchaseService.purchase(
+                .superPrizeWeekly,
+                promotion: promotionContext
+            )
             isPurchasing = false
 
             switch outcome {
             case .purchased:
                 isSubscribed = true
-                onClose()
+                onPurchased()
             case .cancelled:
                 break
             case .pending:
@@ -221,10 +359,33 @@ private struct SuperPrizeTicket: View {
 
 struct LimitedTimeOfferPopup: View {
     let onClose: () -> Void
+    let onPurchased: () -> Void
+    private let analyticsSource: String
     @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var remainingHundredths = 60 * 100 - 1
     @State private var isPurchasing = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+
+    init(
+        onClose: @escaping () -> Void,
+        onPurchased: (() -> Void)? = nil,
+        analyticsSource: String = "follow_up_offer"
+    ) {
+        self.onClose = onClose
+        self.onPurchased = onPurchased ?? onClose
+        self.analyticsSource = analyticsSource
+    }
+
+    private var promotionContext: AppAnalytics.PromotionContext {
+        AppAnalytics.PromotionContext(
+            promotionID: "limited_time_offer",
+            promotionName: "limited_time",
+            creativeName: "limited_time_popup",
+            creativeSlot: analyticsSource,
+            offerVariant: "limited_time",
+            billingPeriod: "annual"
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -257,6 +418,14 @@ struct LimitedTimeOfferPopup: View {
             }
         }
         .accessibilityIdentifier("limited-time-offer-popup")
+        .onAppear {
+            AppAnalytics.paywallViewed(
+                variant: "limited_time",
+                source: analyticsSource,
+                productID: SubscriptionProductID.limitedTimeOfferYearly.rawValue,
+                promotion: promotionContext
+            )
+        }
         .task {
             while remainingHundredths > 0 && !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 10_000_000)
@@ -295,9 +464,13 @@ struct LimitedTimeOfferPopup: View {
                     .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 8))
                     .offset(y: -20)
 
-                HStack(alignment: .top, spacing: 18) {
-                    benefitColumn(["Priority", "No Watermark", "30% OFF Credit"])
-                    benefitColumn(["800+ styles", "Ad-Free", "260 per week"])
+                VStack(alignment: .leading, spacing: 7) {
+                    benefitColumn(["Evolving & Customizable Styles"])
+
+                    HStack(alignment: .top, spacing: 18) {
+                        benefitColumn(["Priority", "No Watermark", "30% OFF Credit"])
+                        benefitColumn(["Ad-Free", "260 per week"])
+                    }
                 }
                 .padding(.top, -15)
             }
@@ -307,7 +480,7 @@ struct LimitedTimeOfferPopup: View {
             .overlay(RoundedRectangle(cornerRadius: 13).stroke(Color.orange.opacity(0.55), lineWidth: 1))
 
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("56%")
+                Text("50%")
                     .font(.system(size: 72, weight: .heavy))
                 Text("OFF")
                     .font(.system(size: 32, weight: .heavy))
@@ -357,13 +530,16 @@ struct LimitedTimeOfferPopup: View {
 
         isPurchasing = true
         Task {
-            let outcome = await SubscriptionPurchaseService.purchase(.limitedTimeOfferYearly)
+            let outcome = await SubscriptionPurchaseService.purchase(
+                .limitedTimeOfferYearly,
+                promotion: promotionContext
+            )
             isPurchasing = false
 
             switch outcome {
             case .purchased:
                 isSubscribed = true
-                onClose()
+                onPurchased()
             case .cancelled:
                 break
             case .pending:
@@ -440,6 +616,17 @@ struct SummerSalePaywallView: View {
     @State private var isPurchasing = false
     @State private var isRestoring = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+
+    private var promotionContext: AppAnalytics.PromotionContext {
+        AppAnalytics.PromotionContext(
+            promotionID: offer.id,
+            promotionName: "summer_sale",
+            creativeName: "summer_discount_sign",
+            creativeSlot: offer.placement,
+            offerVariant: "summer_sale_\(selectedPlan.rawValue)",
+            billingPeriod: selectedPlan.rawValue
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -570,6 +757,14 @@ struct SummerSalePaywallView: View {
         .preferredColorScheme(.light)
         .sensoryFeedback(.selection, trigger: selectedPlan)
         .accessibilityIdentifier("summer-sale-screen")
+        .onAppear {
+            AppAnalytics.paywallViewed(
+                variant: "summer_sale",
+                source: offer.placement,
+                productID: offer.plan(for: selectedPlan).productID,
+                promotion: promotionContext
+            )
+        }
         .alert(item: $purchaseAlert) { alert in
             Alert(
                 title: Text(alert.title),
@@ -586,7 +781,10 @@ struct SummerSalePaywallView: View {
         isPurchasing = true
 
         Task {
-            let outcome = await SubscriptionPurchaseService.purchase(productID)
+            let outcome = await SubscriptionPurchaseService.purchase(
+                productID,
+                promotion: promotionContext
+            )
             isPurchasing = false
 
             switch outcome {

@@ -76,6 +76,136 @@ enum FixedFeature: String, CaseIterable, Identifiable {
     }
 }
 
+struct AppCreditPricing: Hashable, Decodable {
+    let oneTapRestoreCredits: Int
+    let enhanceVideoCreditsPerSecond: Int
+    let videoBaseCredits: Int
+    let videoDefaultDurationSeconds: Int
+    let videoExtraDurationCreditsPerSecond: Int
+    let videoSoundCredits: Int
+    let videoMultiShotCredits: Int
+    let video720pExtraCreditsPerSecond: Int
+    let video1080pExtraCreditsPerSecond: Int
+    let otherVideoCredits: Int
+    let enhancePhotoCredits: Int
+    let imageToImageCredits: Int
+    let textToImageCredits: Int
+    let otherImageCredits: Int
+    let defaultVideoResolution: String
+    let defaultVideoSound: Bool
+    let defaultVideoMultiShot: Bool
+
+    static let defaultValue = AppCreditPricing()
+
+    init(
+        oneTapRestoreCredits: Int = 35,
+        enhanceVideoCreditsPerSecond: Int = 10,
+        videoBaseCredits: Int = 40,
+        videoDefaultDurationSeconds: Int = 5,
+        videoExtraDurationCreditsPerSecond: Int = 8,
+        videoSoundCredits: Int = 20,
+        videoMultiShotCredits: Int = 20,
+        video720pExtraCreditsPerSecond: Int = 4,
+        video1080pExtraCreditsPerSecond: Int = 12,
+        otherVideoCredits: Int = 60,
+        enhancePhotoCredits: Int = 30,
+        imageToImageCredits: Int = 30,
+        textToImageCredits: Int = 30,
+        otherImageCredits: Int = 30,
+        defaultVideoResolution: String = "540p",
+        defaultVideoSound: Bool = false,
+        defaultVideoMultiShot: Bool = false
+    ) {
+        self.oneTapRestoreCredits = max(0, oneTapRestoreCredits)
+        self.enhanceVideoCreditsPerSecond = max(0, enhanceVideoCreditsPerSecond)
+        self.videoBaseCredits = max(0, videoBaseCredits)
+        self.videoDefaultDurationSeconds = max(1, videoDefaultDurationSeconds)
+        self.videoExtraDurationCreditsPerSecond = max(0, videoExtraDurationCreditsPerSecond)
+        self.videoSoundCredits = max(0, videoSoundCredits)
+        self.videoMultiShotCredits = max(0, videoMultiShotCredits)
+        self.video720pExtraCreditsPerSecond = max(0, video720pExtraCreditsPerSecond)
+        self.video1080pExtraCreditsPerSecond = max(0, video1080pExtraCreditsPerSecond)
+        self.otherVideoCredits = max(0, otherVideoCredits)
+        self.enhancePhotoCredits = max(0, enhancePhotoCredits)
+        self.imageToImageCredits = max(0, imageToImageCredits)
+        self.textToImageCredits = max(0, textToImageCredits)
+        self.otherImageCredits = max(0, otherImageCredits)
+        self.defaultVideoResolution = defaultVideoResolution
+        self.defaultVideoSound = defaultVideoSound
+        self.defaultVideoMultiShot = defaultVideoMultiShot
+    }
+
+    func videoGenerationCredits(
+        duration: Int,
+        resolution: String,
+        sound: Bool,
+        multiShot: Bool
+    ) -> Int {
+        let duration = max(duration, 1)
+        let extraDuration = max(duration - videoDefaultDurationSeconds, 0)
+        let resolutionRate: Int
+        switch resolution.lowercased() {
+        case "1080p": resolutionRate = video1080pExtraCreditsPerSecond
+        case "720p": resolutionRate = video720pExtraCreditsPerSecond
+        default: resolutionRate = 0
+        }
+        return videoBaseCredits
+            + extraDuration * videoExtraDurationCreditsPerSecond
+            + duration * resolutionRate
+            + (sound ? videoSoundCredits : 0)
+            + (multiShot ? videoMultiShotCredits : 0)
+    }
+
+    func videoEnhancementCredits(duration: TimeInterval) -> Int {
+        guard duration > 0 else { return 0 }
+        return Int(ceil(duration)) * enhanceVideoCreditsPerSecond
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case oneTapRestoreCredits = "one_tap_restore_credits"
+        case enhanceVideoCreditsPerSecond = "enhance_video_credits_per_second"
+        case videoBaseCredits = "video_base_credits"
+        case videoDefaultDurationSeconds = "video_default_duration_seconds"
+        case videoExtraDurationCreditsPerSecond = "video_extra_duration_credits_per_second"
+        case videoSoundCredits = "video_sound_credits"
+        case videoMultiShotCredits = "video_multi_shot_credits"
+        case video720pExtraCreditsPerSecond = "video_720p_extra_credits_per_second"
+        case video1080pExtraCreditsPerSecond = "video_1080p_extra_credits_per_second"
+        case otherVideoCredits = "other_video_credits"
+        case enhancePhotoCredits = "enhance_photo_credits"
+        case imageToImageCredits = "image_to_image_credits"
+        case textToImageCredits = "text_to_image_credits"
+        case otherImageCredits = "other_image_credits"
+        case defaultVideoResolution = "default_video_resolution"
+        case defaultVideoSound = "default_video_sound"
+        case defaultVideoMultiShot = "default_video_multi_shot"
+    }
+
+    init(from decoder: Decoder) throws {
+        let defaults = Self.defaultValue
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            oneTapRestoreCredits: try values.decodeIfPresent(Int.self, forKey: .oneTapRestoreCredits) ?? defaults.oneTapRestoreCredits,
+            enhanceVideoCreditsPerSecond: try values.decodeIfPresent(Int.self, forKey: .enhanceVideoCreditsPerSecond) ?? defaults.enhanceVideoCreditsPerSecond,
+            videoBaseCredits: try values.decodeIfPresent(Int.self, forKey: .videoBaseCredits) ?? defaults.videoBaseCredits,
+            videoDefaultDurationSeconds: try values.decodeIfPresent(Int.self, forKey: .videoDefaultDurationSeconds) ?? defaults.videoDefaultDurationSeconds,
+            videoExtraDurationCreditsPerSecond: try values.decodeIfPresent(Int.self, forKey: .videoExtraDurationCreditsPerSecond) ?? defaults.videoExtraDurationCreditsPerSecond,
+            videoSoundCredits: try values.decodeIfPresent(Int.self, forKey: .videoSoundCredits) ?? defaults.videoSoundCredits,
+            videoMultiShotCredits: try values.decodeIfPresent(Int.self, forKey: .videoMultiShotCredits) ?? defaults.videoMultiShotCredits,
+            video720pExtraCreditsPerSecond: try values.decodeIfPresent(Int.self, forKey: .video720pExtraCreditsPerSecond) ?? defaults.video720pExtraCreditsPerSecond,
+            video1080pExtraCreditsPerSecond: try values.decodeIfPresent(Int.self, forKey: .video1080pExtraCreditsPerSecond) ?? defaults.video1080pExtraCreditsPerSecond,
+            otherVideoCredits: try values.decodeIfPresent(Int.self, forKey: .otherVideoCredits) ?? defaults.otherVideoCredits,
+            enhancePhotoCredits: try values.decodeIfPresent(Int.self, forKey: .enhancePhotoCredits) ?? defaults.enhancePhotoCredits,
+            imageToImageCredits: try values.decodeIfPresent(Int.self, forKey: .imageToImageCredits) ?? defaults.imageToImageCredits,
+            textToImageCredits: try values.decodeIfPresent(Int.self, forKey: .textToImageCredits) ?? defaults.textToImageCredits,
+            otherImageCredits: try values.decodeIfPresent(Int.self, forKey: .otherImageCredits) ?? defaults.otherImageCredits,
+            defaultVideoResolution: try values.decodeIfPresent(String.self, forKey: .defaultVideoResolution) ?? defaults.defaultVideoResolution,
+            defaultVideoSound: try values.decodeIfPresent(Bool.self, forKey: .defaultVideoSound) ?? defaults.defaultVideoSound,
+            defaultVideoMultiShot: try values.decodeIfPresent(Bool.self, forKey: .defaultVideoMultiShot) ?? defaults.defaultVideoMultiShot
+        )
+    }
+}
+
 enum TemplateOrientation: String, Hashable {
     case landscape
     case portrait

@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Photo Revival Privacy Policy">
+  <title>Photo Revival Privacy Policy</title>
+  <style>
+    :root {
+      --background: #f6f2e9;
+      --surface: rgba(255, 255, 255, 0.84);
+      --surface-strong: #ffffff;
+      --text: #231f1a;
+      --muted: #6f675e;
+      --line: #ddd4c7;
+      --accent: #d95532;
+      --accent-soft: #fff0e9;
+      --shadow: 0 18px 60px rgba(64, 47, 30, 0.09);
+      --radius: 20px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #171512;
+        --surface: rgba(37, 33, 28, 0.90);
+        --surface-strong: #25211c;
+        --text: #f4ede2;
+        --muted: #beb4a6;
+        --line: #494137;
+        --accent: #ff7b57;
+        --accent-soft: #3d251d;
+        --shadow: none;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(217, 85, 50, 0.10), transparent 31rem),
+        var(--background);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.78;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+
+    .page {
+      width: min(960px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: max(36px, env(safe-area-inset-top)) 0 max(72px, env(safe-area-inset-bottom));
+    }
+
+    .hero {
+      padding: clamp(28px, 6vw, 64px);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 7vw, 58px);
+      line-height: 1.12;
+      letter-spacing: -0.035em;
+    }
+
+    .subtitle {
+      max-width: 720px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: clamp(16px, 2.3vw, 19px);
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 22px;
+      margin-top: 26px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .summary,
+    .toc,
+    article {
+      margin-top: 22px;
+      padding: clamp(22px, 4vw, 40px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .summary h2,
+    .toc h2 { margin-top: 0; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .summary-card {
+      padding: 18px;
+      border-radius: 14px;
+      background: var(--accent-soft);
+    }
+
+    .summary-card strong { display: block; margin-bottom: 5px; }
+    .summary-card p { margin: 0; color: var(--muted); }
+
+    .toc ol {
+      columns: 2;
+      column-gap: 42px;
+      margin: 0;
+      padding-left: 1.35em;
+    }
+
+    .toc li { break-inside: avoid; margin: 3px 0; }
+    .toc a { color: var(--text); text-decoration: none; }
+    .toc a:hover { color: var(--accent); }
+
+    section { scroll-margin-top: 22px; }
+    article section + section {
+      margin-top: 42px;
+      padding-top: 38px;
+      border-top: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: clamp(23px, 4vw, 30px);
+      line-height: 1.3;
+      letter-spacing: -0.015em;
+    }
+
+    h3 { margin: 28px 0 8px; font-size: 19px; line-height: 1.45; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 1.4em; }
+    li + li { margin-top: 7px; }
+
+    .table-wrap {
+      width: 100%;
+      margin: 18px 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    table { width: 100%; border-collapse: collapse; min-width: 740px; }
+    th, td {
+      padding: 15px 16px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: var(--accent-soft); font-size: 14px; }
+    tr:last-child td { border-bottom: 0; }
+
+    .note {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--accent);
+      border-radius: 0 12px 12px 0;
+      background: var(--accent-soft);
+    }
+
+    .service-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .service {
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--surface-strong);
+    }
+
+    .service strong { display: block; }
+    .service p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+    .contact {
+      padding: 22px;
+      border-radius: 15px;
+      background: var(--accent-soft);
+    }
+
+    footer {
+      padding: 28px 10px 0;
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+    }
+
+    @media (max-width: 680px) {
+      .page { width: min(100% - 20px, 960px); }
+      .summary-grid, .service-list { grid-template-columns: 1fr; }
+      .toc ol { columns: 1; }
+      .hero, article, .summary, .toc { border-radius: 17px; }
+    }
+
+    @media print {
+      :root {
+        --background: #fff;
+        --surface: #fff;
+        --surface-strong: #fff;
+        --text: #111;
+        --muted: #444;
+        --line: #ccc;
+        --accent-soft: #f6f6f6;
+      }
+      body { background: #fff; font-size: 11pt; }
+      .page { width: 100%; padding: 0; }
+      .hero, .summary, .toc, article { box-shadow: none; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">Privacy Policy</p>
+      <h1>Photo Revival Privacy Policy</h1>
+      <p class="subtitle">
+        We value your privacy. This Privacy Policy explains how Photo Revival collects, uses,
+        stores, shares, and protects your personal information and describes the choices available to you.
+      </p>
+      <div class="meta">
+        <span>Effective date: August 26, 2026</span>
+        <span>Last updated: August 26, 2026</span>
+        <span>Platforms: iOS and iPadOS</span>
+      </div>
+    </header>
+
+    <section class="summary" aria-labelledby="summary-title">
+      <h2 id="summary-title">Privacy at a glance</h2>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <strong>You choose your photos</strong>
+          <p>We use Apple's system photo picker and receive only the images you explicitly select. We do not automatically browse your entire photo library.</p>
+        </div>
+        <div class="summary-card">
+          <strong>AI processing requires uploads</strong>
+          <p>Your selected images, prompts, and generation settings are sent to servers to perform restoration, enhancement, image generation, or video generation.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Tracking is your choice</strong>
+          <p>Where required, cross-app or cross-website advertising measurement is subject to the iOS tracking permission. Refusing it does not disable core editing features.</p>
+        </div>
+        <div class="summary-card">
+          <strong>You can manage your data</strong>
+          <p>You can delete individual generation records, withdraw device permissions, and request access to, correction of, or deletion of your account data.</p>
+        </div>
+      </div>
+    </section>
+
+    <nav class="toc" aria-labelledby="toc-title">
+      <h2 id="toc-title">Contents</h2>
+      <ol>
+        <li><a href="#scope">Scope</a></li>
+        <li><a href="#collection">Information We Process</a></li>
+        <li><a href="#permissions">Device Permissions</a></li>
+        <li><a href="#use">How We Use Information</a></li>
+        <li><a href="#sharing">Sharing and Disclosure</a></li>
+        <li><a href="#tracking">Attribution and Tracking</a></li>
+        <li><a href="#ai">AI Content Processing</a></li>
+        <li><a href="#retention">Storage and Retention</a></li>
+        <li><a href="#rights">Your Rights and Choices</a></li>
+        <li><a href="#security">Security</a></li>
+        <li><a href="#children">Children's Privacy</a></li>
+        <li><a href="#transfer">International Transfers</a></li>
+        <li><a href="#changes">Changes to This Policy</a></li>
+        <li><a href="#contact">Contact Us</a></li>
+      </ol>
+    </nav>
+
+    <article>
+      <section id="scope">
+        <h2>1. Scope</h2>
+        <p>
+          This Privacy Policy applies to the Photo Revival mobile application (the “App”) and services
+          directly associated with the App. In this Policy, “Photo Revival,” “we,” “us,” and “our” refer
+          to the provider of the App. For privacy questions, contact
+          <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a>.
+        </p>
+        <p>
+          Apple, Google, Adjust, and other third parties may independently determine how they process
+          information through their services. Their activities are governed by their own privacy policies.
+        </p>
+      </section>
+
+      <section id="collection">
+        <h2>2. Information We Process</h2>
+        <p>The categories of information we process depend on the features you use:</p>
+        <div class="table-wrap" role="region" aria-label="Personal information processing table" tabindex="0">
+          <table>
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Examples</th>
+                <th>Source and purpose</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Account and sign-in information</td>
+                <td>User identifiers provided by Apple or Google; your name, email address, or Apple private relay address when authorized; authentication tokens and session information.</td>
+                <td>Provided by the sign-in method you choose and used to register or authenticate you, maintain your session, and associate data with your account. We do not receive your Apple ID or Google password.</td>
+              </tr>
+              <tr>
+                <td>User content</td>
+                <td>Photos or images you select, crop, and upload; prompts you enter or confirm; generation settings; AI-generated images, videos, covers, and task history.</td>
+                <td>Used to perform the restoration, enhancement, style transformation, image-to-image, or image-to-video task you request and to display and manage generation history.</td>
+              </tr>
+              <tr>
+                <td>Subscription and transaction information</td>
+                <td>Product ID, transaction ID, signed transaction data, subscription status, price, currency, and purchase-restoration results.</td>
+                <td>Apple processes payment and provides verification data so we can activate memberships, restore purchases, prevent duplicate processing, and resolve refunds or disputes. We do not directly collect payment-card numbers.</td>
+              </tr>
+              <tr>
+                <td>Rewards and usage records</td>
+                <td>Credit balance and transactions, daily check-ins, reward task status and evidence, referral codes, redemption records, a randomly generated installation key, and generation credit usage.</td>
+                <td>Used to provide credits, check-ins, referrals, rewards, and anti-abuse controls.</td>
+              </tr>
+              <tr>
+                <td>Device, network, and log information</td>
+                <td>iOS platform, App version, time zone, IDFV, random installation identifiers, IP address, and server request logs; this may also include device model, operating-system version, language, and diagnostic information.</td>
+                <td>Collected automatically to connect the service, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
+              </tr>
+              <tr>
+                <td>Advertising attribution and analytics</td>
+                <td>Adjust ADID; IDFA if you authorize tracking; advertising network, campaign, ad group, creative, click label, referral source; and events such as App open, registration, and subscription.</td>
+                <td>Used to identify installation sources, measure advertising and product performance, and avoid duplicate attribution.</td>
+              </tr>
+              <tr>
+                <td>Feedback and contact information</td>
+                <td>Your suggestion or feedback, an email address you provide or that is prefilled from your account, an optional screenshot, App version, and submission time.</td>
+                <td>Used to investigate issues, respond to you, and improve the product. Submitting feedback while signed out may create an anonymous service session associated with IDFV, App version, and time zone.</td>
+              </tr>
+              <tr>
+                <td>Notification information</td>
+                <td>Your notification authorization status, the time it was checked, and a push token assigned by the operating system if push notifications are enabled.</td>
+                <td>Used to deliver notifications you permit, complete the enable-notifications reward task, and operate push services.</td>
+              </tr>
+              <tr>
+                <td>Local settings and cache</td>
+                <td>Login and subscription state, onboarding state, offer-display records, attribution snapshots, media cache, and securely stored session tokens.</td>
+                <td>Stored on your device to remember settings, improve loading, and maintain your session. Deleting the App generally clears ordinary local data but does not delete a server account or cancel an App Store subscription.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <strong>Photos containing faces:</strong> Images you upload may contain faces or other sensitive
+          content. We process such content only to perform the visual task you request and do not create
+          facial identity profiles for the purpose of identifying a person in the real world. Do not upload
+          another person's photo without permission, identity documents, medical records, or unnecessary
+          highly sensitive material.
+        </div>
+      </section>
+
+      <section id="permissions">
+        <h2>3. Device Permissions</h2>
+        <ul>
+          <li><strong>Photos:</strong> Used to select source images or a feedback screenshot. The App uses the system photo picker, and only items you explicitly select are provided to the App.</li>
+          <li><strong>Tracking:</strong> Used, where applicable, for advertising measurement across apps or websites. You may refuse this permission without losing access to core editing and generation features.</li>
+          <li><strong>Notifications:</strong> Used to deliver service messages you permit and may be part of a reward task. You can refuse or disable notifications at any time in iOS Settings.</li>
+        </ul>
+        <p>
+          You can manage permissions in iOS Settings under “Privacy &amp; Security” or on the App's system
+          settings page. Withdrawing permission does not affect processing lawfully completed beforehand.
+        </p>
+      </section>
+
+      <section id="use">
+        <h2>4. How We Use Information</h2>
+        <p>We use information as necessary to provide and protect the service, including to:</p>
+        <ol>
+          <li>Create and manage accounts, complete Apple or Google sign-in, and maintain sessions;</li>
+          <li>Receive source material, prompts, and settings and create, display, and delete AI generation tasks;</li>
+          <li>Verify App Store subscriptions, restore purchases, and manage memberships, credits, and transaction records;</li>
+          <li>Provide check-in, reward, referral, and anti-abuse functions;</li>
+          <li>Respond to feedback, diagnose errors, secure servers and accounts, and prevent fraud or misuse;</li>
+          <li>Measure installation sources and product performance and improve features and user experience; and</li>
+          <li>Comply with legal obligations and establish, exercise, or defend legal claims.</li>
+        </ol>
+        <p>We will not use personal information for a materially incompatible new purpose without appropriate notice and any consent required by law.</p>
+      </section>
+
+      <section id="sharing">
+        <h2>5. Sharing, Service Providers, and Disclosure</h2>
+        <p>
+          We do not sell your photos or generated content. We may provide information needed to perform
+          specific services to providers that are required to protect it appropriately.
+        </p>
+        <div class="service-list">
+          <div class="service">
+            <strong>Apple</strong>
+            <p>Sign in with Apple, App Store subscriptions, the system photo picker, notifications, and operating-system services. <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener noreferrer">Apple Privacy Policy</a></p>
+          </div>
+          <div class="service">
+            <strong>Google</strong>
+            <p>Google Sign-In when you select it. The Google Sign-In SDK may process a user identifier and IP address. <a href="https://policies.google.com/privacy?hl=en" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a></p>
+          </div>
+          <div class="service">
+            <strong>Adjust</strong>
+            <p>Mobile attribution, advertising measurement, analytics, and fraud prevention. <a href="https://www.adjust.com/terms/privacy-policy/" target="_blank" rel="noopener noreferrer">Adjust Privacy Policy</a></p>
+          </div>
+          <div class="service">
+            <strong>Cloud and AI service providers</strong>
+            <p>Providers may host APIs, store uploaded content and generated results, deliver template media, and perform AI tasks on our behalf. They may process only the information needed to provide these services.</p>
+          </div>
+        </div>
+        <h3>Other disclosures</h3>
+        <ul>
+          <li><strong>Legal compliance:</strong> We may disclose information to courts, regulators, or law-enforcement authorities when required by law or reasonably necessary to protect users, the public, our rights, or security.</li>
+          <li><strong>Business transactions:</strong> Information may transfer as part of a merger, acquisition, financing, restructuring, or asset transfer, subject to continued protection and legally required notice.</li>
+          <li><strong>At your direction:</strong> For example, when you use the iOS share sheet to send generated content to another app. The recipient processes that content under its own terms and privacy policy.</li>
+        </ul>
+      </section>
+
+      <section id="tracking">
+        <h2>6. Advertising Attribution and Tracking</h2>
+        <p>
+          The App integrates the Adjust SDK to understand installation sources and measure advertising
+          campaigns. Adjust may process certain device and attribution information without IDFA, including
+          IDFV, Adjust ADID, device or operating-system information, IP address, referral data, and App events.
+        </p>
+        <p>
+          When processing constitutes “tracking” as defined by Apple, the App first presents the iOS App
+          Tracking Transparency request. Only after you authorize tracking may the relevant SDK access IDFA
+          and conduct authorized cross-app or cross-website advertising measurement. You can change your
+          choice under “Settings &gt; Privacy &amp; Security &gt; Tracking.” Refusing or withdrawing tracking
+          permission does not affect core service functionality.
+        </p>
+      </section>
+
+      <section id="ai">
+        <h2>7. AI Content Processing</h2>
+        <ul>
+          <li>AI features require us to send your selected images, prompts, template identifier, and output settings to servers and relevant AI processing providers.</li>
+          <li>Results are generated automatically and may be inaccurate, incomplete, or unexpected. Do not rely on them as the sole basis for medical, legal, identity-verification, or other high-risk decisions.</li>
+          <li>You must have lawful authority to upload the content and obtain any required permission from identifiable people depicted in it.</li>
+          <li>We do not publicly display or sell your private uploads. We will not use your private photos to train a general-purpose AI model for other customers unless we separately provide clear notice and obtain any consent required by law.</li>
+        </ul>
+      </section>
+
+      <section id="retention">
+        <h2>8. Storage and Retention</h2>
+        <p>We retain information only for as long as reasonably necessary to provide and protect the service, resolve disputes, and comply with legal obligations:</p>
+        <ul>
+          <li><strong>Account and membership data:</strong> Generally retained until your account is deleted, followed by any limited period necessary and permitted by law.</li>
+          <li><strong>Uploads, results, and generation history:</strong> Stored with your account so you can access history until you delete the relevant task or request deletion of your account. Temporary processing copies are removed when no longer needed to complete or secure the requested task.</li>
+          <li><strong>Deleted information and backups:</strong> Information removed from active systems may remain temporarily in isolated backups. It is not used for ordinary business and is removed through the normal backup-rotation process unless longer retention is required by law.</li>
+          <li><strong>Feedback:</strong> Retained only as long as reasonably necessary to respond, improve the service, handle related disputes, or comply with legal obligations.</li>
+          <li><strong>Transaction, log, and security records:</strong> Retained as needed for tax, accounting, anti-fraud, dispute-resolution, and other legal requirements.</li>
+          <li><strong>Local data:</strong> Generally remains on your device until you sign out, clear system data, or delete the App.</li>
+        </ul>
+        <p>When information is no longer needed, we delete or anonymize it unless continued retention is legally required.</p>
+      </section>
+
+      <section id="rights">
+        <h2>9. Your Rights and Choices</h2>
+        <p>Subject to applicable law, you may have the right to:</p>
+        <ul>
+          <li>Access personal information we hold about you and obtain a copy;</li>
+          <li>Correct inaccurate or incomplete information;</li>
+          <li>Delete an individual generation record or request deletion of your account and associated data;</li>
+          <li>Withdraw consent, object to or restrict certain processing, and request data portability where applicable;</li>
+          <li>Refuse cross-app or cross-website tracking and manage photo and notification permissions; and</li>
+          <li>Submit a complaint to a competent data-protection authority.</li>
+        </ul>
+        <h3>Deleting data or your account</h3>
+        <ol>
+          <li>You can delete an individual generation record using the delete control on the App's history page.</li>
+          <li>To request complete deletion of your account and associated information, email <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a>. We may reasonably verify account ownership before completing a request to prevent unauthorized deletion.</li>
+        </ol>
+        <div class="note">
+          Deleting the App, signing out, or disabling Apple or Google sign-in does not automatically delete
+          your server account. Deleting your Photo Revival account also does not automatically cancel an
+          App Store subscription. You must separately manage auto-renewal in your Apple ID subscription settings.
+        </div>
+        <p>
+          We respond to verifiable requests within the period required by applicable law. Where permitted,
+          we may refuse a manifestly unfounded or excessive request, a request that would impair another
+          person's rights, or one that conflicts with a legal obligation, and we will explain the reason.
+        </p>
+      </section>
+
+      <section id="security">
+        <h2>10. Security</h2>
+        <p>
+          We use technical and organizational measures appropriate to the risks, such as HTTPS in transit,
+          iOS Keychain storage for session tokens, access controls, least-privilege practices, log monitoring,
+          and service-provider management to protect information from unauthorized access, disclosure,
+          alteration, or loss.
+        </p>
+        <p>
+          No internet transmission or electronic storage system is completely secure. If a personal-data
+          incident occurs, we will take remedial action and provide notifications where required by law.
+        </p>
+      </section>
+
+      <section id="children">
+        <h2>11. Children's Privacy</h2>
+        <p>
+          The App is not directed to children under 13, and we do not knowingly collect personal information
+          from them. Where a higher digital-consent age applies, a person below that age should use the
+          service only with the consent and supervision of a parent or legal guardian.
+        </p>
+        <p>
+          If you believe a child provided personal information without appropriate permission, email
+          <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a>. After verification, we will
+          take appropriate steps to delete the information.
+        </p>
+      </section>
+
+      <section id="transfer">
+        <h2>12. International Data Transfers</h2>
+        <p>
+          We and our service providers may process information outside your country or region, where privacy
+          laws may differ. Where required, we use appropriate contractual, organizational, or legal safeguards
+          and require recipients to protect the information.
+        </p>
+      </section>
+
+      <section id="changes">
+        <h2>13. Changes to This Policy</h2>
+        <p>
+          We may update this Policy when our features, providers, or legal obligations change. We will update
+          the “Last updated” date above and provide notice through the App, our website, or another appropriate
+          channel. If a change materially affects your rights, we will obtain consent where required by law.
+        </p>
+      </section>
+
+      <section id="contact">
+        <h2>14. Contact Us</h2>
+        <p>For questions about this Policy or to exercise a privacy right, contact us by email:</p>
+        <div class="contact">
+          <p><strong>Email:</strong> <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a></p>
+        </div>
+        <p>
+          We may need to verify that you control the relevant account before acting on a request. Do not send
+          identity documents, complete transaction credentials, or unencrypted sensitive photos by ordinary email.
+        </p>
+      </section>
+    </article>
+
+    <footer>© 2026 Photo Revival</footer>
+  </main>
+</body>
+</html>

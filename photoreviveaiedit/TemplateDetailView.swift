@@ -7,6 +7,7 @@ struct TemplateDetailView: View {
     let configuredTryNowItem: TemplateItem?
     let configuredTryNowItems: [TemplateItem]?
     let creationItemsProvider: ((TemplateItem) -> [TemplateItem])?
+    let creditPricing: AppCreditPricing
     @Binding var credits: Int
     let onClose: () -> Void
     @State private var selectedID: String?
@@ -20,6 +21,7 @@ struct TemplateDetailView: View {
         tryNowItem: TemplateItem? = nil,
         tryNowItems: [TemplateItem]? = nil,
         creationItemsProvider: ((TemplateItem) -> [TemplateItem])? = nil,
+        creditPricing: AppCreditPricing = .defaultValue,
         credits: Binding<Int>,
         onClose: @escaping () -> Void
     ) {
@@ -41,6 +43,7 @@ struct TemplateDetailView: View {
         self.configuredTryNowItem = tryNowItem
         self.configuredTryNowItems = tryNowItems
         self.creationItemsProvider = creationItemsProvider
+        self.creditPricing = creditPricing
         self._credits = credits
         self.onClose = onClose
         self._selectedID = State(initialValue: item.id)
@@ -56,18 +59,22 @@ struct TemplateDetailView: View {
                                 item: detailItem,
                                 onClose: onClose,
                                 onTry: {
+                                    let creationTemplate: TemplateItem
                                     if detailItem.id == item.id,
                                        let configuredTryNowItem {
+                                        creationTemplate = configuredTryNowItem
                                         creationLaunch = TemplateCreationLaunch(
                                             template: configuredTryNowItem,
                                             templates: configuredTryNowItems ?? [configuredTryNowItem]
                                         )
                                     } else {
+                                        creationTemplate = detailItem
                                         creationLaunch = TemplateCreationLaunch(
                                             template: detailItem,
                                             templates: creationTemplates(for: detailItem)
                                         )
                                     }
+                                    AppAnalytics.templateTryNow(creationTemplate)
                                 }
                             )
                             .containerRelativeFrame([.horizontal, .vertical])
@@ -111,19 +118,32 @@ struct TemplateDetailView: View {
         .preferredColorScheme(.dark)
         .fullScreenCover(item: $creationLaunch) { launch in
             if launch.template.generationKind == .image {
-                ImageGenerationUploadView(template: launch.template, credits: $credits)
+                ImageGenerationUploadView(
+                    template: launch.template,
+                    creditPricing: creditPricing,
+                    credits: $credits
+                )
             } else {
                 CreateFlowView(
                     template: launch.template,
                     templates: launch.templates,
+                    creditPricing: creditPricing,
                     credits: $credits
                 )
             }
         }
-        .onAppear(perform: presentSwipeHintIfNeeded)
+        .onAppear {
+            presentSwipeHintIfNeeded()
+            AppAnalytics.screen("template_detail", className: "TemplateDetailView")
+            AppAnalytics.templateDetailViewed(item)
+        }
         .onChange(of: selectedID) { _, newID in
             guard newID != item.id else { return }
             dismissSwipeHint()
+            if let newID,
+               let selectedItem = detailItems.first(where: { $0.id == newID }) {
+                AppAnalytics.templateDetailViewed(selectedItem)
+            }
         }
     }
 

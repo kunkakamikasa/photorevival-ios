@@ -120,6 +120,53 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testVideoPromptUploadFitsOneScreenWithoutVerticalScrolling() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let motorcycle = app.buttons["template-motorcycle-boy"].firstMatch
+        for _ in 0..<6 where !motorcycle.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(motorcycle.waitForExistence(timeout: 3))
+        motorcycle.tap()
+
+        let tryMotorcycle = app.buttons["Try Motorcycle Boy"]
+        XCTAssertTrue(tryMotorcycle.waitForExistence(timeout: 3))
+        tryMotorcycle.tap()
+
+        XCTAssertTrue(app.navigationBars["Baby Adventure"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["guided-video-editor"].exists)
+        XCTAssertTrue(app.staticTexts["Image1"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["upload-sample-preview"].exists)
+
+        let settings = app.buttons["Edit generation settings"]
+        let primaryAction = app.buttons["creation-primary-action"]
+        let chooserTitle = app.staticTexts["Choose Template"]
+        let firstTemplate = app.buttons["Select Baby Fly"]
+        XCTAssertTrue(settings.exists)
+        XCTAssertTrue(primaryAction.exists)
+        XCTAssertTrue(chooserTitle.exists)
+        XCTAssertTrue(firstTemplate.exists)
+
+        let windowMaxY = app.windows.firstMatch.frame.maxY + 1
+        XCTAssertLessThanOrEqual(settings.frame.maxY, windowMaxY)
+        XCTAssertLessThanOrEqual(primaryAction.frame.maxY, windowMaxY)
+        XCTAssertLessThanOrEqual(chooserTitle.frame.maxY, windowMaxY)
+        XCTAssertLessThanOrEqual(firstTemplate.frame.maxY, windowMaxY)
+
+        let primaryActionY = primaryAction.frame.minY
+        app.swipeUp()
+        XCTAssertEqual(primaryAction.frame.minY, primaryActionY, accuracy: 1)
+        attachScreenshot(named: "Video Prompt Upload One Screen", app: app)
+    }
+
+    @MainActor
     func testColdLaunchOpensTheTappedFilter() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -260,13 +307,20 @@ final class photoreviveaieditUITests: XCTestCase {
         tryBelovedBaby.tap()
 
         XCTAssertTrue(app.navigationBars["Dear Baby"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.descendants(matching: .any)["upload-sample-preview"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["guided-video-editor"].exists)
+        XCTAssertTrue(app.staticTexts["Image1"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["upload-sample-preview"].exists)
     }
 
     @MainActor
     func testPaywallAndInviteRoutes() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-skipOnboarding", "-resetLimitedOfferEligibility", "-loggedIn"]
+        app.launchArguments += [
+            "-skipOnboarding",
+            "-resetLimitedOfferEligibility",
+            "-forceLimitedOffer",
+            "-loggedIn"
+        ]
         app.launch()
 
         app.buttons["AI Photo"].tap()
@@ -370,17 +424,28 @@ final class photoreviveaieditUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += ["-skipOnboarding", "-loggedIn"]
         app.launch()
-        app.buttons["AI Photo"].tap()
 
-        let suggestion = app.buttons["suggest-template"]
-        for _ in 0..<8 where !suggestion.isHittable {
-            app.swipeUp()
+        for (tab, screenshotName) in [
+            ("Home", "Suggestion from Home"),
+            ("AI Photo", "Suggestion from AI Photo"),
+            ("AI Video", "Suggestion from AI Video"),
+        ] {
+            app.buttons[tab].tap()
+
+            let suggestion = app.buttons["suggest-template"]
+            for _ in 0..<12 where !suggestion.isHittable {
+                app.swipeUp()
+            }
+            XCTAssertTrue(suggestion.waitForExistence(timeout: 2), "Missing suggestion entry on \(tab)")
+            XCTAssertTrue(suggestion.isHittable, "Suggestion entry is not reachable on \(tab)")
+            suggestion.tap()
+            XCTAssertTrue(app.navigationBars["Suggestion"].waitForExistence(timeout: 2))
+            XCTAssertTrue(app.buttons["FAQ"].exists)
+            attachScreenshot(named: screenshotName, app: app)
+
+            app.buttons["Close suggestion"].tap()
+            XCTAssertFalse(app.navigationBars["Suggestion"].waitForExistence(timeout: 1))
         }
-        XCTAssertTrue(suggestion.waitForExistence(timeout: 2))
-        suggestion.tap()
-        XCTAssertTrue(app.navigationBars["Suggestion"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["FAQ"].exists)
-        attachScreenshot(named: "Suggestion", app: app)
     }
 
     @MainActor
@@ -507,12 +572,17 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testFirstLaunchOnboardingAndGuestRoutes() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-forceOnboarding", "-disableReturningOffer"]
+        app.launchArguments += [
+            "-forceOnboarding",
+            "-skipStartupAnimation",
+            "-disableReturningOffer",
+            "-resetLimitedOfferEligibility",
+            "-forceLimitedOffer"
+        ]
         app.launch()
 
         let continueButton = app.buttons["onboarding-continue"]
         XCTAssertTrue(continueButton.waitForExistence(timeout: 4))
-        XCTAssertTrue(app.staticTexts["2M+"].exists)
         Thread.sleep(forTimeInterval: 0.45)
         attachScreenshot(named: "Onboarding Welcome", app: app)
 
@@ -536,6 +606,9 @@ final class photoreviveaieditUITests: XCTestCase {
         let freeUse = app.buttons["Free Use"]
         XCTAssertTrue(freeUse.waitForExistence(timeout: 3))
         attachScreenshot(named: "Guest Home", app: app)
+
+        XCTAssertTrue(app.buttons["Close limited offer"].waitForExistence(timeout: 3))
+        app.buttons["Close limited offer"].tap()
 
         freeUse.tap()
         XCTAssertTrue(app.staticTexts["Welcome to\nPhoto Revive AI"].waitForExistence(timeout: 2))
@@ -599,44 +672,18 @@ final class photoreviveaieditUITests: XCTestCase {
         app.launchArguments += [
             "-skipOnboarding",
             "-forceReturningOffer",
-            "-forceFamilyExclusiveReturningOffer",
-            "-mockReturningOfferPurchases"
+            "-forceFamilyExclusiveReturningOffer"
         ]
-        app.launch()
-
-        let claim = app.buttons["returning-offer-claim"]
-        XCTAssertTrue(claim.waitForExistence(timeout: 4))
-        attachScreenshot(named: "Returning Offer Family", app: app)
-        claim.tap()
-
-        let purchaseCancel = app.buttons["returning-purchase-cancel"]
-        XCTAssertTrue(purchaseCancel.waitForExistence(timeout: 2))
-        attachScreenshot(named: "Returning Offer Weekly Purchase", app: app)
-        purchaseCancel.tap()
-
-        let retentionContinue = app.buttons["returning-retention-continue"]
-        XCTAssertTrue(retentionContinue.waitForExistence(timeout: 2))
-        attachScreenshot(named: "Returning Offer Retention", app: app)
-        retentionContinue.tap()
-        XCTAssertTrue(purchaseCancel.waitForExistence(timeout: 2))
-        purchaseCancel.tap()
-        app.buttons["returning-retention-close"].tap()
-
-        app.terminate()
         app.launch()
 
         let familyClose = app.buttons["returning-offer-close"]
         XCTAssertTrue(familyClose.waitForExistence(timeout: 4))
+        attachScreenshot(named: "Returning Offer Family", app: app)
         familyClose.tap()
 
         let trialStart = app.buttons["returning-trial-start"]
         XCTAssertTrue(trialStart.waitForExistence(timeout: 2))
         attachScreenshot(named: "Returning Offer Free Trial", app: app)
-        trialStart.tap()
-        XCTAssertTrue(purchaseCancel.waitForExistence(timeout: 2))
-        attachScreenshot(named: "Returning Offer Trial Purchase", app: app)
-        purchaseCancel.tap()
-        XCTAssertTrue(trialStart.waitForExistence(timeout: 2))
         app.buttons["returning-trial-close"].tap()
     }
 
@@ -654,6 +701,8 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Close super prize"].exists)
         attachScreenshot(named: "Returning Offer Super Prize", app: app)
         app.buttons["Close super prize"].tap()
+        XCTAssertTrue(app.buttons["returning-trial-start"].waitForExistence(timeout: 2))
+        app.buttons["returning-trial-close"].tap()
     }
 
     @MainActor

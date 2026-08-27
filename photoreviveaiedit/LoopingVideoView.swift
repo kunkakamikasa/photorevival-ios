@@ -7,11 +7,13 @@ struct LoopingVideoView: UIViewRepresentable {
     let resourceName: String
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
     var aspectFitBackgroundColor: UIColor = .black
+    var videoAspectRatio: CGFloat? = nil
 
     func makeUIView(context: Context) -> LoopingPlayerUIView {
         let view = LoopingPlayerUIView()
         view.videoGravity = videoGravity
         view.aspectFitBackgroundColor = aspectFitBackgroundColor
+        view.videoAspectRatio = videoAspectRatio
         view.configure(resourceName: resourceName)
         return view
     }
@@ -19,6 +21,7 @@ struct LoopingVideoView: UIViewRepresentable {
     func updateUIView(_ uiView: LoopingPlayerUIView, context: Context) {
         uiView.videoGravity = videoGravity
         uiView.aspectFitBackgroundColor = aspectFitBackgroundColor
+        uiView.videoAspectRatio = videoAspectRatio
         uiView.play()
     }
 
@@ -88,6 +91,12 @@ final class LoopingPlayerUIView: UIView {
 
     var aspectFitBackgroundColor: UIColor = .black {
         didSet { updatePlayerBackground() }
+    }
+
+    /// When supplied, the player layer fits this source ratio without cropping
+    /// and pins the visible video to the top of the view.
+    var videoAspectRatio: CGFloat? {
+        didSet { setNeedsLayout() }
     }
 
     private func updatePlayerBackground() {
@@ -184,8 +193,35 @@ final class LoopingPlayerUIView: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        playerLayer.frame = bounds
+        playerLayer.frame = fittedVideoFrame
         CATransaction.commit()
+    }
+
+    private var fittedVideoFrame: CGRect {
+        guard let videoAspectRatio,
+              videoAspectRatio > 0,
+              bounds.width > 0,
+              bounds.height > 0 else {
+            return bounds
+        }
+
+        let availableAspectRatio = bounds.width / bounds.height
+        if videoAspectRatio >= availableAspectRatio {
+            return CGRect(
+                x: 0,
+                y: 0,
+                width: bounds.width,
+                height: bounds.width / videoAspectRatio
+            )
+        }
+
+        let fittedWidth = bounds.height * videoAspectRatio
+        return CGRect(
+            x: (bounds.width - fittedWidth) / 2,
+            y: 0,
+            width: fittedWidth,
+            height: bounds.height
+        )
     }
 
     override func didMoveToWindow() {

@@ -151,6 +151,7 @@ final class PhotoReviveAuthStore: ObservableObject {
 
         activeProvider = provider
         errorMessage = nil
+        AppAnalytics.authAttempt(method: provider.rawValue)
 
         Task {
             do {
@@ -181,19 +182,54 @@ final class PhotoReviveAuthStore: ObservableObject {
                 let userID = client.currentUserID
                 AdjustService.shared.setExternalDeviceID(userID)
                 AdjustService.shared.trackCompleteRegistration(userID: userID)
+                AppAnalytics.updateUser(userID: userID, isSignedIn: true)
+                AppAnalytics.authResult(method: provider.rawValue, result: "success")
                 await client.bindAdjustAttributionIfAvailable()
                 didAuthenticate = true
             } catch let error as PhotoReviveAuthError {
                 if case .signInCancelled = error {
                     errorMessage = nil
+                    AppAnalytics.authResult(
+                        method: provider.rawValue,
+                        result: "cancelled",
+                        failureType: "user_cancelled"
+                    )
                 } else {
                     errorMessage = error.localizedDescription
+                    AppAnalytics.authResult(
+                        method: provider.rawValue,
+                        result: "failed",
+                        failureType: analyticsFailureType(error)
+                    )
                 }
             } catch {
                 errorMessage = error.localizedDescription
+                AppAnalytics.authResult(
+                    method: provider.rawValue,
+                    result: "failed",
+                    failureType: error is URLError ? "network" : "unknown"
+                )
             }
 
             activeProvider = nil
+        }
+    }
+
+    private func analyticsFailureType(_ error: PhotoReviveAuthError) -> String {
+        switch error {
+        case .invalidResponse:
+            return "invalid_response"
+        case .signInCancelled:
+            return "user_cancelled"
+        case .missingGoogleConfiguration:
+            return "configuration"
+        case .requestFailed(let statusCode, _):
+            switch statusCode {
+            case 401, 403: return "authorization"
+            case 400..<500: return "client_error"
+            case 500..<600: return "server_error"
+            default: return "http_error"
+            }
         }
     }
 }
@@ -379,6 +415,7 @@ final class PhotoReviveAuthClient {
     func signOut() async {
         let accessToken = cachedSession?.accessToken
         clearSession()
+        AppAnalytics.signedOut()
 
         guard let accessToken, !accessToken.isEmpty else { return }
 
@@ -514,7 +551,7 @@ final class PhotoReviveAuthClient {
         guard response.success, response.app_id == PhotoReviveAPIConfig.appID else {
             throw PhotoReviveAuthError.requestFailed(
                 statusCode: 409,
-                message: "Unable to bind this account to PhotoRevive."
+                message: "Unable to bind this account to Photo Revival."
             )
         }
         boundTimeZoneIdentifier = Self.currentTimeZoneIdentifier

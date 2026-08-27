@@ -40,6 +40,7 @@ struct DiscoveryPage: View {
                     onMembership: onMembership,
                     onCredits: onCredits,
                     onGift: onGift,
+                    onSuggestion: onSuggestion,
                     onSummerOffer: onSummerOffer,
                     isSubscribed: isSubscribed,
                     isLoggedIn: isLoggedIn,
@@ -79,6 +80,7 @@ private struct HomeDiscoveryView: View {
     let onMembership: () -> Void
     let onCredits: () -> Void
     let onGift: () -> Void
+    let onSuggestion: () -> Void
     let onSummerOffer: (CMSCouponOffer) -> Void
     let isSubscribed: Bool
     let isLoggedIn: Bool
@@ -131,6 +133,9 @@ private struct HomeDiscoveryView: View {
                     }
                 }
                 .padding(.top, 24)
+
+                SuggestTemplateCallToAction(action: onSuggestion)
+                    .padding(.top, 42)
             }
             .padding(.bottom, 124)
         }
@@ -222,7 +227,7 @@ private struct StandardDiscoveryView: View {
                 }
                 .padding(.top, 24)
 
-                if tab == .photo {
+                if tab == .photo || tab == .video {
                     SuggestTemplateCallToAction(action: onSuggestion)
                         .padding(.top, 42)
                 }

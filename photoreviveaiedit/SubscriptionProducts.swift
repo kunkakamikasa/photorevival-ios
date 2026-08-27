@@ -29,26 +29,73 @@ enum SubscriptionPurchaseOutcome {
 }
 
 enum SubscriptionPurchaseService {
-    static func purchase(_ productID: SubscriptionProductID) async -> SubscriptionPurchaseOutcome {
-        await purchase(productID.rawValue)
+    static func purchase(
+        _ productID: SubscriptionProductID,
+        promotion: AppAnalytics.PromotionContext? = nil
+    ) async -> SubscriptionPurchaseOutcome {
+        await purchase(productID.rawValue, promotion: promotion)
     }
 
-    static func purchase(_ productID: String) async -> SubscriptionPurchaseOutcome {
+    static func purchase(
+        _ productID: String,
+        promotion: AppAnalytics.PromotionContext? = nil
+    ) async -> SubscriptionPurchaseOutcome {
+        if let promotion {
+            AppAnalytics.promotionSelected(promotion, productID: productID)
+        }
         do {
             let products = try await Product.products(for: [productID])
-            guard let product = products.first else { return .unavailable }
+            guard let product = products.first else {
+                AppAnalytics.subscriptionResult(
+                    productID: productID,
+                    result: "unavailable",
+                    failureStage: "product_lookup",
+                    promotion: promotion
+                )
+                return .unavailable
+            }
+
+            let value = NSDecimalNumber(decimal: product.price).doubleValue
+            let currency = product.priceFormatStyle.currencyCode
+            AppAnalytics.checkoutStarted(
+                productID: product.id,
+                value: value,
+                currency: currency,
+                productName: product.displayName,
+                promotion: promotion
+            )
 
             switch try await product.purchase() {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
+                    // StoreKit 2 purchases are handed to Firebase explicitly so
+                    // its IAP report receives the verified App Store transaction.
+                    AppAnalytics.storeTransaction(transaction)
+                    let transactionValue = transaction.price.map {
+                        NSDecimalNumber(decimal: $0).doubleValue
+                    } ?? value
+                    let transactionCurrency = transaction.currency?.identifier ?? currency
                     let serverVerification = try await PhotoReviveAPIClient.shared.verifySubscription(
                         transactionID: String(transaction.id),
                         signedTransactionInfo: verification.jwsRepresentation
                     )
                     guard serverVerification.success,
                           serverVerification.subscriptionStatus == "active" else {
+                        AppAnalytics.subscriptionResult(
+                            productID: product.id,
+                            result: "failed",
+                            failureStage: "server_activation",
+                            value: transactionValue,
+                            currency: transactionCurrency,
+                            promotion: promotion
+                        )
                         return .failed(serverVerification.message ?? "Apple confirmed the purchase, but membership activation is still pending. Please try again.")
+                    }
+                    await AppAccountStore.shared.applySubscriptionVerification(serverVerification)
+                    Task { @MainActor in
+                        await AppAccountStore.shared.refreshCredits()
+                        await AppAccountStore.shared.refreshCreditTransactions()
                     }
                     AdjustService.shared.trackSubscribe(
                         productID: product.id,
@@ -58,23 +105,67 @@ enum SubscriptionPurchaseService {
                         orderID: String(transaction.id)
                     )
                     await transaction.finish()
+                    AppAnalytics.subscriptionResult(
+                        productID: product.id,
+                        result: "purchased",
+                        value: transactionValue,
+                        currency: transactionCurrency,
+                        promotion: promotion
+                    )
                     return .purchased
                 case .unverified(_, let error):
+                    AppAnalytics.subscriptionResult(
+                        productID: product.id,
+                        result: "failed",
+                        failureStage: "store_verification",
+                        value: value,
+                        currency: currency,
+                        promotion: promotion
+                    )
                     return .failed(error.localizedDescription)
                 }
             case .userCancelled:
+                AppAnalytics.subscriptionResult(
+                    productID: product.id,
+                    result: "cancelled",
+                    value: value,
+                    currency: currency,
+                    promotion: promotion
+                )
                 return .cancelled
             case .pending:
+                AppAnalytics.subscriptionResult(
+                    productID: product.id,
+                    result: "pending",
+                    value: value,
+                    currency: currency,
+                    promotion: promotion
+                )
                 return .pending
             @unknown default:
+                AppAnalytics.subscriptionResult(
+                    productID: product.id,
+                    result: "failed",
+                    failureStage: "unknown_store_result",
+                    value: value,
+                    currency: currency,
+                    promotion: promotion
+                )
                 return .failed("Apple returned an unknown purchase result. Please try again.")
             }
         } catch {
+            AppAnalytics.subscriptionResult(
+                productID: productID,
+                result: "failed",
+                failureStage: "store_purchase",
+                promotion: promotion
+            )
             return .failed(error.localizedDescription)
         }
     }
 
     static func restore() async -> SubscriptionPurchaseOutcome {
+        AppAnalytics.restoreStarted()
         do {
             try await AppStore.sync()
             var lastVerificationError: String?
@@ -89,6 +180,12 @@ enum SubscriptionPurchaseService {
                         )
                         if serverVerification.success,
                            serverVerification.subscriptionStatus == "active" {
+                            await AppAccountStore.shared.applySubscriptionVerification(serverVerification)
+                            Task { @MainActor in
+                                await AppAccountStore.shared.refreshCredits()
+                                await AppAccountStore.shared.refreshCreditTransactions()
+                            }
+                            AppAnalytics.restoreResult("purchased")
                             return .purchased
                         }
                         lastVerificationError = serverVerification.message
@@ -101,12 +198,35 @@ enum SubscriptionPurchaseService {
             }
 
             if let lastVerificationError {
+                AppAnalytics.restoreResult(
+                    "failed",
+                    failureStage: "entitlement_verification"
+                )
                 return .failed(lastVerificationError)
             }
+            AppAnalytics.restoreResult("unavailable")
             return .unavailable
         } catch {
+            AppAnalytics.restoreResult("failed", failureStage: "store_sync")
             return .failed(error.localizedDescription)
         }
+    }
+
+    static func hasActiveStoreEntitlement(now: Date = Date()) async -> Bool {
+        for await verification in Transaction.currentEntitlements {
+            guard case .verified(let transaction) = verification,
+                  transaction.productType == .autoRenewable,
+                  transaction.revocationDate == nil else {
+                continue
+            }
+
+            if let expirationDate = transaction.expirationDate,
+               expirationDate <= now {
+                continue
+            }
+            return true
+        }
+        return false
     }
 }
 

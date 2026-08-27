@@ -10,17 +10,29 @@ struct MembershipPaywallView: View {
     @AppStorage("isLoggedIn") private var storedIsLoggedIn = false
     let onClose: (() -> Void)?
     private let isLoggedInOverride: Bool?
+    private let showsFirstLaunchVideoBackground: Bool
+    private let analyticsSource: String
     @State private var tier: MembershipTier = .pro
     @State private var billing: MembershipBilling = .annual
     @State private var isPurchasing = false
+    @State private var isRestoring = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
 
     private let designWidth: CGFloat = 430
-    private let designHeight: CGFloat = 848
+    private let designHeight: CGFloat = 862
     private let loggedInDesignHeight: CGFloat = 932
+    private let firstLaunchVideoAspectRatio: CGFloat = 1320.0 / 1170.0
+    private let firstLaunchVideoTopCrop: CGFloat = 32
 
-    init(isLoggedIn: Bool? = nil, onClose: (() -> Void)? = nil) {
+    init(
+        isLoggedIn: Bool? = nil,
+        showsFirstLaunchVideoBackground: Bool = false,
+        analyticsSource: String = "membership_entry",
+        onClose: (() -> Void)? = nil
+    ) {
         self.isLoggedInOverride = isLoggedIn
+        self.showsFirstLaunchVideoBackground = showsFirstLaunchVideoBackground
+        self.analyticsSource = analyticsSource
         self.onClose = onClose
     }
 
@@ -29,10 +41,42 @@ struct MembershipPaywallView: View {
             || ProcessInfo.processInfo.arguments.contains("-loggedIn")
     }
 
+    private var usesFirstLaunchVideoBackground: Bool {
+        showsFirstLaunchVideoBackground && !usesLoggedInPaywall
+    }
+
+    private var promotionContext: AppAnalytics.PromotionContext {
+        let variant = usesLoggedInPaywall ? "membership_signed_in" : "membership_guest"
+        return AppAnalytics.PromotionContext(
+            promotionID: variant,
+            promotionName: "membership",
+            creativeName: variant,
+            creativeSlot: analyticsSource,
+            offerVariant: tier.rawValue,
+            billingPeriod: billing.rawValue
+        )
+    }
+
+    private var paywallHeaderHeight: CGFloat {
+        usesFirstLaunchVideoBackground
+            ? designWidth / firstLaunchVideoAspectRatio
+            : 310
+    }
+
+    private var activeContentHeight: CGFloat {
+        if usesLoggedInPaywall {
+            return loggedInDesignHeight
+        }
+        guard usesFirstLaunchVideoBackground else {
+            return designHeight
+        }
+        return designHeight + paywallHeaderHeight - 310 - 58
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let scale = proxy.size.width / designWidth
-            let contentHeight = usesLoggedInPaywall ? loggedInDesignHeight : designHeight
+            let contentHeight = activeContentHeight
 
             ZStack(alignment: .topLeading) {
                 paywallBackground
@@ -58,6 +102,17 @@ struct MembershipPaywallView: View {
         }
         .ignoresSafeArea(edges: usesLoggedInPaywall ? .all : .bottom)
         .preferredColorScheme(.dark)
+        .onAppear {
+            AppAnalytics.paywallViewed(
+                variant: usesLoggedInPaywall ? "membership_signed_in" : "membership_guest",
+                source: analyticsSource,
+                productID: billing.productIdentifier(
+                    for: tier,
+                    isLoggedIn: usesLoggedInPaywall
+                ).rawValue,
+                promotion: promotionContext
+            )
+        }
         .alert(item: $purchaseAlert) { alert in
             Alert(
                 title: Text(alert.title),
@@ -70,12 +125,12 @@ struct MembershipPaywallView: View {
     private var paywallContent: some View {
         VStack(spacing: 0) {
             paywallHeader
-                .frame(width: designWidth, height: 310)
+                .frame(width: designWidth, height: paywallHeaderHeight)
 
-            Color.clear.frame(height: 58)
+            Color.clear.frame(height: usesFirstLaunchVideoBackground ? 0 : 58)
 
             benefitSection
-                .frame(width: designWidth, height: 170, alignment: .top)
+                .frame(width: designWidth, height: 184, alignment: .top)
 
             Color.clear.frame(height: 38)
 
@@ -140,16 +195,12 @@ struct MembershipPaywallView: View {
 
     private var loggedInHero: some View {
         ZStack(alignment: .top) {
-            ForEach(MembershipTier.allCases) { option in
-                Image(option.loggedInHeroAsset)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFill()
-                    .frame(width: designWidth, height: 382)
-                    .clipped()
-                    .opacity(tier == option ? 1 : 0)
-            }
-            .animation(.easeInOut(duration: 0.18), value: tier)
+            LoopingVideoView(
+                resourceName: "LoggedInPaywallBackgroundVideo",
+                videoGravity: .resizeAspectFill
+            )
+            .frame(width: designWidth, height: 382)
+            .accessibilityHidden(true)
 
             LinearGradient(
                 stops: [
@@ -173,8 +224,8 @@ struct MembershipPaywallView: View {
             .position(x: 37, y: 76)
             .accessibilityLabel("Close membership")
 
-            Button(action: showInformationAlert) {
-                Text("Restore")
+            Button(action: restorePurchases) {
+                Text(isRestoring ? "Restoring..." : "Restore")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(.white)
                     .frame(width: 82, height: 36)
@@ -182,6 +233,7 @@ struct MembershipPaywallView: View {
                     .overlay(Capsule().stroke(.white.opacity(0.78), lineWidth: 1))
             }
             .buttonStyle(.plain)
+            .disabled(isRestoring || isPurchasing)
             .position(x: 370, y: 76)
             .accessibilityLabel("Restore")
         }
@@ -269,7 +321,7 @@ struct MembershipPaywallView: View {
                 .foregroundStyle(.white)
                 .padding(.bottom, 14)
 
-            loggedInBenefitRow("Priority & ", emphasis: "800+", suffix: " Style", tier: option)
+            loggedInBenefitRow("Evolving & Customizable Styles", tier: option)
             loggedInBenefitRow("Ad-free & No Watermark", tier: option)
             loggedInBenefitRow("", emphasis: "\(option.creditDiscount)%", suffix: " OFF Lifetime Credits", tier: option)
             loggedInBenefitRow("Parallel Generations", tier: option)
@@ -373,7 +425,7 @@ struct MembershipPaywallView: View {
             .overlay(alignment: .topTrailing) {
                 if option == .annual {
                     annualDiscountBadge
-                        .offset(x: 5, y: -17)
+                        .offset(x: -12, y: -15)
                 }
             }
         }
@@ -420,7 +472,7 @@ struct MembershipPaywallView: View {
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
         .buttonStyle(TemplatePressStyle())
-        .disabled(isPurchasing)
+        .disabled(isPurchasing || isRestoring)
         .accessibilityIdentifier("membership-continue")
         .accessibilityValue(billing.productIdentifier(for: tier, isLoggedIn: true).rawValue)
     }
@@ -441,31 +493,64 @@ struct MembershipPaywallView: View {
 
     private var paywallHeader: some View {
         ZStack(alignment: .topLeading) {
-            Image(tier.mediaStripAsset)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: designWidth, height: 310)
+            if usesFirstLaunchVideoBackground {
+                Color.black
+
+                LoopingVideoView(
+                    resourceName: "FirstLaunchPaywallBackgroundVideo",
+                    videoGravity: .resizeAspectFill
+                )
+                .frame(
+                    width: designWidth,
+                    height: paywallHeaderHeight + firstLaunchVideoTopCrop
+                )
+                .offset(y: -firstLaunchVideoTopCrop)
+            } else {
+                Image(tier.mediaStripAsset)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: designWidth, height: 310)
+            }
 
             Button(action: closePaywall) {
-                Color.clear
-                    .frame(width: 48, height: 48)
-                    .contentShape(Circle())
+                if usesFirstLaunchVideoBackground {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 25, weight: .light))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.black.opacity(0.34), in: Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.78), lineWidth: 1))
+                } else {
+                    Color.clear
+                        .frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                }
             }
             .buttonStyle(.plain)
             .position(x: 37, y: 30)
             .accessibilityLabel("Close membership")
 
-            Button {
-                showInformationAlert()
-            } label: {
-                Color.clear
-                    .frame(width: 98, height: 48)
-                    .contentShape(Capsule())
+            Button(action: restorePurchases) {
+                if usesFirstLaunchVideoBackground {
+                    Text(isRestoring ? "Restoring..." : "Restore")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(.white)
+                        .frame(width: 92, height: 38)
+                        .background(.black.opacity(0.34), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.72), lineWidth: 1))
+                } else {
+                    Color.clear
+                        .frame(width: 98, height: 48)
+                        .contentShape(Capsule())
+                }
             }
             .buttonStyle(.plain)
+            .disabled(isRestoring || isPurchasing)
             .position(x: 370, y: 30)
             .accessibilityLabel("Restore")
         }
+        .frame(width: designWidth, height: paywallHeaderHeight, alignment: .top)
+        .clipped()
     }
 
     private var benefitSection: some View {
@@ -514,8 +599,8 @@ struct MembershipPaywallView: View {
 
     private var benefitPanel: some View {
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 6) {
-                benefitRow(priorityBenefitText)
+            VStack(alignment: .leading, spacing: 8) {
+                benefitRow(stylesBenefitText)
                 benefitRow(Text("Ad-free & No Watermark"))
                 benefitRow(discountBenefitText)
                 benefitRow(Text("Parallel Generations"))
@@ -544,9 +629,9 @@ struct MembershipPaywallView: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, 13)
-        .padding(.top, 41)
-        .padding(.bottom, 13)
-        .frame(width: 390, height: 148)
+        .padding(.top, 45)
+        .padding(.bottom, 9)
+        .frame(width: 390, height: 162)
         .background(
             LinearGradient(
                 colors: [Color(red: 0.20, green: 0.20, blue: 0.20), Color(red: 0.215, green: 0.215, blue: 0.215)],
@@ -566,8 +651,8 @@ struct MembershipPaywallView: View {
         }
     }
 
-    private var priorityBenefitText: Text {
-        Text("Priority & \(Text("800+").foregroundColor(tier.detailAccent).bold()) Style")
+    private var stylesBenefitText: Text {
+        Text("Evolving & Customizable Styles")
     }
 
     private var discountBenefitText: Text {
@@ -575,17 +660,20 @@ struct MembershipPaywallView: View {
     }
 
     private func benefitRow(_ title: Text) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "checkmark")
                 .font(.system(size: 15.5, weight: .black))
                 .frame(width: 16)
 
             title
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: 15.5, weight: .regular))
+                .tracking(0.1)
                 .lineLimit(1)
+                .minimumScaleFactor(0.88)
+                .allowsTightening(true)
         }
         .foregroundStyle(.white)
-        .frame(height: 19)
+        .frame(height: 21)
     }
 
     private func membershipPlanRow(_ option: MembershipBilling) -> some View {
@@ -642,7 +730,7 @@ struct MembershipPaywallView: View {
             .overlay(alignment: .topLeading) {
                 if option == .annual {
                     annualDiscountBadge
-                        .offset(x: -5, y: -17)
+                        .offset(x: 12, y: -15)
                 }
             }
         }
@@ -669,28 +757,29 @@ struct MembershipPaywallView: View {
     }
 
     private var annualDiscountBadge: some View {
-        HStack(spacing: 5) {
-            Text(tier == .pro ? "🎉" : "🔥")
-                .font(.system(size: 15.5))
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .black))
+
             Text("90% OFF")
-                .font(.system(size: 14.5, weight: .heavy))
+                .font(.system(size: 13.5, weight: .heavy))
+                .tracking(0.25)
         }
-        .foregroundStyle(.white)
-        .frame(width: 100, height: 34)
+        .foregroundStyle(Color(red: 0.29, green: 0.16, blue: 0.035))
+        .frame(width: 104, height: 30)
         .background(
             LinearGradient(
-                colors: tier.badgeGradient,
-                startPoint: .leading,
-                endPoint: .trailing
+                colors: [
+                    Color(red: 1.00, green: 0.91, blue: 0.58),
+                    Color(red: 1.00, green: 0.68, blue: 0.18),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            in: Capsule()
         )
-        .overlay(alignment: .bottomLeading) {
-            PaywallBadgeTail()
-                .fill(tier.badgeGradient[0])
-                .frame(width: 7, height: 9)
-                .offset(y: 7)
-        }
+        .overlay(Capsule().stroke(Color.white.opacity(0.42), lineWidth: 0.8))
+        .shadow(color: Color.orange.opacity(0.28), radius: 5, y: 2)
     }
 
     private var continueButton: some View {
@@ -728,7 +817,7 @@ struct MembershipPaywallView: View {
             )
         }
         .buttonStyle(TemplatePressStyle())
-        .disabled(isPurchasing)
+        .disabled(isPurchasing || isRestoring)
         .accessibilityIdentifier("membership-continue")
         .accessibilityValue(billing.productIdentifier(for: tier, isLoggedIn: usesLoggedInPaywall).rawValue)
     }
@@ -758,7 +847,10 @@ struct MembershipPaywallView: View {
         isPurchasing = true
 
         Task {
-            let outcome = await SubscriptionPurchaseService.purchase(productID)
+            let outcome = await SubscriptionPurchaseService.purchase(
+                productID,
+                promotion: promotionContext
+            )
             isPurchasing = false
 
             switch outcome {
@@ -788,9 +880,37 @@ struct MembershipPaywallView: View {
 
     private func showInformationAlert() {
         purchaseAlert = SubscriptionPurchaseAlert(
-            title: "StoreKit connection needed",
-            message: "Restore, privacy, and terms actions still need their production destinations."
+            title: "Coming Soon",
+            message: "Privacy and terms destinations still need their production URLs."
         )
+    }
+
+    private func restorePurchases() {
+        guard !isRestoring else { return }
+        isRestoring = true
+
+        Task {
+            let outcome = await SubscriptionPurchaseService.restore()
+            isRestoring = false
+
+            switch outcome {
+            case .purchased:
+                isSubscribed = true
+                dismiss()
+            case .unavailable:
+                purchaseAlert = SubscriptionPurchaseAlert(
+                    title: "No Purchases Found",
+                    message: "No active subscription was found for this Apple ID."
+                )
+            case .failed(let message):
+                purchaseAlert = SubscriptionPurchaseAlert(
+                    title: "Restore Unavailable",
+                    message: message
+                )
+            case .cancelled, .pending:
+                break
+            }
+        }
     }
 
     private func closePaywall() {
@@ -879,7 +999,7 @@ struct CreditCenterView: View {
         .tint(AppPalette.accent)
         .preferredColorScheme(.light)
         .fullScreenCover(isPresented: $showMembership) {
-            MembershipPaywallView()
+            PaywallOfferFlowView()
         }
         .task {
             await accountStore.prepareRewardSessionIfNeeded()
@@ -1634,7 +1754,7 @@ struct InviteFriendsView: View {
                         .background(AppPalette.backgroundTop, in: RoundedRectangle(cornerRadius: 10))
 
                         if let code = accountStore.referralStatus?.invitationCode {
-                            ShareLink(item: "Join me on Photo Revive AI. Use invitation code \(code) when you sign in.") {
+                            ShareLink(item: "Join me on Photo Revival. Use invitation code \(code) when you sign in.") {
                                 Label("Invite Now", systemImage: "arrow.right")
                                     .font(.headline)
                                     .foregroundStyle(.white)
@@ -1943,7 +2063,7 @@ struct SuggestionView: View {
                 dismiss()
             }
         } message: {
-            Text("Thanks for helping us improve Photo Revive AI.")
+            Text("Thanks for helping us improve Photo Revival.")
         }
         .alert(
             "Unable to send suggestion",
@@ -2014,10 +2134,6 @@ private enum MembershipTier: String, CaseIterable, Identifiable {
         self == .pro ? "PaywallProMediaStrip" : "PaywallProPlusMediaStrip"
     }
 
-    var loggedInHeroAsset: String {
-        self == .pro ? "OnboardingFusionBackground" : "OnboardingRestoreBackground"
-    }
-
     var detailAccent: Color {
         self == .pro
             ? Color(red: 1.0, green: 0.34, blue: 0.15)
@@ -2058,22 +2174,6 @@ private enum MembershipTier: String, CaseIterable, Identifiable {
             : [Color(red: 0.22, green: 0.145, blue: 0.13), Color(red: 0.22, green: 0.145, blue: 0.13)]
     }
 
-    var badgeGradient: [Color] {
-        self == .pro
-            ? [Color(red: 0.93, green: 0.25, blue: 0.17), Color(red: 1.0, green: 0.43, blue: 0.02)]
-            : [Color(red: 0.94, green: 0.24, blue: 0.16), Color(red: 0.96, green: 0.31, blue: 0.24)]
-    }
-}
-
-private struct PaywallBadgeTail: Shape {
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-            path.closeSubpath()
-        }
-    }
 }
 
 private enum MembershipBilling: String, CaseIterable, Identifiable {

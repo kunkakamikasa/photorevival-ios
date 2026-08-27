@@ -14,7 +14,7 @@ struct photoreviveaieditTests {
     @MainActor
     @Test func videoGenerationOptionsEncodeEveryUploadSetting() throws {
         let options = PhotoReviveVideoGenerationOptions(
-            resolution: "480p",
+            resolution: "540p",
             aspectRatio: "9:16",
             duration: 8,
             sound: true,
@@ -24,11 +24,49 @@ struct photoreviveaieditTests {
         let data = try JSONEncoder().encode(options)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        #expect(object["resolution"] as? String == "480p")
+        #expect(object["resolution"] as? String == "540p")
         #expect(object["aspect_ratio"] as? String == "9:16")
         #expect(object["duration"] as? Int == 8)
         #expect(object["sound"] as? Bool == true)
         #expect(object["multi_shot"] as? Bool == true)
+    }
+
+    @MainActor
+    @Test func cmsCreditPricingMatchesEveryRequestedVideoCombination() throws {
+        let json = """
+        {
+          "one_tap_restore_credits": 35,
+          "enhance_video_credits_per_second": 10,
+          "video_base_credits": 40,
+          "video_default_duration_seconds": 5,
+          "video_extra_duration_credits_per_second": 8,
+          "video_sound_credits": 20,
+          "video_multi_shot_credits": 20,
+          "video_720p_extra_credits_per_second": 4,
+          "video_1080p_extra_credits_per_second": 12,
+          "other_video_credits": 60,
+          "enhance_photo_credits": 30,
+          "image_to_image_credits": 30,
+          "text_to_image_credits": 30,
+          "other_image_credits": 30,
+          "default_video_resolution": "540p",
+          "default_video_sound": false,
+          "default_video_multi_shot": false
+        }
+        """
+        let pricing = try JSONDecoder().decode(AppCreditPricing.self, from: Data(json.utf8))
+
+        #expect(pricing.videoGenerationCredits(duration: 5, resolution: "540p", sound: false, multiShot: false) == 40)
+        #expect(pricing.videoGenerationCredits(duration: 8, resolution: "540p", sound: false, multiShot: false) == 64)
+        #expect(pricing.videoGenerationCredits(duration: 10, resolution: "540p", sound: false, multiShot: false) == 80)
+        #expect(pricing.videoGenerationCredits(duration: 5, resolution: "720p", sound: false, multiShot: false) == 60)
+        #expect(pricing.videoGenerationCredits(duration: 5, resolution: "1080p", sound: true, multiShot: true) == 140)
+        #expect(pricing.videoGenerationCredits(duration: 8, resolution: "720p", sound: false, multiShot: false) == 96)
+        #expect(pricing.videoGenerationCredits(duration: 8, resolution: "1080p", sound: false, multiShot: false) == 160)
+        #expect(pricing.videoEnhancementCredits(duration: 8.1) == 90)
+        #expect(pricing.otherVideoCredits == 60)
+        #expect(pricing.imageToImageCredits == 30)
+        #expect(pricing.textToImageCredits == 30)
     }
 
     @Test func cmsFixedFeatureRegistryMapsAllEightDestinationsExactly() throws {
@@ -322,39 +360,28 @@ struct photoreviveaieditTests {
 
     @Test func returningOfferEligibility() {
         #expect(!ReturningOfferEligibility.shouldPresent(
-            hasOpenedMainExperience: false,
+            isReturningSession: false,
             isSubscribed: false,
-            isLoggedIn: true,
             arguments: []
         ))
         #expect(ReturningOfferEligibility.shouldPresent(
-            hasOpenedMainExperience: true,
+            isReturningSession: true,
             isSubscribed: false,
-            isLoggedIn: true,
             arguments: []
         ))
         #expect(!ReturningOfferEligibility.shouldPresent(
-            hasOpenedMainExperience: true,
-            isSubscribed: false,
-            isLoggedIn: false,
-            arguments: []
-        ))
-        #expect(!ReturningOfferEligibility.shouldPresent(
-            hasOpenedMainExperience: true,
+            isReturningSession: true,
             isSubscribed: true,
-            isLoggedIn: true,
             arguments: []
         ))
         #expect(ReturningOfferEligibility.shouldPresent(
-            hasOpenedMainExperience: false,
+            isReturningSession: false,
             isSubscribed: false,
-            isLoggedIn: false,
             arguments: ["-forceReturningOffer"]
         ))
         #expect(!ReturningOfferEligibility.shouldPresent(
-            hasOpenedMainExperience: true,
+            isReturningSession: true,
             isSubscribed: false,
-            isLoggedIn: true,
             arguments: ["-skipOnboarding"]
         ))
     }
@@ -379,14 +406,52 @@ struct photoreviveaieditTests {
     @Test func returningOfferVariantSelection() {
         #expect(ReturningOfferVariant.select(
             arguments: ["-forceSuperPrizeReturningOffer"],
-            randomValue: false
+            limitedTimeAvailable: true,
+            randomIndex: 0
         ) == .superPrize)
         #expect(ReturningOfferVariant.select(
             arguments: ["-forceFamilyExclusiveReturningOffer"],
-            randomValue: true
+            limitedTimeAvailable: true,
+            randomIndex: 2
         ) == .familyExclusive)
-        #expect(ReturningOfferVariant.select(arguments: [], randomValue: true) == .superPrize)
-        #expect(ReturningOfferVariant.select(arguments: [], randomValue: false) == .familyExclusive)
+        #expect(ReturningOfferVariant.select(
+            arguments: [],
+            limitedTimeAvailable: true,
+            randomIndex: 0
+        ) == .familyExclusive)
+        #expect(ReturningOfferVariant.select(
+            arguments: [],
+            limitedTimeAvailable: true,
+            randomIndex: 1
+        ) == .superPrize)
+        #expect(ReturningOfferVariant.select(
+            arguments: [],
+            limitedTimeAvailable: true,
+            randomIndex: 2
+        ) == .limitedTime)
+        #expect(ReturningOfferVariant.select(
+            arguments: [],
+            limitedTimeAvailable: false,
+            randomIndex: 2
+        ) == .familyExclusive)
+    }
+
+    @Test func paywallFollowUpSelectionRespectsDailyLimitedOffer() {
+        #expect(PaywallFollowUpOffer.select(
+            limitedTimeAvailable: true,
+            arguments: [],
+            randomValue: true
+        ) == .limitedTime)
+        #expect(PaywallFollowUpOffer.select(
+            limitedTimeAvailable: true,
+            arguments: [],
+            randomValue: false
+        ) == .threeDayTrial)
+        #expect(PaywallFollowUpOffer.select(
+            limitedTimeAvailable: false,
+            arguments: [],
+            randomValue: true
+        ) == .threeDayTrial)
     }
 
     @Test func limitedOfferIsDaily() {
@@ -447,6 +512,25 @@ struct photoreviveaieditTests {
         #expect(status.creditsBalance == 735)
         #expect(status.subscriptionStatus == "active")
         #expect(status.isAnonymous == false)
+    }
+
+    @MainActor
+    @Test func subscriptionVerificationImmediatelyUpdatesDisplayedCredits() {
+        let store = AppAccountStore()
+        let verification = SubscriptionVerificationResult(
+            success: true,
+            subscriptionStatus: "active",
+            subscriptionExpireAt: nil,
+            planType: "pro_weekly",
+            creditsBalance: 400,
+            creditsGranted: 400,
+            message: nil
+        )
+
+        store.applySubscriptionVerification(verification)
+
+        #expect(store.creditsBalance == 400)
+        #expect(store.hasLoadedCredits)
     }
 
     @MainActor

@@ -28,8 +28,10 @@ private struct SettingsNotice: Identifiable {
 struct SettingsView: View {
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var destination: SettingsDestination?
     @State private var notice: SettingsNotice?
+    @State private var isRestoring = false
 
     var body: some View {
         ZStack {
@@ -43,12 +45,15 @@ struct SettingsView: View {
 
                     VStack(spacing: 6) {
                         SettingsRow(title: "Credit Detail", action: { destination = .creditDetail })
-                        SettingsRow(title: "Restore", action: { showNotice("Restore", "Your purchases will be restored when StoreKit products are connected.") })
+                        SettingsRow(
+                            title: isRestoring ? "Restoring..." : "Restore",
+                            action: { restorePurchases() }
+                        )
                         SettingsRow(title: "Language", value: "English", action: { showNotice("Language", "English is the only language currently available.") })
                         SettingsRow(title: "FAQ", action: { showNotice("FAQ", "Find answers about credits, generations and subscriptions here.") })
                         SettingsRow(title: "Referral Code", action: { destination = .referral })
                         SettingsRow(title: "Feedback", action: { destination = .feedback })
-                        SettingsRow(title: "Rate us", action: { showNotice("Rate us", "Thanks for helping Photo Revive AI grow.") })
+                        SettingsRow(title: "Rate us", action: { showNotice("Rate us", "Thanks for helping Photo Revival grow.") })
                         SettingsRow(title: "Terms of Service", action: { showNotice("Terms of Service", "Terms of Service will open here when the production URL is connected.") })
                         SettingsRow(title: "Privacy Policy", action: { showNotice("Privacy Policy", "Privacy Policy will open here when the production URL is connected.") })
                         SettingsRow(title: "Version", value: "1.8.9", action: nil)
@@ -83,7 +88,7 @@ struct SettingsView: View {
             case .feedback:
                 FeedbackView()
             case .membership:
-                MembershipPaywallView()
+                PaywallOfferFlowView()
             case .referral:
                 NavigationStack {
                     InviteFriendsView(credits: $credits)
@@ -164,6 +169,27 @@ struct SettingsView: View {
 
     private func showNotice(_ title: String, _ message: String) {
         notice = SettingsNotice(title: title, message: message)
+    }
+
+    private func restorePurchases() {
+        guard !isRestoring else { return }
+        isRestoring = true
+
+        Task {
+            let outcome = await SubscriptionPurchaseService.restore()
+            isRestoring = false
+            switch outcome {
+            case .purchased:
+                isSubscribed = true
+                showNotice("Restore Complete", "Your active subscription has been restored.")
+            case .unavailable:
+                showNotice("No Purchases Found", "No active subscription was found for this Apple ID.")
+            case .failed(let message):
+                showNotice("Restore Unavailable", message)
+            case .cancelled, .pending:
+                break
+            }
+        }
     }
 }
 
@@ -317,7 +343,7 @@ struct CreditDetailView: View {
         }
         .preferredColorScheme(.light)
         .fullScreenCover(isPresented: $showMembership) {
-            MembershipPaywallView()
+            PaywallOfferFlowView()
         }
         .alert("FAQ", isPresented: $showFAQ) {
             Button("OK", role: .cancel) {}
@@ -601,7 +627,7 @@ struct FeedbackView: View {
         .alert("Feedback sent", isPresented: $showSent) {
             Button("Done") { dismiss() }
         } message: {
-            Text("Thanks for helping us improve Photo Revive AI.")
+            Text("Thanks for helping us improve Photo Revival.")
         }
     }
 
