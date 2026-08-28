@@ -1,0 +1,26 @@
+#!/bin/sh
+
+blocked=0
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+if [ ! -f "$root/.codex/release.lock" ]; then
+  echo "拒绝推送：当前不是验收/发布窗口。"
+  echo "普通开发窗口只保存本地改动；请在验收任务中统一审计和推送。"
+  exit 1
+fi
+
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      echo "拒绝推送：$remote_ref 是受保护分支，只能通过 Pull Request 合并。"
+      blocked=1
+      ;;
+  esac
+done
+
+if [ "$blocked" -ne 0 ]; then
+  echo "本地安全钩子已阻止这次操作，线上代码没有变化。"
+  exit 1
+fi
+
+exit 0
