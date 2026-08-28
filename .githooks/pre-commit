@@ -1,0 +1,20 @@
+#!/bin/sh
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+case "$branch" in
+  main|master)
+    echo "拒绝提交：当前位于受保护分支 $branch。"
+    echo "请先创建功能分支（例如 codex/功能名），再提交改动。"
+    exit 1
+    ;;
+esac
+
+if [ ! -f "$root/.codex/release.lock" ]; then
+  echo "拒绝提交：当前不是验收/发布窗口。"
+  echo "请新建验收任务并让 Codex 先完成改动审计和验收冻结。"
+  exit 1
+fi
+
+exit 0

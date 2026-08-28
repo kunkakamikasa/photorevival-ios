@@ -17,7 +17,11 @@ xcuserdata/
 
 # Local audits and Supabase CLI linkage
 /artifacts/
-/supabase/.temp/
+/supabase/
+/AppStoreReviewAssets/
+/docs/retired-assets/
+/.codex/release.lock
+/.codex/deploy.authorization*
 
 # Local signing identity (contains private key material)
 /selfIdentity.plist

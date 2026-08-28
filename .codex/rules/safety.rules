@@ -1,0 +1,161 @@
+# 对外部状态有影响的命令必须由用户在 Codex 界面中再次批准。
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "推送会改变远程仓库。只推功能分支；main 必须走 Pull Request。",
+    match = [
+        "git push",
+        "git push -u origin codex/example",
+        "git push origin main",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "merge"],
+    decision = "prompt",
+    justification = "合并 Pull Request 可能触发线上流程，必须由用户明确确认。",
+    match = [
+        "gh pr merge 123",
+        "gh pr merge 123 --squash",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", "functions", "deploy"],
+    decision = "forbidden",
+    justification = "iOS 仓库不是后端发布源；请切换到主服务端仓库走其受控流程。",
+    match = [
+        "supabase functions deploy",
+        "supabase functions deploy image-to-video",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", "db", "push"],
+    decision = "forbidden",
+    justification = "iOS 仓库不是后端发布源，禁止从这里推送数据库。",
+    match = [
+        "supabase db push",
+        "supabase db push --linked",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", "migration", "up"],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止执行远程 migration。",
+    match = [
+        "supabase migration up --linked",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", "db"],
+    decision = "forbidden",
+    justification = "iOS 仓库不是后端发布源，禁止从这里执行数据库命令。",
+    match = [
+        "supabase db push",
+        "supabase db reset --linked",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", "migration"],
+    decision = "forbidden",
+    justification = "iOS 仓库不是后端发布源，禁止从这里执行 migration。",
+    match = [
+        "supabase migration up --linked",
+        "supabase migration repair 20260828050000 --status applied",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", "secrets"],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止修改服务端生产密钥。",
+    match = [
+        "supabase secrets set API_KEY=value",
+        "supabase secrets unset API_KEY",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", ["link", "unlink"]],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止连接或切换生产 Supabase 项目。",
+    match = [
+        "supabase link --project-ref example",
+        "supabase unlink",
+    ],
+)
+
+prefix_rule(
+    pattern = ["supabase", ["branches", "projects"]],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止管理远程 Supabase 资源。",
+    match = [
+        "supabase branches create staging",
+        "supabase projects delete example",
+    ],
+)
+
+prefix_rule(
+    pattern = [["bunx", "npx"], "supabase"],
+    decision = "prompt",
+    justification = "通过包执行器运行 Supabase 命令可能修改线上环境，必须由用户确认。",
+    match = [
+        "bunx supabase functions deploy image-to-video",
+        "npx supabase db push",
+    ],
+)
+
+prefix_rule(
+    pattern = [["bunx", "npx"], "supabase", "functions", "deploy"],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止通过包执行器部署服务端函数。",
+    match = [
+        "bunx supabase functions deploy image-to-video",
+        "npx supabase functions deploy image-to-video",
+    ],
+)
+
+prefix_rule(
+    pattern = [["bunx", "npx"], "supabase", "db", "push"],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止通过包执行器推送数据库。",
+    match = [
+        "bunx supabase db push",
+        "npx supabase db push",
+    ],
+)
+
+prefix_rule(
+    pattern = ["pnpm", ["dlx", "exec"], "supabase"],
+    decision = "prompt",
+    justification = "通过 pnpm 运行 Supabase 命令可能修改线上环境，必须由用户确认。",
+    match = [
+        "pnpm dlx supabase functions deploy",
+        "pnpm exec supabase db push",
+    ],
+)
+
+prefix_rule(
+    pattern = ["pnpm", ["dlx", "exec"], "supabase", "functions", "deploy"],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止通过 pnpm 部署服务端函数。",
+    match = [
+        "pnpm dlx supabase functions deploy image-to-video",
+        "pnpm exec supabase functions deploy image-to-video",
+    ],
+)
+
+prefix_rule(
+    pattern = ["pnpm", ["dlx", "exec"], "supabase", "db", "push"],
+    decision = "forbidden",
+    justification = "iOS 仓库禁止通过 pnpm 推送数据库。",
+    match = [
+        "pnpm dlx supabase db push",
+        "pnpm exec supabase db push",
+    ],
+)
