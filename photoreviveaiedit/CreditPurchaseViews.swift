@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// The display catalog is intentionally separate from StoreKit configuration.
-/// Add the consumable Product IDs here when they are available, then inject the
-/// production purchase handler into `CreditStoreView` and `CreditExitOfferView`.
 struct CreditPack: Identifiable, Hashable {
     let id: String
     let credits: Int
@@ -16,42 +13,41 @@ struct CreditPack: Identifiable, Hashable {
 }
 
 enum CreditProductCatalog {
-    // TODO: Replace nil with the App Store consumable Product IDs.
-    static let starterProductID: String? = nil
-    static let creatorProductID: String? = nil
-    static let studioProductID: String? = nil
-    static let exitOfferProductID: String? = nil
-    static let subscriberReturn1600ProductID: String? = nil
+    static let starterProductID: String? = "basic300credits"
+    static let creatorProductID: String? = "basic900credits"
+    static let studioProductID: String? = "basic1400credits"
+    static let exitOfferProductID: String? = "callback377"
+    static let subscriberReturn1600ProductID: String? = "surprise1600credits"
 
     static let packs: [CreditPack] = [
         CreditPack(
             id: "starter",
-            credits: 250,
-            displayPrice: "$6.99",
+            credits: 300,
+            displayPrice: "—",
             productID: starterProductID,
             badge: nil
         ),
         CreditPack(
             id: "creator",
-            credits: 700,
-            displayPrice: "$14.99",
+            credits: 900,
+            displayPrice: "—",
             productID: creatorProductID,
             badge: "MOST POPULAR"
         ),
         CreditPack(
             id: "studio",
-            credits: 1_200,
-            displayPrice: "$24.99",
+            credits: 1_400,
+            displayPrice: "—",
             productID: studioProductID,
             badge: "BEST VALUE"
         )
     ]
 
-    static let exitOfferBonus = 80
+    static let exitOfferBonus = 77
     static let exitOfferPack = CreditPack(
         id: "starter-exit-offer",
-        credits: 330,
-        displayPrice: "$6.99",
+        credits: 377,
+        displayPrice: "—",
         productID: exitOfferProductID,
         badge: nil
     )
@@ -59,7 +55,7 @@ enum CreditProductCatalog {
     static let subscriberReturnOffer = CreditPack(
         id: "subscriber-return-1600",
         credits: 1_600,
-        displayPrice: "$29.99",
+        displayPrice: "—",
         productID: subscriberReturn1600ProductID,
         badge: "SUBSCRIBER EXCLUSIVE"
     )
@@ -68,11 +64,14 @@ enum CreditProductCatalog {
 struct CreditStoreView: View {
     let onClose: () -> Void
     var onPurchase: ((CreditPack) -> Void)?
+    var onPurchased: ((Int) -> Void)?
 
     @State private var selectedPackID = "creator"
-    @State private var offerEndsAt = Date.now.addingTimeInterval(15 * 60)
+    @StateObject private var priceStore = StoreProductPriceStore.shared
     @State private var showDetails = false
-    @State private var showProductNotice = false
+    @State private var isPurchasing = false
+    @State private var purchaseAlert: CreditPurchaseAlert?
+    @State private var purchaseTask: Task<Void, Never>?
 
     private var selectedPack: CreditPack {
         CreditProductCatalog.packs.first { $0.id == selectedPackID }
@@ -112,11 +111,8 @@ struct CreditStoreView: View {
                         packPicker
                             .padding(.top, 32)
 
-                        offerClock
-                            .padding(.top, 30)
-
                         purchaseButton
-                            .padding(.top, 26)
+                            .padding(.top, 30)
 
                         HStack(spacing: 7) {
                             Image(systemName: "checkmark.shield.fill")
@@ -141,16 +137,26 @@ struct CreditStoreView: View {
         } message: {
             Text("Credits can be used for photo and video creations. Purchased credits do not expire and are used after recurring credits.")
         }
-        .alert("Products coming next", isPresented: $showProductNotice) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("This purchase layout is ready. Add the consumable Product IDs to CreditProductCatalog to connect App Store checkout.")
+        .alert(item: $purchaseAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .onDisappear {
+            purchaseTask?.cancel()
+        }
+        .task {
+            await priceStore.load(
+                productIDs: CreditProductCatalog.packs.compactMap(\.productID)
+            )
         }
     }
 
     private var topBar: some View {
         HStack {
-            Button(action: onClose) {
+            Button(action: cancelPurchaseAndClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
@@ -191,6 +197,7 @@ struct CreditStoreView: View {
             ForEach(CreditProductCatalog.packs) { pack in
                 CreditPackCard(
                     pack: pack,
+                    displayPrice: displayedPrice(for: pack),
                     isSelected: selectedPackID == pack.id
                 ) {
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
@@ -202,42 +209,20 @@ struct CreditStoreView: View {
         .padding(.horizontal, 15)
     }
 
-    private var offerClock: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            let parts = countdownParts(at: timeline.date)
-            VStack(spacing: 10) {
-                Text("TODAY'S PACK PRICES END IN")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(1.7)
-                    .foregroundStyle(.white.opacity(0.68))
-
-                HStack(spacing: 8) {
-                    CreditCountdownCell(value: parts.minutes, label: "MIN")
-                    Text(":")
-                        .font(.system(size: 26, weight: .black, design: .rounded))
-                        .foregroundStyle(CreditStorePalette.gold)
-                        .offset(y: -7)
-                    CreditCountdownCell(value: parts.seconds, label: "SEC")
-                }
-            }
-        }
-        .accessibilityIdentifier("credit-offer-countdown")
-    }
-
     private var purchaseButton: some View {
         Button {
             if let onPurchase {
                 onPurchase(selectedPack)
             } else {
-                showProductNotice = true
+                beginPurchase(selectedPack)
             }
         } label: {
             HStack {
                 Spacer()
                 VStack(spacing: 1) {
-                    Text("Get \(selectedPack.creditsLabel) credits")
+                    Text(isPurchasing ? "Connecting..." : "Get \(selectedPack.creditsLabel) credits")
                         .font(.system(size: 20, weight: .black))
-                    Text(selectedPack.displayPrice)
+                    Text(displayedPrice(for: selectedPack))
                         .font(.system(size: 12, weight: .bold))
                         .opacity(0.78)
                 }
@@ -259,24 +244,62 @@ struct CreditStoreView: View {
             .shadow(color: CreditStorePalette.gold.opacity(0.32), radius: 18, y: 8)
         }
         .buttonStyle(TemplatePressStyle())
+        .disabled(isPurchasing)
         .padding(.horizontal, 20)
         .accessibilityIdentifier("credit-store-continue")
     }
 
-    private func countdownParts(at date: Date) -> (minutes: String, seconds: String) {
-        let remaining = max(Int(offerEndsAt.timeIntervalSince(date)), 0)
-        return (
-            String(format: "%02d", remaining / 60),
-            String(format: "%02d", remaining % 60)
-        )
+    private func displayedPrice(for pack: CreditPack) -> String {
+        priceStore.displayPrice(for: pack.productID, fallback: pack.displayPrice)
+    }
+
+    private func beginPurchase(_ pack: CreditPack) {
+        guard !isPurchasing else { return }
+        isPurchasing = true
+        purchaseTask = Task {
+            let outcome = await CreditPurchaseService.purchase(
+                pack,
+                promotion: CreditPurchasePromotion.store(pack: pack)
+            )
+            guard !Task.isCancelled else { return }
+            isPurchasing = false
+            switch outcome {
+            case .purchased(let credits):
+                onPurchased?(credits)
+            case .cancelled:
+                break
+            case .pending:
+                purchaseAlert = CreditPurchaseAlert(
+                    title: "Purchase pending",
+                    message: "Apple is still processing this purchase. Your credits will be added after confirmation."
+                )
+            case .unavailable:
+                purchaseAlert = CreditPurchaseAlert(
+                    title: "Product unavailable",
+                    message: "This credit pack is not currently available from the App Store."
+                )
+            case .failed(let message):
+                purchaseAlert = CreditPurchaseAlert(title: "Purchase unavailable", message: message)
+            }
+        }
+    }
+
+    private func cancelPurchaseAndClose() {
+        purchaseTask?.cancel()
+        isPurchasing = false
+        onClose()
     }
 }
 
 struct CreditExitOfferView: View {
     let onClose: () -> Void
     var onClaim: ((CreditPack) -> Void)?
+    var onPurchased: ((Int) -> Void)?
 
-    @State private var showProductNotice = false
+    @State private var isPurchasing = false
+    @State private var purchaseAlert: CreditPurchaseAlert?
+    @State private var purchaseTask: Task<Void, Never>?
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     var body: some View {
         GeometryReader { proxy in
@@ -293,16 +316,16 @@ struct CreditExitOfferView: View {
                         offerContent
                     }
                     .scrollIndicators(.hidden)
-                    .frame(maxHeight: min(proxy.size.height - 62, 690))
+                    .frame(maxHeight: min(proxy.size.height - 62, 610))
                     .background(
                         LinearGradient(
                             stops: [
-                                .init(color: Color(red: 0.45, green: 0.12, blue: 0.94), location: 0),
-                                .init(color: Color(red: 0.28, green: 0.06, blue: 0.66), location: 0.56),
-                                .init(color: Color(red: 0.12, green: 0.03, blue: 0.34), location: 1)
+                                .init(color: Color(red: 0.38, green: 0.05, blue: 0.95), location: 0),
+                                .init(color: Color(red: 0.30, green: 0.04, blue: 0.73), location: 0.50),
+                                .init(color: Color(red: 0.13, green: 0.02, blue: 0.39), location: 1)
                             ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                            startPoint: .top,
+                            endPoint: .bottom
                         ),
                         in: RoundedRectangle(cornerRadius: 30, style: .continuous)
                     )
@@ -311,92 +334,126 @@ struct CreditExitOfferView: View {
                             .stroke(.white.opacity(0.16), lineWidth: 1)
                     )
                     .shadow(color: .black.opacity(0.38), radius: 28, y: 16)
-                    .overlay(alignment: .topTrailing) {
-                        Button(action: onClose) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 46, height: 46)
-                                .background(.black.opacity(0.32), in: Circle())
-                                .overlay(Circle().stroke(.white.opacity(0.48), lineWidth: 1))
-                        }
-                        .buttonStyle(TemplatePressStyle())
-                        .accessibilityLabel("Close bonus offer")
-                        .accessibilityIdentifier("credit-exit-offer-close")
-                        .offset(x: -12, y: 12)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, max(proxy.safeAreaInsets.bottom, 10))
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, -max(proxy.safeAreaInsets.bottom - 8, 0))
                 }
+
+                Button(action: cancelPurchaseAndClose) {
+                    ZStack {
+                        Color.clear
+
+                        Image(systemName: "xmark")
+                            .font(.system(size: 23, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 50, height: 50)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .background(.white.opacity(0.16), in: Circle())
+                            .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1.2))
+                            .shadow(color: .black.opacity(0.34), radius: 8, y: 3)
+                    }
+                    .frame(width: 70, height: 70)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close bonus offer")
+                .accessibilityIdentifier("credit-exit-offer-close")
+                .position(
+                    x: proxy.size.width - 43,
+                    y: max(35, proxy.size.height - min(proxy.size.height - 62, 610) - 8)
+                )
+                .zIndex(100)
             }
         }
         .preferredColorScheme(.dark)
         .accessibilityIdentifier("credit-exit-offer")
-        .alert("Products coming next", isPresented: $showProductNotice) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("The bonus offer is ready for its consumable Product ID. Checkout will be connected when that ID is provided.")
+        .alert(item: $purchaseAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .onDisappear {
+            purchaseTask?.cancel()
+        }
+        .task {
+            await priceStore.load(
+                productIDs: [CreditProductCatalog.exitOfferPack.productID].compactMap { $0 }
+            )
         }
     }
 
     private var offerContent: some View {
         VStack(spacing: 0) {
-            Text("A little extra for you")
-                .font(.system(size: 29, weight: .black, design: .rounded))
+            Text("Wait! Don't Miss This 🎁")
+                .font(.system(size: 31, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 52)
-                .padding(.top, 43)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .padding(.horizontal, 28)
+                .padding(.top, 42)
 
-            Text("Get \(CreditProductCatalog.exitOfferBonus) bonus credits with the starter pack today")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.white.opacity(0.82))
+            (
+                Text("Enjoy ")
+                    .foregroundColor(.white.opacity(0.88))
+                + Text("\(CreditProductCatalog.exitOfferBonus) bonus credits")
+                    .foregroundColor(Color(red: 1.00, green: 0.79, blue: 0.16))
+                    .fontWeight(.bold)
+                + Text(" with your\npurchase today")
+                    .foregroundColor(.white.opacity(0.88))
+            )
+                .font(.system(size: 18, weight: .medium))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 44)
-                .padding(.top, 10)
+                .lineSpacing(2)
+                .padding(.horizontal, 34)
+                .padding(.top, 15)
 
             CreditGiftArtwork(bonus: CreditProductCatalog.exitOfferBonus)
-                .frame(height: 245)
-                .padding(.top, 2)
+                .frame(height: 235)
+                .padding(.top, 1)
 
             HStack(spacing: 12) {
                 Image("RewardsCreditToken")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 42, height: 42)
+                    .frame(width: 43, height: 43)
 
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("330")
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("377")
                         .font(.system(size: 28, weight: .black, design: .rounded))
-                    Text("credits total")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.70))
+                    Text("credits")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.82))
                 }
 
                 Spacer()
 
-                Text(CreditProductCatalog.exitOfferPack.displayPrice)
+                Text(priceStore.displayPrice(
+                    for: CreditProductCatalog.exitOfferPack.productID,
+                    fallback: CreditProductCatalog.exitOfferPack.displayPrice
+                ))
                     .font(.system(size: 26, weight: .black, design: .rounded))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 19)
-            .frame(height: 78)
+            .padding(.horizontal, 18)
+            .frame(height: 64)
             .overlay(
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .stroke(.white.opacity(0.86), lineWidth: 2)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.white.opacity(0.95), lineWidth: 2.2)
             )
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 19)
 
             Button {
                 if let onClaim {
                     onClaim(CreditProductCatalog.exitOfferPack)
                 } else {
-                    showProductNotice = true
+                    beginPurchase()
                 }
             } label: {
                 HStack {
                     Spacer()
-                    Text("Claim bonus pack")
+                    Text(isPurchasing ? "Connecting..." : "Claim My Bonus")
                         .font(.system(size: 20, weight: .black))
                     Spacer()
                     Image(systemName: "arrow.right")
@@ -404,7 +461,7 @@ struct CreditExitOfferView: View {
                 }
                 .foregroundStyle(CreditStorePalette.buttonInk)
                 .padding(.horizontal, 21)
-                .frame(height: 61)
+                .frame(height: 54)
                 .background(
                     LinearGradient(
                         colors: [Color(red: 1.00, green: 0.87, blue: 0.40), Color(red: 1.00, green: 0.55, blue: 0.04)],
@@ -415,17 +472,63 @@ struct CreditExitOfferView: View {
                 )
             }
             .buttonStyle(TemplatePressStyle())
+            .disabled(isPurchasing)
             .accessibilityIdentifier("credit-exit-offer-claim")
-            .padding(.horizontal, 22)
-            .padding(.top, 23)
+            .padding(.horizontal, 20)
+            .padding(.top, 40)
 
-            Text("Pay once. Credits never expire.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.68))
-                .padding(.top, 13)
-                .padding(.bottom, 24)
+            Text("Pay once, never expire.")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.90))
+                .padding(.top, 16)
+                .padding(.bottom, 22)
         }
     }
+
+    private func beginPurchase() {
+        guard !isPurchasing else { return }
+        isPurchasing = true
+        let pack = CreditProductCatalog.exitOfferPack
+        purchaseTask = Task {
+            let outcome = await CreditPurchaseService.purchase(
+                pack,
+                promotion: CreditPurchasePromotion.callback377
+            )
+            guard !Task.isCancelled else { return }
+            isPurchasing = false
+            switch outcome {
+            case .purchased(let credits):
+                onPurchased?(credits)
+                onClose()
+            case .cancelled:
+                break
+            case .pending:
+                purchaseAlert = CreditPurchaseAlert(
+                    title: "Purchase pending",
+                    message: "Apple is still processing this purchase. Your credits will be added after confirmation."
+                )
+            case .unavailable:
+                purchaseAlert = CreditPurchaseAlert(
+                    title: "Product unavailable",
+                    message: "The 377-credit callback offer is not currently available from the App Store."
+                )
+            case .failed(let message):
+                purchaseAlert = CreditPurchaseAlert(title: "Purchase unavailable", message: message)
+            }
+        }
+    }
+
+    private func cancelPurchaseAndClose() {
+        purchaseTask?.cancel()
+        isPurchasing = false
+        onClose()
+    }
+}
+
+private struct CreditPurchaseAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
 
 private enum CreditStorePalette {
@@ -438,13 +541,12 @@ private struct CreditStoreBackground: View {
 
     var body: some View {
         ZStack {
-            Image("MemoryPortrait")
-                .resizable()
-                .scaledToFill()
+            Color(red: 0.03, green: 0.04, blue: 0.10)
+
+            LoopingVideoView(resourceName: "CreditStoreBackgroundVideo")
                 .frame(width: size.width, height: size.height)
                 .clipped()
-                .saturation(0.28)
-                .contrast(1.08)
+                .allowsHitTesting(false)
 
             LinearGradient(
                 stops: [
@@ -480,6 +582,7 @@ private struct CreditStoreBackground: View {
 
 private struct CreditPackCard: View {
     let pack: CreditPack
+    let displayPrice: String
     let isSelected: Bool
     let action: () -> Void
 
@@ -506,7 +609,7 @@ private struct CreditPackCard: View {
                     .tracking(1.3)
                     .foregroundStyle(.white.opacity(0.54))
 
-                Text(pack.displayPrice)
+                Text(displayPrice)
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(isSelected ? CreditStorePalette.gold : .white.opacity(0.82))
                     .padding(.top, 3)
@@ -534,32 +637,9 @@ private struct CreditPackCard: View {
             }
         }
         .buttonStyle(TemplatePressStyle())
-        .accessibilityLabel("\(pack.credits) credits for \(pack.displayPrice)")
+        .accessibilityLabel("\(pack.credits) credits for \(displayPrice)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("credit-pack-\(pack.id)")
-    }
-}
-
-private struct CreditCountdownCell: View {
-    let value: String
-    let label: String
-
-    var body: some View {
-        VStack(spacing: 3) {
-            Text(value)
-                .font(.system(size: 25, weight: .black, design: .monospaced))
-                .foregroundStyle(CreditStorePalette.gold)
-                .frame(width: 66, height: 48)
-                .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(CreditStorePalette.gold.opacity(0.64), lineWidth: 1)
-                )
-            Text(label)
-                .font(.system(size: 8, weight: .bold))
-                .tracking(1)
-                .foregroundStyle(.white.opacity(0.48))
-        }
     }
 }
 
@@ -568,92 +648,71 @@ private struct CreditGiftArtwork: View {
 
     var body: some View {
         ZStack {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [.white.opacity(0.25), Color.purple.opacity(0.22), .clear],
-                        center: .center,
-                        startRadius: 8,
-                        endRadius: 128
-                    )
+            Image("CallbackBonusGift")
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .frame(height: 235)
+                .offset(y: 10)
+
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [Color(red: 0.39, green: 0.05, blue: 0.93), .clear],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
-                .frame(width: 260, height: 260)
+                .frame(height: 22)
 
-            sparkle("sparkles", x: -128, y: -45, size: 30)
-            sparkle("star.fill", x: 132, y: -78, size: 16)
-            sparkle("sparkle", x: 122, y: 70, size: 25)
+                Spacer(minLength: 0)
 
-            Image("RewardsCreditToken")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 58, height: 58)
-                .rotationEffect(.degrees(-18))
-                .offset(x: -118, y: 60)
-
-            Image("RewardsCreditToken")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 45, height: 45)
-                .rotationEffect(.degrees(21))
-                .offset(x: 126, y: 48)
-
-            VStack(spacing: -3) {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(red: 0.92, green: 0.55, blue: 1.00), Color(red: 0.50, green: 0.13, blue: 0.92)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 218, height: 52)
-                    .overlay {
-                        Text("EXTRA CREDITS")
-                            .font(.system(size: 13, weight: .black))
-                            .tracking(1.6)
-                            .foregroundStyle(.white)
-                    }
-                    .rotationEffect(.degrees(-3))
-                    .zIndex(2)
-
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(red: 0.79, green: 0.36, blue: 1.00), Color(red: 0.41, green: 0.08, blue: 0.77)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 230, height: 143)
-                    .overlay {
-                        VStack(spacing: -2) {
-                            Text("+\(bonus)")
-                                .font(.system(size: 61, weight: .black, design: .rounded))
-                                .foregroundStyle(.white)
-                                .shadow(color: Color(red: 0.25, green: 0.02, blue: 0.55), radius: 0, y: 4)
-                            Text("BONUS")
-                                .font(.system(size: 12, weight: .black))
-                                .tracking(3)
-                                .foregroundStyle(.white.opacity(0.72))
-                        }
-                    }
-                    .overlay {
-                        Rectangle()
-                            .fill(CreditStorePalette.gold)
-                            .frame(width: 19)
-                            .opacity(0.88)
-                    }
+                LinearGradient(
+                    colors: [.clear, Color(red: 0.25, green: 0.03, blue: 0.62)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 25)
             }
-            .shadow(color: .black.opacity(0.28), radius: 15, y: 11)
-        }
-    }
+            .allowsHitTesting(false)
 
-    private func sparkle(_ name: String, x: CGFloat, y: CGFloat, size: CGFloat) -> some View {
-        Image(systemName: name)
-            .font(.system(size: size, weight: .bold))
-            .foregroundStyle(CreditStorePalette.gold)
-            .shadow(color: CreditStorePalette.gold.opacity(0.55), radius: 7)
-            .offset(x: x, y: y)
+            Text("EXTRA GIFT")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .tracking(1.5)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 24)
+                .frame(height: 31)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.73, green: 0.31, blue: 0.98), Color(red: 0.47, green: 0.08, blue: 0.83)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+                .rotationEffect(.degrees(-2))
+                .shadow(color: .black.opacity(0.24), radius: 5, y: 3)
+                .offset(y: -81)
+
+            VStack(spacing: -5) {
+                Text("+\(bonus)")
+                    .font(.system(size: 68, weight: .black, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.white, Color(red: 0.90, green: 0.75, blue: 1.00)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .shadow(color: Color(red: 0.27, green: 0.02, blue: 0.54).opacity(0.80), radius: 0, y: 4)
+
+                Text("Lucky Credits")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.28, green: 0.05, blue: 0.55))
+            }
+            .offset(y: -21)
+        }
+        .clipped()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Extra \(bonus) credit bonus")
     }
 }
 

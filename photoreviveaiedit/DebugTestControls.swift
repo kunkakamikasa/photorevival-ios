@@ -7,13 +7,28 @@ private extension Notification.Name {
 }
 
 enum DebugPromotionRoute: Identifiable, Equatable {
+    case firstLaunchMembership
+    case paywallFollowUp(PaywallFollowUpOffer)
     case returning(ReturningOfferVariant)
+    case returningRetention
+    case summerSale
+    case creditExitOffer
     case subscriberScratch
 
     var id: String {
         switch self {
+        case .firstLaunchMembership:
+            "first-launch-membership"
+        case .paywallFollowUp(let offer):
+            "paywall-follow-up-\(offer.rawValue)"
         case .returning(let variant):
             "returning-\(variant.rawValue)"
+        case .returningRetention:
+            "returning-retention"
+        case .summerSale:
+            "summer-sale"
+        case .creditExitOffer:
+            "credit-exit-offer"
         case .subscriberScratch:
             "subscriber-scratch"
         }
@@ -99,7 +114,8 @@ struct DebugTestWindowInstaller: UIViewRepresentable {
         }
 
         func installIfNeeded(in windowScene: UIWindowScene?) {
-            guard ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1",
+            guard !ProcessInfo.processInfo.arguments.contains("-hideDebugTestControls"),
+                  ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1",
                   let windowScene,
                   overlayWindow?.windowScene !== windowScene else { return }
 
@@ -200,7 +216,9 @@ private final class DebugOverlayViewController: UIViewController, UIAdaptivePres
         bubbleButton.addSubview(badge)
         NSLayoutConstraint.activate([
             bubbleButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            bubbleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            // Keep the bubble below standard navigation bars so it does not
+            // cover top-leading close and back buttons.
+            bubbleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 60),
             bubbleButton.widthAnchor.constraint(equalToConstant: 46),
             bubbleButton.heightAnchor.constraint(equalToConstant: 46),
             badge.widthAnchor.constraint(equalToConstant: 17),
@@ -297,12 +315,45 @@ private struct DebugTestPanel: View {
                     Text("模拟状态只影响本机 Debug 界面和促销资格，不会创建服务器账号，也不会伪造 App Store 购买。切回真实状态会重新读取登录与订阅。")
                 }
 
+                Section("首启与订阅关闭挽回") {
+                    promotionButton(
+                        "首次启动订阅页",
+                        systemImage: "sparkles.rectangle.stack.fill",
+                        state: .signedOut,
+                        route: .firstLaunchMembership
+                    )
+                    promotionButton(
+                        "关闭订阅页 · 限时折扣",
+                        systemImage: "timer",
+                        state: .signedIn,
+                        route: .paywallFollowUp(.limitedTime)
+                    )
+                    promotionButton(
+                        "关闭订阅页 · 3天免费试用",
+                        systemImage: "calendar.badge.clock",
+                        state: .signedIn,
+                        route: .paywallFollowUp(.threeDayTrial)
+                    )
+                    promotionButton(
+                        "CMS 夏日订阅促销",
+                        systemImage: "sun.max.fill",
+                        state: .signedIn,
+                        route: .summerSale
+                    )
+                }
+
                 Section("回访未订阅用户") {
                     promotionButton(
                         "家庭专享订阅促销",
                         systemImage: "person.3.fill",
                         state: .returningUnsubscribed,
                         route: .returning(.familyExclusive)
+                    )
+                    promotionButton(
+                        "家庭专享 · 二次挽回",
+                        systemImage: "arrow.uturn.backward.circle.fill",
+                        state: .returningUnsubscribed,
+                        route: .returningRetention
                     )
                     promotionButton(
                         "超级奖品订阅促销",
@@ -318,9 +369,15 @@ private struct DebugTestPanel: View {
                     )
                 }
 
-                Section("回访已订阅用户") {
+                Section("积分条件弹窗") {
                     promotionButton(
-                        "积分刮刮卡促销",
+                        "积分购买退出挽回弹窗",
+                        systemImage: "giftcard.fill",
+                        state: .signedIn,
+                        route: .creditExitOffer
+                    )
+                    promotionButton(
+                        "已订阅回访 · 积分刮刮卡",
                         systemImage: "ticket.fill",
                         state: .returningSubscribed,
                         route: .subscriberScratch
@@ -411,11 +468,17 @@ private struct DebugTestPanel: View {
 
     private func resetPresentationCooldown(for route: DebugPromotionRoute) {
         switch route {
-        case .returning:
+        case .returning, .returningRetention:
             returningOfferLastPresentedDay = 0
             limitedOfferLastPresentedDay = 0
+        case .paywallFollowUp(let offer):
+            if offer == .limitedTime {
+                limitedOfferLastPresentedDay = 0
+            }
         case .subscriberScratch:
             scratchCompletedVersion = 0
+        case .firstLaunchMembership, .summerSale, .creditExitOffer:
+            break
         }
     }
 
@@ -429,12 +492,38 @@ private struct DebugTestPanel: View {
 struct DebugPromotionPreview: View {
     let route: DebugPromotionRoute
 
+    @Environment(\.dismiss) private var dismiss
     @AppStorage("subscriberScratchCompletedCampaignVersion") private var scratchCompletedVersion = 0
+
+    private static let summerSaleOffer = CMSCouponOffer(
+        id: "debug-summer-sale",
+        placement: "debug_test_controls",
+        coverImageURL: URL(string: "https://example.com/debug-summer-sale.png")!,
+        weeklyPlan: CMSCouponPlan(productID: "special_gift_weekly"),
+        annualPlan: CMSCouponPlan(productID: "special_gift_yearly")
+    )
 
     var body: some View {
         switch route {
+        case .firstLaunchMembership:
+            MembershipPaywallView(
+                showsFirstLaunchVideoBackground: true,
+                analyticsSource: "debug_first_launch",
+                onClose: { dismiss() }
+            )
+        case .paywallFollowUp(let offer):
+            PaywallFollowUpOfferView(offer: offer)
         case .returning(let variant):
             ReturningPromotionFlowView(variant: variant)
+        case .returningRetention:
+            ReturningUserOfferFlowView(startsAtRetention: true)
+        case .summerSale:
+            SummerSalePaywallView(offer: Self.summerSaleOffer)
+        case .creditExitOffer:
+            CreditExitOfferView(
+                onClose: { dismiss() },
+                onClaim: { _ in dismiss() }
+            )
         case .subscriberScratch:
             SubscriberScratchOfferView(
                 onRewardClaimed: {

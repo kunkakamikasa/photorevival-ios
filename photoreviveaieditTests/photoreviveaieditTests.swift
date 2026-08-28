@@ -7,6 +7,7 @@
 
 import Foundation
 import Testing
+import UIKit
 @testable import photoreviveaiedit
 
 struct photoreviveaieditTests {
@@ -36,7 +37,6 @@ struct photoreviveaieditTests {
         let json = """
         {
           "one_tap_restore_credits": 35,
-          "enhance_video_credits_per_second": 10,
           "video_base_credits": 40,
           "video_default_duration_seconds": 5,
           "video_extra_duration_credits_per_second": 8,
@@ -63,16 +63,14 @@ struct photoreviveaieditTests {
         #expect(pricing.videoGenerationCredits(duration: 5, resolution: "1080p", sound: true, multiShot: true) == 140)
         #expect(pricing.videoGenerationCredits(duration: 8, resolution: "720p", sound: false, multiShot: false) == 96)
         #expect(pricing.videoGenerationCredits(duration: 8, resolution: "1080p", sound: false, multiShot: false) == 160)
-        #expect(pricing.videoEnhancementCredits(duration: 8.1) == 90)
         #expect(pricing.otherVideoCredits == 60)
         #expect(pricing.imageToImageCredits == 30)
         #expect(pricing.textToImageCredits == 30)
     }
 
-    @Test func cmsFixedFeatureRegistryMapsAllEightDestinationsExactly() throws {
+    @Test func cmsFixedFeatureRegistryMapsAllSevenDestinationsExactly() throws {
         let keys = [
             "restore",
-            "enhance_video",
             "photo_to_video",
             "ai_image",
             "enhance_photo",
@@ -87,7 +85,6 @@ struct photoreviveaieditTests {
 
         #expect(features == [
             .oneTapRestore,
-            .enhanceVideo,
             .photoToVideo,
             .aiImage,
             .enhancePhoto,
@@ -107,6 +104,147 @@ struct photoreviveaieditTests {
 
         #expect(entry.tryNowItem == nil)
         #expect(entry.fixedFeatureTarget == .aiImage)
+    }
+
+    @MainActor
+    @Test func aiImageQuickActionResolvesBothGenerationEndpoints() {
+        let imageTarget = FeatureGenerationTarget(
+            itemID: "image-item",
+            endpoint: "image-to-image",
+            modelType: "image_to_image",
+            modelID: "image-model",
+            estimatedCredits: 30,
+            promptTemplate: nil
+        )
+        let textTarget = FeatureGenerationTarget(
+            itemID: "text-item",
+            endpoint: "text-to-image",
+            modelType: "text_to_image",
+            modelID: "text-model",
+            estimatedCredits: 30,
+            promptTemplate: nil
+        )
+        let action = HomeQuickAction(
+            feature: .aiImage,
+            item: TemplateItem(id: "ai-image", title: "AI Image"),
+            generationTargets: [imageTarget, textTarget]
+        )
+
+        #expect(action.generationTarget(endpoint: "image-to-image") == imageTarget)
+        #expect(action.generationTarget(endpoint: "text-to-image") == textTarget)
+        #expect(action.generationTarget == imageTarget)
+    }
+
+    @MainActor
+    @Test func aiImageFixedFeaturePayloadDecodesBothGenerationTargets() throws {
+        let data = try #require("""
+        {
+          "items": [
+            {
+              "feature_key": "ai_image",
+              "title": "AI Image",
+              "cover_type": "video",
+              "cover_video_url": "https://example.com/ai-image.mp4",
+              "generation_target": {
+                "item_id": "image-item",
+                "endpoint": "image-to-image",
+                "model_type": "image_to_image",
+                "model_id": "image-model",
+                "estimated_credits": 30,
+                "prompt_template": null
+              },
+              "generation_targets": [
+                {
+                  "item_id": "image-item",
+                  "endpoint": "image-to-image",
+                  "model_type": "image_to_image",
+                  "model_id": "image-model",
+                  "estimated_credits": 30,
+                  "prompt_template": null
+                },
+                {
+                  "item_id": "text-item",
+                  "endpoint": "text-to-image",
+                  "model_type": "text_to_image",
+                  "model_id": "text-model",
+                  "estimated_credits": 30,
+                  "prompt_template": null
+                }
+              ]
+            }
+          ]
+        }
+        """.data(using: .utf8))
+        let payload = try JSONDecoder().decode(RemoteFixedFeatureResponse.self, from: data)
+        let action = try #require(payload.items.first?.quickAction)
+
+        #expect(action.feature == .aiImage)
+        #expect(action.generationTargets.map(\.endpoint) == [
+            "image-to-image",
+            "text-to-image"
+        ])
+    }
+
+    @MainActor
+    @Test func homeHeroDoesNotExposeTemplateFallbackBeforeCarouselResolves() {
+        let fallback = TemplateItem(id: "fallback", title: "First Filter")
+
+        #expect(FeatureConfigStore.displayedHeroEntries(
+            configured: [],
+            fallbackItems: [fallback],
+            waitsForRemoteCarousel: true
+        ).isEmpty)
+
+        #expect(FeatureConfigStore.displayedHeroEntries(
+            configured: [],
+            fallbackItems: [fallback],
+            waitsForRemoteCarousel: false
+        ).map(\.displayItem.id) == ["fallback"])
+    }
+
+    @Test func homeHeroPromotionTargetsTheCurrentSubscriptionAudience() throws {
+        let imageURL = try #require(URL(string: "https://example.com/promotion.jpg"))
+        let coupon = CMSCouponOffer(
+            id: "coupon",
+            placement: "hero",
+            coverImageURL: imageURL,
+            weeklyPlan: CMSCouponPlan(productID: "weekly"),
+            annualPlan: CMSCouponPlan(productID: "annual")
+        )
+        let creditPurchase = CMSCreditPurchasePromotion(
+            id: "credit-purchase",
+            coverImageURL: imageURL
+        )
+
+        #expect(CMSHomeHeroPromotion.visible(
+            isSubscribed: false,
+            coupon: coupon,
+            creditPurchase: creditPurchase
+        ) == .subscriptionCoupon(coupon))
+        #expect(CMSHomeHeroPromotion.visible(
+            isSubscribed: true,
+            coupon: coupon,
+            creditPurchase: creditPurchase
+        ) == .creditPurchase(creditPurchase))
+        #expect(CMSHomeHeroPromotion.visible(
+            isSubscribed: true,
+            coupon: coupon,
+            creditPurchase: nil
+        ) == nil)
+        #expect(CMSHomeHeroPromotion.visible(
+            isSubscribed: false,
+            coupon: nil,
+            creditPurchase: creditPurchase
+        ) == nil)
+    }
+
+    @Test func gifDecoderPreservesEveryAnimationFrame() throws {
+        let encoded = "R0lGODlhAgACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQADAAAACwAAAAAAgACAAAIBgABCAQQEAAh+QQBEgABACwAAAAAAgACAIEAAP8AAAAAAAAAAAAIBgABCAQQEAA7"
+        let data = try #require(Data(base64Encoded: encoded))
+        let image = try #require(TemplateImageDecoder.image(from: data))
+
+        #expect(image.images?.count == 2)
+        #expect(abs(image.duration - 0.3) < 0.001)
     }
 
     @Test func carouselTryNowUsesConfiguredFilterPreviewAndFullTemplateList() throws {
@@ -143,7 +281,7 @@ struct photoreviveaieditTests {
         #expect(launch.templates.map(\.id) == ["relife", "happy-moments"])
     }
 
-    @Test func imageUploadCountSupportsFusionThreeSlotLayout() {
+    @Test func imageUploadCountSupportsThreeReferenceSlots() {
         let oneImage = TemplateItem(
             id: "one-image",
             title: "One Image",
@@ -237,8 +375,8 @@ struct photoreviveaieditTests {
         let first = try #require(URL(string: "https://example.com/woman.jpg"))
         let third = try #require(URL(string: "https://example.com/mountain.jpg"))
         let item = TemplateItem(
-            id: "fusion",
-            title: "Fusion",
+            id: "multi-reference",
+            title: "Multi Reference",
             imageReferenceCount: 3,
             promptTemplate: "@Image1 rides @Image2 through @Image3",
             uploadPlaceholderURLs: [first, nil, third]
@@ -249,19 +387,6 @@ struct photoreviveaieditTests {
         #expect(item.uploadPlaceholderURL(at: 1) == nil)
         #expect(item.uploadPlaceholderURL(at: 2) == third)
         #expect(item.uploadPlaceholderURL(at: 3) == nil)
-    }
-
-    @Test func localVideoCatalogIncludesDearBabyFilters() throws {
-        let dearBaby = try #require(TemplateCatalog.videoSections.first { $0.title == "Dear Baby" })
-
-        #expect(dearBaby.items.map(\.title) == [
-            "Beloved Baby",
-            "Our Children",
-            "Grow up",
-            "Birthday"
-        ])
-        #expect(dearBaby.items.allSatisfy { $0.generationKind == .video })
-        #expect(dearBaby.items.allSatisfy { $0.videoName?.hasPrefix("dear_baby_") == true })
     }
 
     @Test func templateBadgesFollowTemplatePosition() {
@@ -387,6 +512,7 @@ struct photoreviveaieditTests {
     }
 
     @Test func subscriberScratchEligibility() {
+        #expect(SubscriberScratchCampaign.freeCreditLifetime == 7_200)
         #expect(SubscriberScratchEligibility.shouldPresent(
             isReturningSession: true,
             isSubscribed: true,
@@ -425,6 +551,20 @@ struct photoreviveaieditTests {
         ))
     }
 
+    @Test func creditProductCatalogUsesAppStoreProductIDs() {
+        #expect(CreditProductCatalog.packs.map(\.credits) == [300, 900, 1_400])
+        #expect(CreditProductCatalog.packs.map(\.productID) == [
+            "basic300credits",
+            "basic900credits",
+            "basic1400credits"
+        ])
+        #expect(CreditProductCatalog.exitOfferBonus == 77)
+        #expect(CreditProductCatalog.exitOfferPack.credits == 377)
+        #expect(CreditProductCatalog.exitOfferPack.productID == "callback377")
+        #expect(CreditProductCatalog.subscriberReturnOffer.credits == 1_600)
+        #expect(CreditProductCatalog.subscriberReturnOffer.productID == "surprise1600credits")
+    }
+
     @Test func subscriptionProductIDs() {
         #expect(SubscriptionProductID.proYearly.rawValue == "pro_yearly")
         #expect(SubscriptionProductID.proWeekly.rawValue == "pro_weekly")
@@ -440,6 +580,16 @@ struct photoreviveaieditTests {
         #expect(SubscriptionProductID.familyExclusiveWeekly.rawValue == "family_exclusive_weekly")
         #expect(SubscriptionProductID.superPrizeWeekly.rawValue == "super_prize_weekly")
         #expect(SubscriptionProductID.threeDayFreeTrialYearly.rawValue == "3dayfreetrial_yearly")
+    }
+
+    @Test func subscriptionUpgradeLevels() {
+        #expect(SubscriptionPlanLevel(productID: "loged_pro_weekly") == .proWeekly)
+        #expect(SubscriptionPlanLevel(productID: "pro_yearly") == .proAnnual)
+        #expect(SubscriptionPlanLevel(productID: "loged_proplus_weekly") == .proPlusWeekly)
+        #expect(SubscriptionPlanLevel(productID: "proplus_yearly") == .proPlusAnnual)
+        #expect(SubscriptionPlanLevel(productID: "special_gift_yearly") == .proAnnual)
+        #expect(SubscriptionPlanLevel.proPlusAnnual.isHighest)
+        #expect(SubscriptionPlanLevel.proWeekly < SubscriptionPlanLevel.proPlusAnnual)
     }
 
     @Test func returningOfferVariantSelection() {
@@ -698,6 +848,14 @@ struct photoreviveaieditTests {
         #expect(task.isVideo)
         #expect(task.coverURL?.absoluteString == "https://cdn.example.com/result-first-frame.jpg")
         #expect(task.resultURL?.absoluteString == "https://cdn.example.com/result.mp4")
+    }
+
+    @MainActor
+    @Test func privacyPolicyUsesProductionURL() {
+        #expect(
+            LegalDocument.privacyPolicy.url.absoluteString
+                == "https://www.alihantakaz.site/PhotoRevival-Privacy-policy.html"
+        )
     }
 
     @MainActor

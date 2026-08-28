@@ -4,6 +4,7 @@ struct SignInView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("isLoggedIn") private var isLoggedIn = false
     @StateObject private var authStore = PhotoReviveAuthStore()
+    @State private var legalDocument: LegalDocument?
     let onAuthenticated: () -> Void
 
     init(onAuthenticated: @escaping () -> Void = {}) {
@@ -116,10 +117,29 @@ struct SignInView: View {
         } message: {
             Text(authStore.errorMessage ?? "Please try again.")
         }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
+        }
     }
 
-    private var agreementText: Text {
-        Text("Continue to indicate your agreement to the \(Text("Privacy Policy").underline())\nand \(Text("Terms of Service").underline())")
+    private var agreementText: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text("Continue to indicate your agreement to the ")
+                Button("Privacy Policy") {
+                    legalDocument = .privacyPolicy
+                }
+                .buttonStyle(.plain)
+                .underline()
+                .accessibilityIdentifier("sign-in-privacy-policy")
+            }
+
+            HStack(spacing: 0) {
+                Text("and ")
+                Text("Terms of Service").underline()
+            }
+        }
     }
 }
 

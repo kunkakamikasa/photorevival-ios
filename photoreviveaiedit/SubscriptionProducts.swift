@@ -99,7 +99,17 @@ enum SubscriptionPurchaseService {
                 promotion: promotion
             )
 
-            switch try await product.purchase() {
+            let purchaseResult: Product.PurchaseResult
+            if let userID = PhotoReviveAuthClient.shared.currentUserID,
+               let appAccountToken = UUID(uuidString: userID) {
+                purchaseResult = try await product.purchase(
+                    options: [.appAccountToken(appAccountToken)]
+                )
+            } else {
+                purchaseResult = try await product.purchase()
+            }
+
+            switch purchaseResult {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
@@ -131,6 +141,20 @@ enum SubscriptionPurchaseService {
                         await AppAccountStore.shared.refreshCredits()
                         await AppAccountStore.shared.refreshCreditTransactions()
                     }
+                    let isStartTrial: Bool
+                    if #available(iOS 17.2, *) {
+                        isStartTrial = transaction.offer?.paymentMode == .freeTrial
+                    } else {
+                        isStartTrial = false
+                    }
+                    MetaSubscriptionAnalytics.reportVerifiedPurchase(
+                        productID: product.id,
+                        value: transactionValue,
+                        currency: transactionCurrency,
+                        transactionID: String(transaction.id),
+                        originalTransactionID: String(transaction.originalID),
+                        isStartTrial: isStartTrial
+                    )
                     AdjustService.shared.trackSubscribe(
                         productID: product.id,
                         revenue: NSDecimalNumber(decimal: product.price).doubleValue,

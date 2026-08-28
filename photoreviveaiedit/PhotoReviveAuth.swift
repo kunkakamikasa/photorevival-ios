@@ -1,6 +1,9 @@
 import AuthenticationServices
+import AdSupport
+import AppTrackingTransparency
 import Combine
 import CryptoKit
+import FacebookCore
 import Foundation
 import GoogleSignIn
 import Security
@@ -85,6 +88,22 @@ private struct PhotoReviveAppContextRequest: Encodable {
     let app_id: String
     let timezone_name: String
     let timezone_abbr: String?
+    let idfa: String?
+    let idfv: String?
+    let anon_id: String
+    let att_status: String
+    let advertiser_tracking_enabled: Bool
+    let application_tracking_enabled: Bool
+    let app_bundle_id: String
+    let app_version: String
+    let app_build_version: String
+    let ios_version: String
+    let device_model: String
+    let locale: String
+    let screen_width: Double
+    let screen_height: Double
+    let screen_scale: Double
+    let cpu_cores: Int
 }
 
 private struct PhotoReviveAppContextResponse: Decodable {
@@ -251,6 +270,7 @@ final class PhotoReviveAuthClient {
     private var cachedSession: PhotoReviveSession?
     private var hasBoundAppContext = false
     private var boundTimeZoneIdentifier: String?
+    private var boundTrackingAuthorizationStatus: UInt?
 
     init(session: URLSession? = nil) {
         if let session {
@@ -596,13 +616,25 @@ final class PhotoReviveAuthClient {
 
     private func bindAppContextIfNeeded(accessToken: String) async throws {
         let currentTimeZoneIdentifier = Self.currentTimeZoneIdentifier
-        guard !hasBoundAppContext || boundTimeZoneIdentifier != currentTimeZoneIdentifier else { return }
+        let trackingStatus = ATTrackingManager.trackingAuthorizationStatus.rawValue
+        guard !hasBoundAppContext ||
+                boundTimeZoneIdentifier != currentTimeZoneIdentifier ||
+                boundTrackingAuthorizationStatus != trackingStatus else { return }
         try await bindAppContext(accessToken: accessToken)
         hasBoundAppContext = true
         boundTimeZoneIdentifier = currentTimeZoneIdentifier
+        boundTrackingAuthorizationStatus = trackingStatus
     }
 
     private func bindAppContext(accessToken: String) async throws {
+        let trackingStatus = ATTrackingManager.trackingAuthorizationStatus
+        let advertiserTrackingEnabled = trackingStatus == .authorized
+        let screen = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.screen }
+            .first
+        let screenBounds = screen?.bounds ?? .zero
+        AppEvents.shared.userID = currentUserID
+
         var request = URLRequest(
             url: PhotoReviveAPIConfig.projectURL.appendingPathComponent(
                 "functions/v1/bind-app-context"
@@ -615,7 +647,29 @@ final class PhotoReviveAuthClient {
             PhotoReviveAppContextRequest(
                 app_id: PhotoReviveAPIConfig.appID,
                 timezone_name: Self.currentTimeZoneIdentifier,
-                timezone_abbr: Self.currentTimeZoneAbbreviation
+                timezone_abbr: Self.currentTimeZoneAbbreviation,
+                idfa: advertiserTrackingEnabled
+                    ? ASIdentifierManager.shared().advertisingIdentifier.uuidString.lowercased()
+                    : nil,
+                idfv: UIDevice.current.identifierForVendor?.uuidString.lowercased(),
+                anon_id: AppEvents.shared.anonymousID,
+                att_status: Self.trackingAuthorizationStatusName(trackingStatus),
+                advertiser_tracking_enabled: advertiserTrackingEnabled,
+                application_tracking_enabled: !Settings.shared.isEventDataUsageLimited,
+                app_bundle_id: Bundle.main.bundleIdentifier ?? "",
+                app_version: Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleShortVersionString"
+                ) as? String ?? "",
+                app_build_version: Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleVersion"
+                ) as? String ?? "",
+                ios_version: UIDevice.current.systemVersion,
+                device_model: UIDevice.current.model,
+                locale: Locale.autoupdatingCurrent.identifier,
+                screen_width: screenBounds.width,
+                screen_height: screenBounds.height,
+                screen_scale: Double(screen?.scale ?? 1),
+                cpu_cores: ProcessInfo.processInfo.processorCount
             )
         )
 
@@ -627,6 +681,7 @@ final class PhotoReviveAuthClient {
             )
         }
         boundTimeZoneIdentifier = Self.currentTimeZoneIdentifier
+        boundTrackingAuthorizationStatus = trackingStatus.rawValue
     }
 
     private func persist(_ session: PhotoReviveSession) {
@@ -639,6 +694,8 @@ final class PhotoReviveAuthClient {
         cachedSession = nil
         hasBoundAppContext = false
         boundTimeZoneIdentifier = nil
+        boundTrackingAuthorizationStatus = nil
+        AppEvents.shared.userID = nil
         PhotoReviveKeychain.delete(service: PhotoReviveKeychain.service)
         UserDefaults.standard.set(false, forKey: "isLoggedIn")
     }
@@ -658,6 +715,18 @@ final class PhotoReviveAuthClient {
         let abbreviation = TimeZone.autoupdatingCurrent.abbreviation()?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return abbreviation?.isEmpty == false ? abbreviation : nil
+    }
+
+    private static func trackingAuthorizationStatusName(
+        _ status: ATTrackingManager.AuthorizationStatus
+    ) -> String {
+        switch status {
+        case .notDetermined: "not_determined"
+        case .restricted: "restricted"
+        case .denied: "denied"
+        case .authorized: "authorized"
+        @unknown default: "unknown"
+        }
     }
 
     private static func serverErrorMessage(from data: Data) -> String? {

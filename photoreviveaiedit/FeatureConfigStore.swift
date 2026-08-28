@@ -11,8 +11,11 @@ final class FeatureConfigStore: ObservableObject {
     @Published private(set) var homeQuickActions: [HomeQuickAction] = []
     @Published private(set) var creditPricing = AppCreditPricing.defaultValue
     @Published private(set) var homeHeroOffer: CMSCouponOffer?
+    @Published private(set) var homeCreditPurchasePromotion: CMSCreditPurchasePromotion?
     @Published private(set) var homeBottomOffer: CMSCouponOffer?
+    @Published private(set) var homeBottomCreditPurchasePromotion: CMSCreditPurchasePromotion?
     @Published private(set) var isLoading = true
+    @Published private(set) var hasResolvedInitialCarouselLoad = false
 
     private var hasStartedLoading = false
     private var loadGeneration = 0
@@ -37,18 +40,34 @@ final class FeatureConfigStore: ObservableObject {
     func heroEntries(for tab: AppTab) -> [TemplateDetailEntry] {
         let configured: [TemplateDetailEntry]
         let fallbackItems: [TemplateItem]
+        let waitsForRemoteCarousel: Bool
         switch tab {
         case .home:
             configured = homeCarouselEntries
             fallbackItems = Array(homeSections.flatMap(\.items).prefix(3))
+            waitsForRemoteCarousel = !hasResolvedInitialCarouselLoad
         case .photo:
             return photoCarouselEntries
         case .video:
             configured = videoCarouselEntries
             fallbackItems = Array(videoSections.flatMap(\.items).prefix(3))
+            waitsForRemoteCarousel = false
         case .me:
             return []
         }
+        return Self.displayedHeroEntries(
+            configured: configured,
+            fallbackItems: fallbackItems,
+            waitsForRemoteCarousel: waitsForRemoteCarousel
+        )
+    }
+
+    static func displayedHeroEntries(
+        configured: [TemplateDetailEntry],
+        fallbackItems: [TemplateItem],
+        waitsForRemoteCarousel: Bool
+    ) -> [TemplateDetailEntry] {
+        guard !waitsForRemoteCarousel else { return [] }
         return configured.isEmpty ? fallbackItems.map(TemplateDetailEntry.init(item:)) : configured
     }
 
@@ -60,6 +79,30 @@ final class FeatureConfigStore: ObservableObject {
             return [item]
         }
         return section.items
+    }
+
+    /// Result suggestions are CMS-owned. Prefer other filters in the current
+    /// section, then fill the remaining slots from other CMS image sections.
+    func imageRecommendations(for item: TemplateItem?, limit: Int = 4) -> [TemplateItem] {
+        guard limit > 0 else { return [] }
+
+        let allImageItems = imageSections.flatMap(\.items)
+        let sameSectionItems: [TemplateItem]
+        if let item,
+           let groupID = item.detailGroupID,
+           let section = imageSections.first(where: { $0.id == groupID }) {
+            sameSectionItems = section.items.filter { $0.id != item.id }
+        } else {
+            sameSectionItems = []
+        }
+
+        var seen = Set<String>()
+        if let item { seen.insert(item.id) }
+        let preferred = sameSectionItems.filter { seen.insert($0.id).inserted }
+        let remaining = allImageItems
+            .filter { seen.insert($0.id).inserted }
+            .shuffled()
+        return Array((preferred + remaining).prefix(limit))
     }
 
     /// Returns one continuous, CMS-ordered detail feed. The selected filter is
@@ -136,7 +179,10 @@ final class FeatureConfigStore: ObservableObject {
             homeQuickActions = TemplateCatalog.homeQuickActions
             creditPricing = .defaultValue
             homeHeroOffer = nil
+            homeCreditPurchasePromotion = nil
             homeBottomOffer = nil
+            homeBottomCreditPurchasePromotion = nil
+            hasResolvedInitialCarouselLoad = true
             return
         }
 
@@ -146,60 +192,106 @@ final class FeatureConfigStore: ObservableObject {
         // resolves to a different audience later.
         let referrer = AdjustService.shared.referrer
 
-        async let fetchedVideoSections = fetchSections(
-            menu: "video",
-            generationKind: .video,
+        let storedSnapshot = await CatalogSnapshotStore.load(
+            appID: PhotoReviveAPIConfig.appID,
             referrer: referrer
         )
-        async let fetchedImageSections = fetchSections(
-            menu: "image",
-            generationKind: .image,
+        let matchingSnapshot = storedSnapshot.flatMap {
+            $0.appID == PhotoReviveAPIConfig.appID && $0.referrer == referrer ? $0 : nil
+        }
+        if !force, let matchingSnapshot, restore(matchingSnapshot) {
+            // The old catalog is immediately usable while all four endpoints
+            // refresh independently in the background.
+            isLoading = false
+            TemplateMediaMetrics.shared.markCatalogAvailable(source: "snapshot")
+        }
+
+        var currentSnapshot = matchingSnapshot ?? CatalogSnapshot(
+            appID: PhotoReviveAPIConfig.appID,
             referrer: referrer
         )
-        async let fetchedCarousels = fetchCarousels(referrer: referrer)
-        async let fetchedQuickActions = fetchQuickActions()
-
-        do {
-            let remoteSections = try await fetchedVideoSections
-            guard generation == loadGeneration else { return }
-            videoSections = Self.addingLocalDearBabyItems(to: remoteSections)
-            prefetchInitialCovers()
-        } catch {
-            // An empty catalog is intentional: do not restore placeholder covers on failure.
+        let requests = CatalogComponent.allCases.compactMap { component -> (CatalogComponent, URL)? in
+            guard let url = catalogURL(for: component, referrer: referrer) else { return nil }
+            return (component, url)
         }
-        do {
-            let remoteSections = try await fetchedImageSections
-            guard generation == loadGeneration else { return }
-            imageSections = remoteSections
-            prefetchInitialCovers()
-        } catch {
-            // Keep the fixed photo tools usable when the remote catalog is unavailable.
+        var resolvedCarouselFromNetwork = false
+
+        await withTaskGroup(of: CatalogFetchResult.self) { group in
+            for (component, url) in requests {
+                group.addTask {
+                    CatalogFetchResult(
+                        component: component,
+                        data: await Self.fetchCatalogData(from: url)
+                    )
+                }
+            }
+
+            // Publish an independent component as soon as it finishes. A slow
+            // video catalog can no longer hold a completed Hero or shortcut row.
+            for await result in group {
+                guard generation == loadGeneration else {
+                    group.cancelAll()
+                    return
+                }
+
+                if result.component == .carousel { resolvedCarouselFromNetwork = true }
+                guard let data = result.data else { continue }
+                do {
+                    try applyCatalogData(data, component: result.component)
+                    currentSnapshot.set(data, for: result.component)
+                    await CatalogSnapshotStore.save(currentSnapshot)
+                    isLoading = false
+                    TemplateMediaMetrics.shared.markCatalogAvailable(source: "network")
+                } catch {
+                    // A malformed component must not replace the last valid
+                    // snapshot or block the other independent components.
+                }
+            }
         }
 
-        do {
-            let carousels = try await fetchedCarousels
-            guard generation == loadGeneration else { return }
+        if resolvedCarouselFromNetwork, currentSnapshot.carouselData == nil {
+            // Let section covers become the fallback after a failed first-ever
+            // carousel request. An existing carousel snapshot stays visible.
+            hasResolvedInitialCarouselLoad = true
+        }
+    }
+
+    private func restore(_ snapshot: CatalogSnapshot) -> Bool {
+        var restoredAnyComponent = false
+        for component in CatalogComponent.allCases {
+            guard let data = snapshot.data(for: component) else { continue }
+            do {
+                try applyCatalogData(data, component: component)
+                restoredAnyComponent = true
+            } catch {
+                continue
+            }
+        }
+        return restoredAnyComponent
+    }
+
+    private func applyCatalogData(_ data: Data, component: CatalogComponent) throws {
+        switch component {
+        case .videoSections:
+            videoSections = try decodedSections(from: data, generationKind: .video)
+        case .imageSections:
+            imageSections = try decodedSections(from: data, generationKind: .image)
+        case .carousel:
+            let carousels = try decodedCarousels(from: data)
             homeCarouselEntries = carousels.entries[.home] ?? []
             photoCarouselEntries = carousels.entries[.photo] ?? []
             videoCarouselEntries = carousels.entries[.video] ?? []
             homeHeroOffer = carousels.homeHeroOffer
+            homeCreditPurchasePromotion = carousels.homeCreditPurchasePromotion
             homeBottomOffer = carousels.homeBottomOffer
-            prefetchInitialCovers()
-        } catch {
-            // Section covers remain as a fallback if carousel configuration is unavailable.
-        }
-
-        do {
-            let fixedFeatures = try await fetchedQuickActions
-            guard generation == loadGeneration else { return }
-            // The endpoint only returns enabled features. Accept partial and empty
-            // responses so CMS switches can hide one shortcut or the entire row.
+            homeBottomCreditPurchasePromotion = carousels.homeBottomCreditPurchasePromotion
+            hasResolvedInitialCarouselLoad = true
+        case .quickActions:
+            let fixedFeatures = try decodedQuickActions(from: data)
             homeQuickActions = fixedFeatures.quickActions
             creditPricing = fixedFeatures.creditPricing
-            prefetchInitialCovers()
-        } catch {
-            // Do not restore bundled covers: Home keeps the CMS-only result.
         }
+        prefetchInitialCovers()
     }
 
     /// Warm the media the user is most likely to see next. Prefetching is
@@ -220,8 +312,105 @@ final class FeatureConfigStore: ObservableObject {
             return item.coverImageURL.map { [$0] } ?? []
         }
         if let homeHeroOffer { urls.insert(homeHeroOffer.coverImageURL, at: 0) }
+        if let homeCreditPurchasePromotion {
+            urls.insert(homeCreditPurchasePromotion.coverImageURL, at: 0)
+        }
         if let homeBottomOffer { urls.append(homeBottomOffer.coverImageURL) }
+        if let homeBottomCreditPurchasePromotion {
+            urls.append(homeBottomCreditPurchasePromotion.coverImageURL)
+        }
         TemplateMediaPreloader.prefetchImages(urls)
+    }
+
+    private func catalogURL(for component: CatalogComponent, referrer: String) -> URL? {
+        let path: String
+        var queryItems = [URLQueryItem]()
+        switch component {
+        case .videoSections, .imageSections:
+            path = "functions/v1/get-feature-configs"
+            queryItems = [
+                URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID),
+                URLQueryItem(
+                    name: "menu",
+                    value: component == .videoSections ? "video" : "image"
+                ),
+                URLQueryItem(name: "page_type", value: "default"),
+                URLQueryItem(name: "limit", value: "20"),
+                URLQueryItem(name: "referrer", value: referrer)
+            ]
+        case .carousel:
+            path = "functions/v1/get-app-carousels"
+            queryItems = [
+                URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID),
+                URLQueryItem(name: "referrer", value: referrer)
+            ]
+        case .quickActions:
+            path = "functions/v1/get-app-fixed-features"
+            queryItems = [URLQueryItem(name: "app_id", value: PhotoReviveAPIConfig.appID)]
+        }
+
+        var components = URLComponents(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = queryItems
+        return components?.url
+    }
+
+    private nonisolated static func fetchCatalogData(from url: URL) async -> Data? {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let response = response as? HTTPURLResponse,
+                  (200..<300).contains(response.statusCode) else {
+                return nil
+            }
+            return data
+        } catch {
+            return nil
+        }
+    }
+
+    private func decodedSections(
+        from data: Data,
+        generationKind: TemplateGenerationKind
+    ) throws -> [TemplateSection] {
+        let payload = try JSONDecoder().decode(FeatureConfigResponse.self, from: data)
+        return payload.sections
+            .enumerated()
+            .sorted { lhs, rhs in
+                configuredOrder(lhs.element.sortOrder, rhs.element.sortOrder)
+                    || (lhs.element.sortOrder == rhs.element.sortOrder && lhs.offset < rhs.offset)
+            }
+            .compactMap { $0.element.templateSection(generationKind: generationKind) }
+    }
+
+    private func decodedQuickActions(from data: Data) throws -> FixedFeatureLoadResult {
+        let payload = try JSONDecoder().decode(RemoteFixedFeatureResponse.self, from: data)
+        return FixedFeatureLoadResult(
+            quickActions: payload.items.compactMap(\.quickAction),
+            creditPricing: payload.creditPricing ?? .defaultValue
+        )
+    }
+
+    private func decodedCarousels(from data: Data) throws -> CarouselLoadResult {
+        let payload = try JSONDecoder().decode(RemoteCarouselResponse.self, from: data)
+        let detailEntries: [(page: RemoteCarouselPage, entry: TemplateDetailEntry)] = payload.items.compactMap { item in
+            guard item.normalizedPlacement == "hero" else { return nil }
+            return item.page == .photo ? item.photoImageEntry : item.detailEntry
+        }
+        let mappedEntries = Dictionary(grouping: detailEntries, by: { $0.page })
+            .mapValues { $0.map { $0.entry } }
+        let offers = payload.items.compactMap(\.couponOffer)
+        let creditPurchasePromotions = payload.items.compactMap(\.creditPurchasePromotion)
+        return CarouselLoadResult(
+            entries: mappedEntries,
+            homeHeroOffer: offers.first { $0.placement == "hero" },
+            homeCreditPurchasePromotion: creditPurchasePromotions.first { $0.placement == "hero" },
+            homeBottomOffer: offers.first { $0.placement == "bottom_banner" },
+            homeBottomCreditPurchasePromotion: creditPurchasePromotions.first {
+                $0.placement == "bottom_banner"
+            }
+        )
     }
 
     private func fetchQuickActions() async throws -> FixedFeatureLoadResult {
@@ -306,51 +495,121 @@ final class FeatureConfigStore: ObservableObject {
         .mapValues { $0.map { $0.entry } }
 
         let offers = payload.items.compactMap(\.couponOffer)
+        let creditPurchasePromotions = payload.items.compactMap(\.creditPurchasePromotion)
         return CarouselLoadResult(
             entries: mappedEntries,
             homeHeroOffer: offers.first { $0.placement == "hero" },
-            homeBottomOffer: offers.first { $0.placement == "bottom_banner" }
+            homeCreditPurchasePromotion: creditPurchasePromotions.first { $0.placement == "hero" },
+            homeBottomOffer: offers.first { $0.placement == "bottom_banner" },
+            homeBottomCreditPurchasePromotion: creditPurchasePromotions.first {
+                $0.placement == "bottom_banner"
+            }
         )
     }
 
-    /// Keep the three bundled Dear Baby previews available while the CMS
-    /// rollout is in progress. The CMS-owned item remains authoritative for
-    /// any matching title or id; only missing local items are appended.
-    private static func addingLocalDearBabyItems(to sections: [TemplateSection]) -> [TemplateSection] {
-        let localItems = [
-            TemplateCatalog.ourChildren,
-            TemplateCatalog.growUp,
-            TemplateCatalog.birthday
-        ]
+}
 
-        guard let index = sections.firstIndex(where: {
-            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Dear Baby") == .orderedSame
-        }) else {
-            return sections
+nonisolated private enum CatalogComponent: String, CaseIterable, Codable, Sendable {
+    case videoSections
+    case imageSections
+    case carousel
+    case quickActions
+}
+
+nonisolated private struct CatalogFetchResult: Sendable {
+    let component: CatalogComponent
+    let data: Data?
+}
+
+nonisolated private struct CatalogSnapshot: Codable, Sendable {
+    let schemaVersion: Int
+    let appID: String
+    let referrer: String
+    var savedAt: Date
+    var videoSectionsData: Data?
+    var imageSectionsData: Data?
+    var carouselData: Data?
+    var quickActionsData: Data?
+
+    init(appID: String, referrer: String) {
+        schemaVersion = 1
+        self.appID = appID
+        self.referrer = referrer
+        savedAt = Date()
+    }
+
+    func data(for component: CatalogComponent) -> Data? {
+        switch component {
+        case .videoSections: videoSectionsData
+        case .imageSections: imageSectionsData
+        case .carousel: carouselData
+        case .quickActions: quickActionsData
         }
+    }
 
-        let existingKeys = Set(sections[index].items.flatMap { item in
-            [item.id.lowercased(), item.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
-        })
-        let missingItems = localItems.filter {
-            !existingKeys.contains($0.id.lowercased())
-                && !existingKeys.contains($0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    mutating func set(_ data: Data, for component: CatalogComponent) {
+        switch component {
+        case .videoSections: videoSectionsData = data
+        case .imageSections: imageSectionsData = data
+        case .carousel: carouselData = data
+        case .quickActions: quickActionsData = data
         }
-        guard !missingItems.isEmpty else { return sections }
+        savedAt = Date()
+    }
+}
 
-        var result = sections
-        let existing = result[index]
-        result[index] = TemplateSection(
-            existing.title,
-            id: existing.id,
-            badge: existing.badge,
-            showsPrompt: existing.showsPrompt,
-            promptIsEditable: existing.promptIsEditable,
-            items: existing.items + missingItems,
-            generationKind: existing.generationKind,
-            sortOrder: existing.sortOrder
+nonisolated private enum CatalogSnapshotStore {
+    static func load(appID: String, referrer: String) async -> CatalogSnapshot? {
+        await Task.detached(priority: .utility) {
+            let url = snapshotURL(appID: appID, referrer: referrer)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+                  let snapshot = try? decoder.decode(CatalogSnapshot.self, from: data),
+                  snapshot.schemaVersion == 1 else {
+                return nil
+            }
+            return snapshot
+        }.value
+    }
+
+    static func save(_ snapshot: CatalogSnapshot) async {
+        await Task.detached(priority: .utility) {
+            do {
+                let url = snapshotURL(appID: snapshot.appID, referrer: snapshot.referrer)
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                try encoder.encode(snapshot).write(to: url, options: .atomic)
+                var values = URLResourceValues()
+                values.isExcludedFromBackup = true
+                var mutableURL = url
+                try? mutableURL.setResourceValues(values)
+            } catch {
+                // The network result remains valid even if this optional
+                // bootstrap snapshot cannot be persisted.
+            }
+        }.value
+    }
+
+    private nonisolated static func snapshotURL(appID: String, referrer: String) -> URL {
+        let safeAppID = appID
+            .unicodeScalars
+            .map { CharacterSet.alphanumerics.contains($0) ? String($0) : "-" }
+            .joined()
+        let safeReferrer = String(
+            referrer
+                .unicodeScalars
+                .map { CharacterSet.alphanumerics.contains($0) ? String($0) : "-" }
+                .joined()
+                .prefix(80)
         )
-        return result
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CMSCatalog", isDirectory: true)
+            .appendingPathComponent("\(safeAppID)-\(safeReferrer)-catalog-v1.json")
     }
 }
 
@@ -388,10 +647,12 @@ private struct RemoteCarouselResponse: Decodable {
 private struct CarouselLoadResult {
     var entries: [RemoteCarouselPage: [TemplateDetailEntry]] = [:]
     var homeHeroOffer: CMSCouponOffer?
+    var homeCreditPurchasePromotion: CMSCreditPurchasePromotion?
     var homeBottomOffer: CMSCouponOffer?
+    var homeBottomCreditPurchasePromotion: CMSCreditPurchasePromotion?
 }
 
-private struct RemoteFixedFeatureResponse: Decodable {
+struct RemoteFixedFeatureResponse: Decodable {
     let items: [RemoteFixedFeatureItem]
     let creditPricing: AppCreditPricing?
 
@@ -406,17 +667,19 @@ private struct FixedFeatureLoadResult {
     let creditPricing: AppCreditPricing
 }
 
-private enum RemoteFixedFeatureCoverType: String, Decodable {
+enum RemoteFixedFeatureCoverType: String, Decodable {
     case image
     case video
 }
 
-private struct RemoteFixedFeatureItem: Decodable {
+struct RemoteFixedFeatureItem: Decodable {
     let featureKey: String
     let title: String
     let coverType: RemoteFixedFeatureCoverType
     let coverImageURL: String?
     let coverVideoURL: String?
+    let generationTarget: RemoteFixedFeatureGenerationTarget?
+    let generationTargets: [RemoteFixedFeatureGenerationTarget]?
 
     enum CodingKeys: String, CodingKey {
         case featureKey = "feature_key"
@@ -424,6 +687,8 @@ private struct RemoteFixedFeatureItem: Decodable {
         case coverType = "cover_type"
         case coverImageURL = "cover_image_url"
         case coverVideoURL = "cover_video_url"
+        case generationTarget = "generation_target"
+        case generationTargets = "generation_targets"
     }
 
     var quickAction: HomeQuickAction? {
@@ -440,7 +705,43 @@ private struct RemoteFixedFeatureItem: Decodable {
             orientation: .landscape,
             generationKind: coverType == .video ? .video : .image
         )
-        return HomeQuickAction(feature: feature, title: title, item: item)
+        let targets = generationTargets?.map(\.value) ?? []
+        return HomeQuickAction(
+            feature: feature,
+            title: title,
+            item: item,
+            generationTarget: generationTarget?.value,
+            generationTargets: targets
+        )
+    }
+}
+
+struct RemoteFixedFeatureGenerationTarget: Decodable {
+    let itemID: String
+    let endpoint: String
+    let modelType: String
+    let modelID: String
+    let estimatedCredits: Int
+    let promptTemplate: String?
+
+    enum CodingKeys: String, CodingKey {
+        case itemID = "item_id"
+        case endpoint
+        case modelType = "model_type"
+        case modelID = "model_id"
+        case estimatedCredits = "estimated_credits"
+        case promptTemplate = "prompt_template"
+    }
+
+    var value: FeatureGenerationTarget {
+        FeatureGenerationTarget(
+            itemID: itemID,
+            endpoint: endpoint,
+            modelType: modelType,
+            modelID: modelID,
+            estimatedCredits: estimatedCredits,
+            promptTemplate: promptTemplate
+        )
     }
 }
 
@@ -503,6 +804,10 @@ private struct RemoteCarouselItem: Decodable {
         placement?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "hero"
     }
 
+    var normalizedContentKind: String {
+        contentKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "template"
+    }
+
     var normalizedTargetKind: String {
         if let targetKind = targetKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            !targetKind.isEmpty {
@@ -522,7 +827,7 @@ private struct RemoteCarouselItem: Decodable {
 
     var couponOffer: CMSCouponOffer? {
         guard page == .home,
-              contentKind?.lowercased() == "coupon",
+              normalizedContentKind == "coupon",
               let coupon,
               let coverImageURL = coverImageURL.flatMap(URL.init(string:)),
               let weekly = coupon.weekly.plan,
@@ -539,8 +844,23 @@ private struct RemoteCarouselItem: Decodable {
         )
     }
 
+    var creditPurchasePromotion: CMSCreditPurchasePromotion? {
+        guard page == .home,
+              normalizedContentKind == "credit_purchase",
+              coverType == .image,
+              let coverImageURL = coverImageURL.flatMap(URL.init(string:)) else {
+            return nil
+        }
+
+        return CMSCreditPurchasePromotion(
+            id: id,
+            placement: normalizedPlacement,
+            coverImageURL: coverImageURL
+        )
+    }
+
     var detailEntry: (page: RemoteCarouselPage, entry: TemplateDetailEntry)? {
-        guard contentKind?.lowercased() != "coupon" else { return nil }
+        guard normalizedContentKind == "template" else { return nil }
         let imageURL = coverImageURL.flatMap(URL.init(string:))
         let videoURL = coverType == .video ? coverVideoURL.flatMap(URL.init(string:)) : nil
         let comparison = comparisonCoverValue
@@ -591,7 +911,7 @@ private struct RemoteCarouselItem: Decodable {
 
     var photoImageEntry: (page: RemoteCarouselPage, entry: TemplateDetailEntry)? {
         guard page == .photo,
-              contentKind?.lowercased() != "coupon",
+              normalizedContentKind == "template",
               let imageURL = coverImageURL.flatMap(URL.init(string:)) else {
             return nil
         }

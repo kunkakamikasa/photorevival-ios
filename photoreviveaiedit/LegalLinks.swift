@@ -2,12 +2,15 @@ import SafariServices
 import SwiftUI
 
 enum LegalDocument: String, Identifiable {
+    case privacyPolicy
     case termsOfService
 
     var id: String { rawValue }
 
     var url: URL {
         switch self {
+        case .privacyPolicy:
+            URL(string: "https://www.alihantakaz.site/PhotoRevival-Privacy-policy.html")!
         case .termsOfService:
             URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
         }

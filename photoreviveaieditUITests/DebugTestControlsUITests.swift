@@ -41,11 +41,39 @@ final class DebugTestControlsUITests: XCTestCase {
         XCTAssertTrue(bubble.waitForExistence(timeout: 5))
         bubble.tap()
 
-        let subscriberPromotion = app.buttons["积分刮刮卡促销"]
+        let subscriberPromotion = revealButton("已订阅回访 · 积分刮刮卡", in: app)
         XCTAssertTrue(subscriberPromotion.waitForExistence(timeout: 3))
+        XCTAssertTrue(subscriberPromotion.isHittable)
         subscriberPromotion.tap()
 
         XCTAssertTrue(app.scrollViews["subscriber-scratch-flow"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testDebugBubblePresentsCreditExitOffer() throws {
+        let app = launchApp()
+
+        let bubble = app.buttons["debug-test-bubble"]
+        XCTAssertTrue(bubble.waitForExistence(timeout: 5))
+        bubble.tap()
+
+        let creditExitOffer = revealButton("积分购买退出挽回弹窗", in: app)
+        XCTAssertTrue(creditExitOffer.waitForExistence(timeout: 3))
+        XCTAssertTrue(creditExitOffer.isHittable)
+        creditExitOffer.tap()
+
+        let offer = app.descendants(matching: .any)["credit-exit-offer"]
+        XCTAssertTrue(offer.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func revealButton(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons[identifier]
+        for _ in 0..<5 {
+            if button.exists, button.isHittable { return button }
+            app.swipeUp()
+        }
+        return button
     }
 
     @MainActor

@@ -10,7 +10,7 @@ struct DiscoveryPage: View {
     let heroEntries: [TemplateDetailEntry]
     let homeQuickActions: [HomeQuickAction]
     let videoModeActions: [HomeQuickAction]
-    let homeHeroOffer: CMSCouponOffer?
+    let homeHeroPromotion: CMSHomeHeroPromotion?
     let isLoadingTemplates: Bool
     let credits: Int
     let onSelectTemplate: (TemplateItem) -> Void
@@ -19,7 +19,7 @@ struct DiscoveryPage: View {
     let onCredits: () -> Void
     let onGift: () -> Void
     let onSuggestion: () -> Void
-    let onSummerOffer: (CMSCouponOffer) -> Void
+    let onHeroPromotion: (CMSHomeHeroPromotion) -> Void
     let isSubscribed: Bool
     let isLoggedIn: Bool
     let onLogin: () -> Void
@@ -32,7 +32,7 @@ struct DiscoveryPage: View {
                     sections: homeSections,
                     heroEntries: heroEntries,
                     quickActions: homeQuickActions,
-                    heroOffer: homeHeroOffer,
+                    heroPromotion: homeHeroPromotion,
                     isLoadingTemplates: isLoadingTemplates,
                     credits: credits,
                     onSelectTemplate: onSelectTemplate,
@@ -41,7 +41,7 @@ struct DiscoveryPage: View {
                     onCredits: onCredits,
                     onGift: onGift,
                     onSuggestion: onSuggestion,
-                    onSummerOffer: onSummerOffer,
+                    onHeroPromotion: onHeroPromotion,
                     isSubscribed: isSubscribed,
                     isLoggedIn: isLoggedIn,
                     onLogin: onLogin,
@@ -72,7 +72,7 @@ private struct HomeDiscoveryView: View {
     let sections: [TemplateSection]
     let heroEntries: [TemplateDetailEntry]
     let quickActions: [HomeQuickAction]
-    let heroOffer: CMSCouponOffer?
+    let heroPromotion: CMSHomeHeroPromotion?
     let isLoadingTemplates: Bool
     let credits: Int
     let onSelectTemplate: (TemplateItem) -> Void
@@ -81,7 +81,7 @@ private struct HomeDiscoveryView: View {
     let onCredits: () -> Void
     let onGift: () -> Void
     let onSuggestion: () -> Void
-    let onSummerOffer: (CMSCouponOffer) -> Void
+    let onHeroPromotion: (CMSHomeHeroPromotion) -> Void
     let isSubscribed: Bool
     let isLoggedIn: Bool
     let onLogin: () -> Void
@@ -92,14 +92,14 @@ private struct HomeDiscoveryView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 HomeHeroCarousel(
                     entries: heroEntries,
-                    offer: heroOffer,
+                    promotion: heroPromotion,
                     isLoading: isLoadingTemplates,
                     credits: credits,
                     onSelect: onSelectCarousel,
                     onMembership: onMembership,
                     onCredits: onCredits,
                     onGift: onGift,
-                    onSummerOffer: onSummerOffer,
+                    onHeroPromotion: onHeroPromotion,
                     isSubscribed: isSubscribed,
                     isLoggedIn: isLoggedIn,
                     onLogin: onLogin
@@ -115,7 +115,7 @@ private struct HomeDiscoveryView: View {
                     .zIndex(2)
                 }
 
-                VStack(spacing: 25) {
+                LazyVStack(spacing: 25) {
                     if sections.isEmpty && isLoadingTemplates {
                         TemplateSectionsSkeleton()
                     } else {
@@ -208,7 +208,7 @@ private struct StandardDiscoveryView: View {
                         .padding(.top, 18)
                 }
 
-                VStack(spacing: 25) {
+                LazyVStack(spacing: 25) {
                     if sections.isEmpty && isLoadingTemplates {
                         TemplateSectionsSkeleton()
                     } else {
@@ -532,21 +532,24 @@ private struct AnimatedGiftIcon: View {
 
 private struct HomeHeroCarousel: View {
     let entries: [TemplateDetailEntry]
-    let offer: CMSCouponOffer?
+    let promotion: CMSHomeHeroPromotion?
     let isLoading: Bool
     let credits: Int
     let onSelect: (TemplateDetailEntry) -> Void
     let onMembership: () -> Void
     let onCredits: () -> Void
     let onGift: () -> Void
-    let onSummerOffer: (CMSCouponOffer) -> Void
+    let onHeroPromotion: (CMSHomeHeroPromotion) -> Void
     let isSubscribed: Bool
     let isLoggedIn: Bool
     let onLogin: () -> Void
     @State private var selectedPage = 0
 
-    private var offerPageCount: Int { offer == nil ? 0 : 1 }
-    private var pageCount: Int { entries.count + offerPageCount }
+    private var promotionPageCount: Int { promotion == nil ? 0 : 1 }
+    private var pageCount: Int { entries.count + promotionPageCount }
+    private var carouselContentID: String {
+        ([promotion?.id ?? "no-promotion"] + entries.map(\.id)).joined(separator: "|")
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -555,10 +558,10 @@ private struct HomeHeroCarousel: View {
                     HeroCarouselSkeleton()
                 } else {
                     TabView(selection: $selectedPage) {
-                        if let offer {
-                            Button { onSummerOffer(offer) } label: {
+                        if let promotion {
+                            Button { onHeroPromotion(promotion) } label: {
                                 ConfiguredPromotionImage(
-                                    url: offer.coverImageURL,
+                                    url: promotion.coverImageURL,
                                     showsSkeletonWhileLoading: true
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -566,23 +569,28 @@ private struct HomeHeroCarousel: View {
                             }
                             .buttonStyle(.plain)
                             .tag(0)
-                            .accessibilityLabel("Open special gift")
+                            .accessibilityLabel(promotion.accessibilityLabel)
                         }
 
                         ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                             Button {
                                 onSelect(entry)
                             } label: {
-                                TemplateMediaView(item: entry.displayItem, gravity: .resizeAspectFill)
+                                TemplateMediaView(
+                                    item: entry.displayItem,
+                                    gravity: .resizeAspectFill,
+                                    playsVideo: selectedPage == index + promotionPageCount
+                                )
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .tag(index + offerPageCount)
+                            .tag(index + promotionPageCount)
                             .accessibilityLabel("Open \(entry.displayItem.title)")
                         }
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
+                    .id(carouselContentID)
                 }
             }
 
@@ -640,10 +648,10 @@ private struct HomeHeroCarousel: View {
 
             if pageCount > 0 {
                 Button {
-                    if let offer, selectedPage == 0 {
-                        onSummerOffer(offer)
+                    if let promotion, selectedPage == 0 {
+                        onHeroPromotion(promotion)
                     } else {
-                        let entryIndex = selectedPage - offerPageCount
+                        let entryIndex = selectedPage - promotionPageCount
                         if entries.indices.contains(entryIndex) {
                             onSelect(entries[entryIndex])
                         }
@@ -675,7 +683,10 @@ private struct HomeHeroCarousel: View {
         }
         .frame(height: 365)
         .clipped()
-        .task(id: pageCount) {
+        .onChange(of: carouselContentID) { _, _ in
+            selectedPage = 0
+        }
+        .task(id: carouselContentID) {
             await advanceCarousel(
                 count: pageCount,
                 selection: $selectedPage,
@@ -688,6 +699,8 @@ private struct HomeHeroCarousel: View {
 struct ConfiguredPromotionImage: View {
     let url: URL
     var showsSkeletonWhileLoading = false
+    @State private var image: UIImage?
+    @State private var didFail = false
 
     var body: some View {
         ZStack {
@@ -700,9 +713,54 @@ struct ConfiguredPromotionImage: View {
                 }
             }
 
-            RemoteTemplateImage(url: url)
+            if let image {
+                AnimatedUIKitImage(image: image)
+            } else if didFail {
+                TemplateMediaUnavailablePlaceholder()
+            }
         }
         .clipped()
+        .task(id: url) {
+            await loadImage()
+        }
+    }
+
+    private func loadImage() async {
+        didFail = false
+        image = nil
+
+        do {
+            let loadedImage = try await TemplateImageRepository.shared.image(for: url)
+            guard !Task.isCancelled else { return }
+            image = loadedImage
+        } catch {
+            guard !Task.isCancelled else { return }
+            didFail = true
+        }
+    }
+}
+
+private struct AnimatedUIKitImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> UIImageView {
+        let imageView = UIImageView()
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        return imageView
+    }
+
+    func updateUIView(_ imageView: UIImageView, context: Context) {
+        guard imageView.image !== image else { return }
+        imageView.stopAnimating()
+        imageView.image = image
+        if image.images != nil {
+            imageView.startAnimating()
+        }
+    }
+
+    static func dismantleUIView(_ imageView: UIImageView, coordinator: Void) {
+        imageView.stopAnimating()
     }
 }
 
@@ -1212,8 +1270,7 @@ private struct HomeQuickActionStrip: View {
                                                 item: action.item,
                                                 gravity: .resizeAspectFill,
                                                 imageContentMode: .fit,
-                                                fillsFitImageBackground: true,
-                                                playsVideo: false
+                                                fillsFitImageBackground: true
                                             )
                                                 .frame(width: cardWidth, height: 66)
                                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1335,7 +1392,7 @@ struct TemplateCoverCard: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                TemplateMediaView(item: item, gravity: .resizeAspectFill, playsVideo: false)
+                TemplateMediaView(item: item, gravity: .resizeAspectFill)
 
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.76)],
@@ -1375,8 +1432,15 @@ struct TemplateMediaView: View {
     var imageContentMode: ContentMode = .fill
     var fillsFitImageBackground = false
     var aspectFitVideoBackgroundColor: UIColor = .black
+    var imageMaxPixelSize = 960
     var playsVideo = true
     var showsLoadingPlaceholder = true
+
+    @State private var remotePosterIsResolved = false
+
+    private var waitsForRemotePoster: Bool {
+        item.coverImageURL != nil || item.comparisonCover != nil
+    }
 
     private var effectiveGravity: AVLayerVideoGravity {
         // Comparison covers must preserve the full before/after frame. The
@@ -1399,12 +1463,19 @@ struct TemplateMediaView: View {
             }
 
             if let comparisonCover = item.comparisonCover {
-                TemplateComparisonView(cover: comparisonCover, imageContentMode: imageContentMode)
+                TemplateComparisonView(
+                    cover: comparisonCover,
+                    imageContentMode: imageContentMode,
+                    maxPixelSize: imageMaxPixelSize,
+                    onMediaResolved: { _ in remotePosterIsResolved = true }
+                )
             } else if let coverImageURL = item.coverImageURL {
                 RemoteTemplateImage(
                     url: coverImageURL,
                     imageContentMode: imageContentMode,
-                    fillsFitBackground: fillsFitImageBackground
+                    fillsFitBackground: fillsFitImageBackground,
+                    maxPixelSize: imageMaxPixelSize,
+                    onResolution: { _ in remotePosterIsResolved = true }
                 )
             } else if !item.imageName.isEmpty {
                 if imageContentMode == .fit {
@@ -1438,10 +1509,9 @@ struct TemplateMediaView: View {
 
             // Image filters can reuse catalog entries that also have a legacy
             // video preview name. Their cover must remain a still image.
-            // CMS fixed-feature shortcuts currently provide video-only covers.
-            // Keep those usable even when a compact list card opts out of
-            // autoplay for items that already have a still thumbnail.
-            if (playsVideo || item.coverImageURL == nil) && item.generationKind == .video {
+            if playsVideo,
+               item.generationKind == .video,
+               !waitsForRemotePoster || remotePosterIsResolved {
                 if let coverVideoURL = item.coverVideoURL {
                     RemoteLoopingVideoView(
                         url: coverVideoURL,
@@ -1460,6 +1530,9 @@ struct TemplateMediaView: View {
             }
         }
         .clipped()
+        .onChange(of: item.id) { _, _ in
+            remotePosterIsResolved = false
+        }
     }
 }
 
@@ -1467,6 +1540,8 @@ struct TemplateComparisonView: View {
     let cover: TemplateComparisonCover
     var allowsInteraction = false
     var imageContentMode: ContentMode = .fill
+    var maxPixelSize = 960
+    var onMediaResolved: (Bool) -> Void = { _ in }
 
     private let frameInterval = 1.0 / 30.0
     @State private var draggedProgress: CGFloat?
@@ -1522,10 +1597,20 @@ struct TemplateComparisonView: View {
 
     private func comparisonContent(width: CGFloat, height: CGFloat, progress: CGFloat) -> some View {
         ZStack(alignment: .leading) {
-            RemoteTemplateImage(url: cover.afterURL, imageContentMode: imageContentMode)
+            RemoteTemplateImage(
+                url: cover.afterURL,
+                imageContentMode: imageContentMode,
+                maxPixelSize: maxPixelSize,
+                onResolution: onMediaResolved
+            )
                 .frame(width: width, height: height)
 
-            RemoteTemplateImage(url: cover.beforeURL, imageContentMode: imageContentMode)
+            RemoteTemplateImage(
+                url: cover.beforeURL,
+                imageContentMode: imageContentMode,
+                maxPixelSize: maxPixelSize,
+                onResolution: onMediaResolved
+            )
                 .frame(width: width, height: height)
                 .mask(alignment: .leading) {
                     Rectangle()
@@ -1614,16 +1699,18 @@ private struct HorizontalComparisonDragSurface: UIViewRepresentable {
     }
 }
 
-private struct RemoteTemplateImage: View {
+struct RemoteTemplateImage: View {
     let url: URL
     var imageContentMode: ContentMode = .fill
     var fillsFitBackground = false
+    var maxPixelSize = 960
+    var onResolution: (Bool) -> Void = { _ in }
 
     @State private var image: UIImage?
     @State private var didFail = false
 
     private var displayedImage: UIImage? {
-        image ?? TemplateImageMemoryCache.shared.image(for: url)
+        image ?? TemplateImageMemoryCache.shared.image(for: url, maxPixelSize: maxPixelSize)
     }
 
     var body: some View {
@@ -1670,18 +1757,83 @@ private struct RemoteTemplateImage: View {
     private func loadImage() async {
         didFail = false
 
-        if let cachedImage = TemplateImageMemoryCache.shared.image(for: url) {
+        if let cachedImage = TemplateImageMemoryCache.shared.image(
+            for: url,
+            maxPixelSize: maxPixelSize
+        ) {
+            TemplateMediaMetrics.shared.record(.memory, media: .image)
             image = cachedImage
+            TemplateMediaMetrics.shared.markPosterDisplayed(for: url)
+            onResolution(true)
             return
         }
 
         do {
-            let loadedImage = try await TemplateImageRepository.shared.image(for: url)
+            let loadedImage = try await TemplateImageRepository.shared.image(
+                for: url,
+                maxPixelSize: maxPixelSize
+            )
             guard !Task.isCancelled else { return }
             image = loadedImage
+            TemplateMediaMetrics.shared.markPosterDisplayed(for: url)
+            onResolution(true)
         } catch {
             guard !Task.isCancelled else { return }
             didFail = true
+            onResolution(false)
+        }
+    }
+}
+
+/// Shared phase-style image loader for generated results, avatars and history
+/// thumbnails. Unlike AsyncImage, every call participates in the same memory,
+/// disk and in-flight request cache as template posters.
+struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View {
+    let url: URL
+    private let content: (UIImage) -> Content
+    private let placeholder: () -> Placeholder
+    private let failure: () -> Failure
+
+    @State private var image: UIImage?
+    @State private var didFail = false
+
+    init(
+        url: URL,
+        @ViewBuilder content: @escaping (UIImage) -> Content,
+        @ViewBuilder placeholder: @escaping () -> Placeholder,
+        @ViewBuilder failure: @escaping () -> Failure
+    ) {
+        self.url = url
+        self.content = content
+        self.placeholder = placeholder
+        self.failure = failure
+    }
+
+    var body: some View {
+        Group {
+            if let image = image ?? TemplateImageMemoryCache.shared.image(for: url) {
+                content(image)
+            } else if didFail {
+                failure()
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            didFail = false
+            if let cachedImage = TemplateImageMemoryCache.shared.image(for: url) {
+                TemplateMediaMetrics.shared.record(.memory, media: .image)
+                image = cachedImage
+                return
+            }
+            do {
+                let loadedImage = try await TemplateImageRepository.shared.image(for: url)
+                guard !Task.isCancelled else { return }
+                image = loadedImage
+            } catch {
+                guard !Task.isCancelled else { return }
+                didFail = true
+            }
         }
     }
 }

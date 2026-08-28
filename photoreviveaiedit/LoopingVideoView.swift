@@ -59,6 +59,8 @@ final class LoopingPlayerUIView: UIView {
     private var playerLooper: AVPlayerLooper?
     private var readyForDisplayObservation: NSKeyValueObservation?
     private var remoteVideoTask: Task<Void, Never>?
+    private var remotePlaybackTask: Task<Void, Never>?
+    private var hasRemotePlaybackPermit = false
     private var currentResourceName: String?
     private var currentURL: URL?
 
@@ -133,23 +135,34 @@ final class LoopingPlayerUIView: UIView {
         stop()
         currentURL = url
         if let cachedURL = TemplateVideoCache.cachedURL(for: url) {
+            TemplateMediaMetrics.shared.record(.disk, media: .video)
             configurePlayer(url: cachedURL)
             return
         }
 
-        // Download once, then play the local file. Previously AVPlayer streamed
-        // the remote URL while a second task downloaded the same video for the
-        // cache, doubling bandwidth exactly while image covers were loading.
+        // Cached videos can all use hardware decode concurrently. Only remote
+        // streams are admitted through this visible-screen gate; the separate cache
+        // downloader remains capped at two transfers.
+        TemplateMediaMetrics.shared.record(.network, media: .video)
+        remotePlaybackTask = Task { [weak self] in
+            await TemplateRemotePlaybackGate.shared.acquire()
+            guard !Task.isCancelled,
+                  let self,
+                  self.currentURL == url else {
+                await TemplateRemotePlaybackGate.shared.release()
+                return
+            }
+            self.hasRemotePlaybackPermit = true
+            self.configurePlayer(url: url)
+            self.remotePlaybackTask = nil
+        }
+
+        // Keep a complete, app-owned copy for later appearances and restarts.
         remoteVideoTask = Task { [weak self] in
             do {
-                let localURL = try await TemplateVideoCache.shared.localURL(for: url)
-                guard !Task.isCancelled, self?.currentURL == url else { return }
-                self?.configurePlayer(url: localURL)
+                _ = try await TemplateVideoCache.shared.localURL(for: url)
             } catch {
-                guard !Task.isCancelled, self?.currentURL == url else { return }
-                // If persistence is unavailable, retain streaming as a final
-                // fallback so a transient disk error does not hide the preview.
-                self?.configurePlayer(url: url)
+                // Streaming remains available if persistence is unavailable.
             }
             self?.remoteVideoTask = nil
         }
@@ -167,6 +180,11 @@ final class LoopingPlayerUIView: UIView {
         playerLayer.isHidden = true
         readyForDisplayObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
             self?.playerLayer.isHidden = !layer.isReadyForDisplay
+            // Bundled launch/onboarding videos use the same player view but are
+            // not part of Home media performance.
+            if layer.isReadyForDisplay, self?.currentURL != nil {
+                TemplateMediaMetrics.shared.markVideoFrameDisplayed()
+            }
         }
         player.play()
     }
@@ -176,8 +194,14 @@ final class LoopingPlayerUIView: UIView {
     }
 
     func stop() {
+        remotePlaybackTask?.cancel()
+        remotePlaybackTask = nil
         remoteVideoTask?.cancel()
         remoteVideoTask = nil
+        if hasRemotePlaybackPermit {
+            hasRemotePlaybackPermit = false
+            Task { await TemplateRemotePlaybackGate.shared.release() }
+        }
         queuePlayer?.pause()
         readyForDisplayObservation?.invalidate()
         readyForDisplayObservation = nil
@@ -227,6 +251,35 @@ final class LoopingPlayerUIView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         window == nil ? queuePlayer?.pause() : queuePlayer?.play()
+    }
+}
+
+/// A screen can contain nine visible cards, so all nine uncached previews may
+/// start. Once files are cached this gate is not involved at all. The separate
+/// full-file downloader remains capped at two transfers.
+private actor TemplateRemotePlaybackGate {
+    static let shared = TemplateRemotePlaybackGate()
+
+    private let limit = 9
+    private var activePlayers = 0
+    private var waiters = [CheckedContinuation<Void, Never>]()
+
+    func acquire() async {
+        if activePlayers < limit {
+            activePlayers += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            activePlayers = max(0, activePlayers - 1)
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }
 

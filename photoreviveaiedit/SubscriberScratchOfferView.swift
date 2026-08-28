@@ -4,6 +4,7 @@ import UIKit
 enum SubscriberScratchCampaign {
     static let version = 1
     static let freeCredits = 100
+    static let freeCreditLifetime: TimeInterval = 2 * 60 * 60
     static let rewardTaskCode = "subscriber_return_scratch_100"
 }
 
@@ -43,7 +44,8 @@ struct SubscriberScratchOfferView: View {
     @State private var alert: SubscriberScratchAlert?
     @State private var showsCreditToast = false
     @State private var celebrationID = 0
-    @State private var offerEndsAt = Date.now.addingTimeInterval(60 * 60)
+    @State private var purchaseTask: Task<Void, Never>?
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     init(
         accountStore: AppAccountStore? = nil,
@@ -127,6 +129,14 @@ struct SubscriberScratchOfferView: View {
                 source: "subscriber_return",
                 productID: CreditProductCatalog.subscriberReturnOffer.productID,
                 promotion: subscriberPromotion
+            )
+        }
+        .onDisappear {
+            purchaseTask?.cancel()
+        }
+        .task {
+            await priceStore.load(
+                productIDs: [CreditProductCatalog.subscriberReturnOffer.productID].compactMap { $0 }
             )
         }
     }
@@ -217,7 +227,7 @@ struct SubscriberScratchOfferView: View {
 
         case .freeRevealed, .claimingFree:
             VStack(spacing: 12) {
-                Text("Your welcome-back credits are ready.")
+                Text("They expire 2 hours after you claim them.")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.66))
 
@@ -234,24 +244,19 @@ struct SubscriberScratchOfferView: View {
             }
 
         case .bonusScratch:
-            Label("Your 100 credits are safe — scratch again", systemImage: "checkmark.seal.fill")
+            Label("100 credits added • valid for 2 hours", systemImage: "checkmark.seal.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.64))
                 .accessibilityIdentifier("subscriber-scratch-paid-hint")
 
         case .offerRevealed:
             VStack(spacing: 16) {
-                offerCountdown
-
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(CreditProductCatalog.subscriberReturnOffer.displayPrice)
-                        .font(.system(size: 24, weight: .black, design: .rounded))
-                        .foregroundStyle(SubscriberScratchPalette.ink)
-                    Text("$39.99")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.42))
-                        .strikethrough()
-                }
+                Text(priceStore.displayPrice(
+                    for: CreditProductCatalog.subscriberReturnOffer.productID,
+                    fallback: CreditProductCatalog.subscriberReturnOffer.displayPrice
+                ))
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(SubscriberScratchPalette.ink)
 
                 Button(action: beginPurchase) {
                     SubscriberScratchPrimaryButton(
@@ -274,6 +279,8 @@ struct SubscriberScratchOfferView: View {
                 .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.58))
 
                 Button {
+                    purchaseTask?.cancel()
+                    isWorking = false
                     dismiss()
                 } label: {
                     Image(systemName: "xmark")
@@ -290,29 +297,8 @@ struct SubscriberScratchOfferView: View {
         }
     }
 
-    private var offerCountdown: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            let remaining = max(Int(offerEndsAt.timeIntervalSince(timeline.date)), 0)
-            HStack(spacing: 6) {
-                SubscriberCountdownCell(value: String(format: "%02d", remaining / 3_600), label: "HR")
-                Text(":").font(.title2.bold()).foregroundStyle(SubscriberScratchPalette.orange)
-                SubscriberCountdownCell(value: String(format: "%02d", (remaining % 3_600) / 60), label: "MIN")
-                Text(":").font(.title2.bold()).foregroundStyle(SubscriberScratchPalette.orange)
-                SubscriberCountdownCell(value: String(format: "%02d", remaining % 60), label: "SEC")
-            }
-        }
-        .accessibilityIdentifier("subscriber-scratch-countdown")
-    }
-
     private var subscriberPromotion: AppAnalytics.PromotionContext {
-        AppAnalytics.PromotionContext(
-            promotionID: "subscriber_scratch_1600",
-            promotionName: "subscriber_return_scratch",
-            creativeName: "scratch_1600",
-            creativeSlot: "subscriber_return",
-            offerVariant: "subscriber_scratch_1600",
-            billingPeriod: "one_time"
-        )
+        CreditPurchasePromotion.surprise1600
     }
 
     private func revealFreeReward() {
@@ -383,26 +369,52 @@ struct SubscriberScratchOfferView: View {
             )
             return
         }
-        guard let purchaseOverride else {
-            alert = SubscriberScratchAlert(
-                title: "Checkout not connected",
-                message: "The Product ID \(productID) is configured, but the consumable purchase verification handler still needs to be connected."
-            )
-            return
-        }
 
         isWorking = true
-        AppAnalytics.promotionSelected(subscriberPromotion, productID: productID)
-        Task {
-            do {
-                try await purchaseOverride(offer)
-                isWorking = false
+        purchaseTask = Task {
+            if let purchaseOverride {
+                do {
+                    AppAnalytics.promotionSelected(subscriberPromotion, productID: productID)
+                    try await purchaseOverride(offer)
+                    guard !Task.isCancelled else { return }
+                    isWorking = false
+                    dismiss()
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    isWorking = false
+                    alert = SubscriberScratchAlert(
+                        title: "Purchase unavailable",
+                        message: error.localizedDescription
+                    )
+                }
+                return
+            }
+
+            let outcome = await CreditPurchaseService.purchase(
+                offer,
+                promotion: subscriberPromotion
+            )
+            guard !Task.isCancelled else { return }
+            isWorking = false
+            switch outcome {
+            case .purchased:
                 dismiss()
-            } catch {
-                isWorking = false
+            case .cancelled:
+                break
+            case .pending:
+                alert = SubscriberScratchAlert(
+                    title: "Purchase pending",
+                    message: "Apple is still processing this purchase. Your credits will be added after confirmation."
+                )
+            case .unavailable:
+                alert = SubscriberScratchAlert(
+                    title: "Product unavailable",
+                    message: "The 1,600-credit surprise is not currently available from the App Store."
+                )
+            case .failed(let message):
                 alert = SubscriberScratchAlert(
                     title: "Purchase unavailable",
-                    message: error.localizedDescription
+                    message: message
                 )
             }
         }
@@ -509,16 +521,19 @@ private struct SubscriberFreeRewardCard: View {
                     )
                 )
 
-            Text("FREE CREDITS")
+            Text("100 CREDITS FREE")
                 .font(.system(size: 12, weight: .black))
                 .tracking(2.0)
                 .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.62))
 
-            Text("WELCOME-BACK BONUS")
-                .font(.system(size: 12, weight: .black))
+            VStack(spacing: 0) {
+                Text("PHOTO REVIVE CREDITS")
+                Text("(VALID FOR 2 HOURS)")
+            }
+                .font(.system(size: 11, weight: .black))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 18)
-                .frame(height: 31)
+                .frame(height: 40)
                 .background(
                     LinearGradient(
                         colors: [SubscriberScratchPalette.gold, SubscriberScratchPalette.orange],
@@ -639,29 +654,6 @@ private struct SubscriberScratchPrimaryButton: View {
     }
 }
 
-private struct SubscriberCountdownCell: View {
-    let value: String
-    let label: String
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.system(size: 19, weight: .black, design: .monospaced))
-                .foregroundStyle(SubscriberScratchPalette.ink)
-                .frame(width: 57, height: 42)
-                .background(.white.opacity(0.70), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(SubscriberScratchPalette.gold.opacity(0.68), lineWidth: 1)
-                )
-            Text(label)
-                .font(.system(size: 8, weight: .bold))
-                .tracking(1)
-                .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.44))
-        }
-    }
-}
-
 private struct SubscriberCardGlow: View {
     @State private var glowing = false
 
@@ -716,6 +708,7 @@ private struct SmoothScratchCard<Content: View>: View {
     @State private var scratchedCells = Set<Int>()
     @State private var isComplete = false
     @State private var coatingOpacity = 1.0
+    @State private var hasStartedScratching = false
 
     private let gridColumns = 32
     private let gridRows = 20
@@ -736,6 +729,13 @@ private struct SmoothScratchCard<Content: View>: View {
                 .contentShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                 .gesture(scratchGesture(size: proxy.size))
                 .allowsHitTesting(!isComplete)
+
+                if !hasStartedScratching && !isComplete {
+                    ScratchHandHint()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .transition(.opacity)
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
         }
@@ -766,14 +766,14 @@ private struct SmoothScratchCard<Content: View>: View {
 
         var title = context.resolve(
             Text("SCRATCH TO REVEAL")
-                .font(.system(size: 17, weight: .black, design: .rounded))
+                .font(.system(size: 25, weight: .black, design: .rounded))
         )
         title.shading = .color(style.textColor)
         context.draw(title, at: CGPoint(x: size.width / 2, y: size.height / 2 + 13))
 
         var hint = context.resolve(
             Text("✦  DRAG YOUR FINGER  ✦")
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
         )
         hint.shading = .color(style.textColor.opacity(0.66))
         context.draw(hint, at: CGPoint(x: size.width / 2, y: size.height / 2 - 17))
@@ -831,6 +831,12 @@ private struct SmoothScratchCard<Content: View>: View {
             x: min(max(point.x, 0), size.width),
             y: min(max(point.y, 0), size.height)
         )
+
+        if !hasStartedScratching {
+            withAnimation(.easeOut(duration: 0.16)) {
+                hasStartedScratching = true
+            }
+        }
 
         var addedPoints: [CGPoint]
         if !isDragging || strokes.isEmpty {
@@ -901,6 +907,36 @@ private struct SmoothScratchCard<Content: View>: View {
             try? await Task.sleep(for: .milliseconds(230))
             guard !Task.isCancelled else { return }
             onReveal()
+        }
+    }
+}
+
+private struct ScratchHandHint: View {
+    @State private var slidesRight = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.white.opacity(0.42))
+                .frame(width: 55, height: 55)
+                .blur(radius: 1)
+
+            Image(systemName: "hand.draw.fill")
+                .font(.system(size: 33, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.82))
+                .shadow(color: .black.opacity(0.18), radius: 5, y: 3)
+        }
+        .rotationEffect(.degrees(-18))
+        .offset(
+            x: slidesRight ? 80 : -80,
+            y: slidesRight ? 17 : -17
+        )
+        .animation(
+            .easeInOut(duration: 1.05).repeatForever(autoreverses: true),
+            value: slidesRight
+        )
+        .onAppear {
+            slidesRight = true
         }
     }
 }

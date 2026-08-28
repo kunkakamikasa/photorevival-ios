@@ -251,7 +251,7 @@
       </p>
       <div class="meta">
         <span>Effective date: August 26, 2026</span>
-        <span>Last updated: August 26, 2026</span>
+        <span>Last updated: August 28, 2026</span>
         <span>Platforms: iOS and iPadOS</span>
       </div>
     </header>
@@ -286,7 +286,7 @@
         <li><a href="#permissions">Device Permissions</a></li>
         <li><a href="#use">How We Use Information</a></li>
         <li><a href="#sharing">Sharing and Disclosure</a></li>
-        <li><a href="#tracking">Attribution and Tracking</a></li>
+        <li><a href="#tracking">Analytics, Attribution, and Tracking</a></li>
         <li><a href="#ai">AI Content Processing</a></li>
         <li><a href="#retention">Storage and Retention</a></li>
         <li><a href="#rights">Your Rights and Choices</a></li>
@@ -308,8 +308,9 @@
           <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a>.
         </p>
         <p>
-          Apple, Google, Adjust, and other third parties may independently determine how they process
-          information through their services. Their activities are governed by their own privacy policies.
+          Apple, Google (including Firebase), Adjust, Meta, and other third parties may independently
+          determine how they process information through their services. Their activities are governed
+          by their own privacy policies.
         </p>
       </section>
 
@@ -338,8 +339,8 @@
               </tr>
               <tr>
                 <td>Subscription and transaction information</td>
-                <td>Product ID, transaction ID, signed transaction data, subscription status, price, currency, and purchase-restoration results.</td>
-                <td>Apple processes payment and provides verification data so we can activate memberships, restore purchases, prevent duplicate processing, and resolve refunds or disputes. We do not directly collect payment-card numbers.</td>
+                <td>Product ID, transaction ID, signed transaction data, subscription status, price, currency, purchase result, and purchase-restoration result.</td>
+                <td>Apple processes payment and provides verification data so we can activate memberships, restore purchases, prevent duplicate processing, and resolve refunds or disputes. Product, price, currency, and transaction outcome information may also be sent to Firebase Analytics and advertising-measurement providers to measure purchase performance. We do not directly collect payment-card numbers.</td>
               </tr>
               <tr>
                 <td>Rewards and usage records</td>
@@ -348,13 +349,13 @@
               </tr>
               <tr>
                 <td>Device, network, and log information</td>
-                <td>iOS platform, App version, time zone, IDFV, random installation identifiers, IP address, and server request logs; this may also include device model, operating-system version, language, and diagnostic information.</td>
-                <td>Collected automatically to connect the service, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
+                <td>iOS platform, App version, time zone, IDFV, Firebase app-instance or installation identifiers, Adjust ADID, other random installation identifiers, IP address, and server request logs; this may also include device model, operating-system version, language, network information, and limited diagnostic or crash information collected by integrated SDKs.</td>
+                <td>Collected automatically to connect the service, operate analytics and attribution, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
               </tr>
               <tr>
-                <td>Advertising attribution and analytics</td>
-                <td>Adjust ADID; IDFA if you authorize tracking; advertising network, campaign, ad group, creative, click label, referral source; and events such as App open, registration, and subscription.</td>
-                <td>Used to identify installation sources, measure advertising and product performance, and avoid duplicate attribution.</td>
+                <td>Product analytics, advertising attribution, and usage data</td>
+                <td>Firebase app-instance information; your Photo Revival account ID when signed in; authentication and subscription status; screen views; onboarding progress; template and feature selections; paywall and promotion interactions; generation type, template ID, input count, credit cost, output settings, status, processing time, and generalized failure category; content-save events; purchase product, value, currency, and result; Adjust attribution data; Meta automatically logged App events and SDK data; and IDFA if you authorize tracking.</td>
+                <td>Used to understand how the App is used, analyze product and purchase funnels, improve features, measure advertising performance, identify installation sources, prevent fraud, and avoid duplicate attribution. Analytics data may be associated with your account when you are signed in.</td>
               </tr>
               <tr>
                 <td>Feedback and contact information</td>
@@ -381,6 +382,11 @@
           another person's photo without permission, identity documents, medical records, or unnecessary
           highly sensitive material.
         </div>
+        <div class="note">
+          <strong>Analytics content limitation:</strong> Our Firebase Analytics integration is designed not
+          to send your uploaded photos or videos, prompts, email address, media URLs, server task IDs, or
+          full error messages. Those items are not used as analytics event parameters.
+        </div>
       </section>
 
       <section id="permissions">
@@ -405,7 +411,7 @@
           <li>Verify App Store subscriptions, restore purchases, and manage memberships, credits, and transaction records;</li>
           <li>Provide check-in, reward, referral, and anti-abuse functions;</li>
           <li>Respond to feedback, diagnose errors, secure servers and accounts, and prevent fraud or misuse;</li>
-          <li>Measure installation sources and product performance and improve features and user experience; and</li>
+          <li>Analyze screen views, onboarding, template selection, generation and purchase funnels, installation sources, advertising performance, and product performance to improve features and user experience; and</li>
           <li>Comply with legal obligations and establish, exercise, or defend legal claims.</li>
         </ol>
         <p>We will not use personal information for a materially incompatible new purpose without appropriate notice and any consent required by law.</p>
@@ -423,12 +429,20 @@
             <p>Sign in with Apple, App Store subscriptions, the system photo picker, notifications, and operating-system services. <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener noreferrer">Apple Privacy Policy</a></p>
           </div>
           <div class="service">
-            <strong>Google</strong>
+            <strong>Google Sign-In</strong>
             <p>Google Sign-In when you select it. The Google Sign-In SDK may process a user identifier and IP address. <a href="https://policies.google.com/privacy?hl=en" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a></p>
+          </div>
+          <div class="service">
+            <strong>Google Firebase Analytics</strong>
+            <p>Product analytics, account-linked user properties, screen and feature interactions, generation-funnel measurement, purchase measurement, and app-instance identifiers. Firebase Analytics does not receive the source photos, prompts, or generated media through our analytics integration. <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener noreferrer">Firebase Privacy and Security</a></p>
           </div>
           <div class="service">
             <strong>Adjust</strong>
             <p>Mobile attribution, advertising measurement, analytics, and fraud prevention. <a href="https://www.adjust.com/terms/privacy-policy/" target="_blank" rel="noopener noreferrer">Adjust Privacy Policy</a></p>
+          </div>
+          <div class="service">
+            <strong>Meta / Facebook SDK</strong>
+            <p>App initialization, automatically logged App events, advertising attribution and measurement, device identifiers where permitted, and limited SDK diagnostic information. <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta Privacy Policy</a></p>
           </div>
           <div class="service">
             <strong>Cloud and AI service providers</strong>
@@ -444,18 +458,39 @@
       </section>
 
       <section id="tracking">
-        <h2>6. Advertising Attribution and Tracking</h2>
+        <h2>6. Analytics, Advertising Attribution, and Tracking</h2>
+        <h3>Firebase Analytics</h3>
+        <p>
+          We use Firebase Analytics to measure product usage and purchase performance. Firebase may assign
+          an app-instance or installation identifier and receive App and device information together with
+          the events described in Section 2. When you are signed in, we provide our internal account ID as
+          the Firebase Analytics user ID and provide authentication and subscription status as user properties.
+          This allows analytics events to be associated with the same App account. Firebase Analytics
+          collection is used for product analytics even when the activity does not constitute cross-app
+          tracking under Apple's definition.
+        </p>
+        <h3>Adjust</h3>
         <p>
           The App integrates the Adjust SDK to understand installation sources and measure advertising
           campaigns. Adjust may process certain device and attribution information without IDFA, including
           IDFV, Adjust ADID, device or operating-system information, IP address, referral data, and App events.
         </p>
+        <h3>Meta / Facebook SDK</h3>
+        <p>
+          The App initializes the Meta/Facebook SDK to support advertising attribution and measurement.
+          Depending on SDK configuration, your device settings, and Meta's services, it may automatically
+          record App activation or purchase-related events and process device identifiers and limited SDK
+          diagnostic information. Meta may use permitted data for analytics, App functionality, and
+          advertising measurement under its own privacy policy.
+        </p>
+        <h3>iOS tracking permission</h3>
         <p>
           When processing constitutes “tracking” as defined by Apple, the App first presents the iOS App
-          Tracking Transparency request. Only after you authorize tracking may the relevant SDK access IDFA
-          and conduct authorized cross-app or cross-website advertising measurement. You can change your
-          choice under “Settings &gt; Privacy &amp; Security &gt; Tracking.” Refusing or withdrawing tracking
-          permission does not affect core service functionality.
+          Tracking Transparency request. Only after you authorize tracking may Adjust, Meta, Firebase, or
+          another relevant SDK access IDFA or conduct authorized cross-app or cross-website advertising
+          measurement. You can change your choice under “Settings &gt; Privacy &amp; Security &gt; Tracking.”
+          Refusing or withdrawing tracking permission does not affect core service functionality. It may
+          not stop first-party product analytics that does not use IDFA and is not considered tracking by Apple.
         </p>
       </section>
 
@@ -478,6 +513,7 @@
           <li><strong>Deleted information and backups:</strong> Information removed from active systems may remain temporarily in isolated backups. It is not used for ordinary business and is removed through the normal backup-rotation process unless longer retention is required by law.</li>
           <li><strong>Feedback:</strong> Retained only as long as reasonably necessary to respond, improve the service, handle related disputes, or comply with legal obligations.</li>
           <li><strong>Transaction, log, and security records:</strong> Retained as needed for tax, accounting, anti-fraud, dispute-resolution, and other legal requirements.</li>
+          <li><strong>Analytics and attribution data:</strong> Retained for the periods configured in Firebase, Adjust, and Meta and only as long as reasonably necessary for product analytics, advertising measurement, fraud prevention, and legal compliance. Aggregated or anonymized statistics may be retained longer.</li>
           <li><strong>Local data:</strong> Generally remains on your device until you sign out, clear system data, or delete the App.</li>
         </ul>
         <p>When information is no longer needed, we delete or anonymize it unless continued retention is legally required.</p>
@@ -491,7 +527,7 @@
           <li>Correct inaccurate or incomplete information;</li>
           <li>Delete an individual generation record or request deletion of your account and associated data;</li>
           <li>Withdraw consent, object to or restrict certain processing, and request data portability where applicable;</li>
-          <li>Refuse cross-app or cross-website tracking and manage photo and notification permissions; and</li>
+          <li>Refuse cross-app or cross-website tracking, manage photo and notification permissions, and object to or request deletion of analytics data where applicable; and</li>
           <li>Submit a complaint to a competent data-protection authority.</li>
         </ul>
         <h3>Deleting data or your account</h3>
