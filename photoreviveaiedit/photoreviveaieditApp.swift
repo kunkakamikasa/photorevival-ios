@@ -23,6 +23,12 @@ final class PhotoReviveAppDelegate: NSObject, UIApplicationDelegate {
             didFinishLaunchingWithOptions: launchOptions
         )
     }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        // Auto App Events are disabled so Meta cannot classify a free trial as
+        // an implicit Purchase. Keep install/session attribution explicitly.
+        AppEvents.shared.activateApp()
+    }
 }
 
 @main
@@ -30,6 +36,16 @@ struct photoreviveaieditApp: App {
     @UIApplicationDelegateAdaptor(PhotoReviveAppDelegate.self) private var appDelegate
 
     init() {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-forceSignedOut") {
+            UserDefaults.standard.set(false, forKey: "isLoggedIn")
+        }
+        if arguments.contains("-forceUnsubscribed") {
+            UserDefaults.standard.set(false, forKey: "isSubscribed")
+        }
+#endif
+
         FirebaseApp.configure()
         AppAnalytics.configure(
             userID: PhotoReviveAuthClient.shared.currentUserID,

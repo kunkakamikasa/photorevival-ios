@@ -7,6 +7,8 @@ struct TemplateDetailView: View {
     let configuredTryNowItem: TemplateItem?
     let configuredTryNowItems: [TemplateItem]?
     let creationItemsProvider: ((TemplateItem) -> [TemplateItem])?
+    let recommendationItemsProvider: ((TemplateItem) -> [TemplateItem])?
+    let photoToVideoGenerationTarget: FeatureGenerationTarget?
     let creditPricing: AppCreditPricing
     @Binding var credits: Int
     let onClose: () -> Void
@@ -21,6 +23,8 @@ struct TemplateDetailView: View {
         tryNowItem: TemplateItem? = nil,
         tryNowItems: [TemplateItem]? = nil,
         creationItemsProvider: ((TemplateItem) -> [TemplateItem])? = nil,
+        recommendationItemsProvider: ((TemplateItem) -> [TemplateItem])? = nil,
+        photoToVideoGenerationTarget: FeatureGenerationTarget? = nil,
         creditPricing: AppCreditPricing = .defaultValue,
         credits: Binding<Int>,
         onClose: @escaping () -> Void
@@ -43,6 +47,8 @@ struct TemplateDetailView: View {
         self.configuredTryNowItem = tryNowItem
         self.configuredTryNowItems = tryNowItems
         self.creationItemsProvider = creationItemsProvider
+        self.recommendationItemsProvider = recommendationItemsProvider
+        self.photoToVideoGenerationTarget = photoToVideoGenerationTarget
         self.creditPricing = creditPricing
         self._credits = credits
         self.onClose = onClose
@@ -57,6 +63,7 @@ struct TemplateDetailView: View {
                         ForEach(detailItems) { detailItem in
                             TemplateDetailPage(
                                 item: detailItem,
+                                playsVideo: selectedID == detailItem.id,
                                 onClose: onClose,
                                 onTry: {
                                     let creationTemplate: TemplateItem
@@ -121,7 +128,9 @@ struct TemplateDetailView: View {
                 ImageGenerationUploadView(
                     template: launch.template,
                     creditPricing: creditPricing,
-                    credits: $credits
+                    credits: $credits,
+                    recommendationItems: recommendationItemsProvider?(launch.template) ?? [],
+                    photoToVideoGenerationTarget: photoToVideoGenerationTarget
                 )
             } else {
                 CreateFlowView(
@@ -206,6 +215,7 @@ struct TemplateCreationLaunch: Identifiable {
 
 private struct TemplateDetailPage: View {
     let item: TemplateItem
+    let playsVideo: Bool
     let onClose: () -> Void
     let onTry: () -> Void
 
@@ -218,16 +228,27 @@ private struct TemplateDetailPage: View {
                     TemplateComparisonView(
                         cover: comparisonCover,
                         allowsInteraction: true,
-                        imageContentMode: .fill
+                        imageContentMode: .fill,
+                        maxPixelSize: 1_920
                     )
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
                 } else if item.orientation == .landscape {
-                    TemplateMediaView(item: item, gravity: .resizeAspect)
+                    TemplateMediaView(
+                        item: item,
+                        gravity: .resizeAspect,
+                        imageMaxPixelSize: 1_920,
+                        playsVideo: playsVideo
+                    )
                         .frame(width: proxy.size.width, height: proxy.size.width / item.orientation.aspectRatio)
                         .position(x: proxy.size.width / 2, y: proxy.size.height * 0.47)
                 } else {
-                    TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                    TemplateMediaView(
+                        item: item,
+                        gravity: .resizeAspectFill,
+                        imageMaxPixelSize: 1_920,
+                        playsVideo: playsVideo
+                    )
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
                 }

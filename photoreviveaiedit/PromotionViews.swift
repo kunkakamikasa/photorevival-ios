@@ -122,6 +122,7 @@ struct SuperPrizeOfferView: View {
     @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var isPurchasing = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     private let promotionContext = AppAnalytics.PromotionContext(
         promotionID: "super_prize",
@@ -131,6 +132,8 @@ struct SuperPrizeOfferView: View {
         offerVariant: "super_prize",
         billingPeriod: "weekly"
     )
+
+    private let designSize = CGSize(width: 430, height: 932)
 
     init(
         onClose: @escaping () -> Void,
@@ -143,109 +146,21 @@ struct SuperPrizeOfferView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            CelebrationFragments()
-                .opacity(0.8)
-                .allowsHitTesting(false)
 
             GeometryReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        Text("SUPER PRIZE")
-                            .font(.system(size: 42, weight: .heavy))
-                            .foregroundStyle(.white)
-                            .minimumScaleFactor(0.72)
-                            .lineLimit(1)
-                            .padding(.top, 76)
+                let scale = min(
+                    proxy.size.width / designSize.width,
+                    proxy.size.height / designSize.height
+                )
 
-                        Text("Returning Users Only")
-                            .font(.title3)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 22)
-                            .frame(height: 40)
-                            .overlay(Capsule().stroke(.white.opacity(0.9), lineWidth: 1))
-                            .padding(.top, 16)
-
-                        SuperPrizeTicket()
-                            .frame(maxWidth: 330)
-                            .frame(height: min(390, proxy.size.height * 0.43))
-                            .padding(.top, 24)
-
-                        VStack(spacing: 2) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text("Only")
-                                    .font(.title2.bold())
-                                Text("$1.14")
-                                    .font(.system(size: 48, weight: .heavy))
-                                    .foregroundStyle(.yellow)
-                                Text("/Day")
-                                    .font(.title2.bold())
-                            }
-                            Text("total $7.99/first week")
-                                .font(.headline)
-                            Text("Then $9.99/week")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.52))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.top, 23)
-
-                        Spacer(minLength: 28)
-
-                        Button {
-                            beginPurchase()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Text(isPurchasing ? "Connecting..." : "Continue")
-                                    .font(.title3.bold())
-                                Spacer()
-                                Image(systemName: "arrow.right")
-                                    .font(.title3.bold())
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 22)
-                            .frame(height: 60)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color(red: 1, green: 0.53, blue: 0.08), AppPalette.accent],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                ),
-                                in: RoundedRectangle(cornerRadius: 10)
-                            )
-                        }
-                        .buttonStyle(TemplatePressStyle())
-                        .disabled(isPurchasing)
-                        .accessibilityIdentifier("super-prize-continue")
-
-                        Label("100% Refund Guarantee   Secured By Apple", systemImage: "apple.logo")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.88))
-                            .padding(.top, 10)
-                            .padding(.bottom, 16)
-                    }
-                    .frame(minHeight: proxy.size.height)
-                    .padding(.horizontal, 22)
-                }
-                .scrollIndicators(.hidden)
+                superPrizeDesign
+                    .frame(width: designSize.width, height: designSize.height)
+                    .scaleEffect(scale)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
             }
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.title2.weight(.light))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(Color.white.opacity(0.08), in: Circle())
-                    .overlay(Circle().stroke(.white.opacity(0.45), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close super prize")
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.leading, 20)
-            .padding(.top, 12)
         }
+        .ignoresSafeArea()
         .preferredColorScheme(.dark)
-        .accessibilityIdentifier("super-prize-screen")
         .onAppear {
             AppAnalytics.paywallViewed(
                 variant: "super_prize",
@@ -260,6 +175,126 @@ struct SuperPrizeOfferView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .task {
+            let productID = SubscriptionProductID.superPrizeWeekly.rawValue
+            await priceStore.load(productIDs: [productID])
+            if !ProcessInfo.processInfo.arguments.contains("-forceSuperPrizeReturningOffer"),
+               priceStore.hasIntroductoryOffer(productID: productID),
+               !(await priceStore.isEligibleForIntroOffer(productID: productID)) {
+                onClose()
+            }
+        }
+    }
+
+    private var superPrizeDesign: some View {
+        ZStack {
+            CelebrationFragments()
+                .opacity(0.92)
+                .allowsHitTesting(false)
+
+            Text("SUPER PRIZE")
+                .font(.system(size: 34, weight: .heavy))
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.8)
+                .lineLimit(1)
+                .position(x: 215, y: 123)
+
+            Text("Returning Users Only")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .frame(height: 30)
+                .overlay(Capsule().stroke(.white.opacity(0.82), lineWidth: 1))
+                .position(x: 215, y: 174)
+
+            SuperPrizeTicket()
+                .frame(width: 300, height: 355)
+                .position(x: 215, y: 399.5)
+
+            VStack(spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("Only")
+                        .font(.system(size: 21, weight: .bold))
+                    Text(
+                        priceStore.introductoryPeriodicPrice(
+                            for: SubscriptionProductID.superPrizeWeekly.rawValue,
+                            divisor: 7,
+                            suffix: ""
+                        ) ?? priceStore.periodicPrice(
+                            for: SubscriptionProductID.superPrizeWeekly.rawValue,
+                            divisor: 7,
+                            suffix: ""
+                        )
+                    )
+                        .font(.system(size: 43, weight: .heavy))
+                        .foregroundStyle(Color(red: 1, green: 0.82, blue: 0))
+                    Text("/Day")
+                        .font(.system(size: 21, weight: .bold))
+                }
+                if priceStore.hasIntroductoryOffer(
+                    productID: SubscriptionProductID.superPrizeWeekly.rawValue
+                ) {
+                    Text(
+                        "total \(priceStore.introductoryDisplayPrice(for: SubscriptionProductID.superPrizeWeekly.rawValue) ?? "—")/first week"
+                    )
+                        .font(.system(size: 16, weight: .bold))
+                    Text("Then \(priceStore.displayPrice(for: SubscriptionProductID.superPrizeWeekly.rawValue))/week")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .padding(.top, 2)
+                } else {
+                    Text("\(priceStore.displayPrice(for: SubscriptionProductID.superPrizeWeekly.rawValue))/week")
+                        .font(.system(size: 16, weight: .bold))
+                }
+            }
+            .foregroundStyle(.white)
+            .position(x: 215, y: 682)
+
+            Button {
+                beginPurchase()
+            } label: {
+                HStack(spacing: 0) {
+                    Spacer()
+                    Text(isPurchasing ? "Connecting..." : "Continue")
+                        .font(.system(size: 20, weight: .bold))
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 21, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 22)
+                .frame(width: 390, height: 55)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 1, green: 0.50, blue: 0.08), AppPalette.accent],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+            }
+            .buttonStyle(TemplatePressStyle())
+            .disabled(isPurchasing)
+            .accessibilityIdentifier("super-prize-continue")
+            .position(x: 215, y: 839)
+
+            Label("Purchase securely processed by Apple", systemImage: "apple.logo")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(.white.opacity(0.9))
+                .position(x: 215, y: 886)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 24, weight: .light))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(Color.white.opacity(0.06), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close super prize")
+            .position(x: 37, y: 84)
         }
     }
 
@@ -303,64 +338,86 @@ struct SuperPrizeOfferView: View {
 private struct SuperPrizeTicket: View {
     var body: some View {
         ZStack {
-            VoucherShape(notchRadius: 18)
+            ReceiptPaperShape(notchRadius: 15, scallopCount: 10)
                 .fill(
                     LinearGradient(
-                        colors: [Color(red: 1, green: 0.79, blue: 0.02), Color(red: 1, green: 0.37, blue: 0.04)],
+                        colors: [
+                            Color(red: 1, green: 0.80, blue: 0.02),
+                            Color(red: 1, green: 0.62, blue: 0.08),
+                            Color(red: 1, green: 0.35, blue: 0.03)
+                        ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
+                .frame(height: 323)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .shadow(color: .orange.opacity(0.24), radius: 12, y: 7)
 
-            VStack(spacing: 0) {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.black.opacity(0.84))
-                    .frame(height: 34)
-                    .padding(.horizontal, 23)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(.white.opacity(0.65), lineWidth: 9)
-                            .padding(.horizontal, 13)
-                    )
-                    .offset(y: -9)
+            TicketDashedRule()
+                .stroke(.white, style: StrokeStyle(lineWidth: 2, dash: [7, 7]))
+                .frame(width: 256, height: 1)
+                .position(x: 150, y: 88)
 
-                Rectangle()
-                    .fill(.clear)
-                    .frame(height: 28)
-                    .overlay {
-                        Rectangle()
-                            .stroke(.white, style: StrokeStyle(lineWidth: 2, dash: [7, 7]))
-                            .frame(height: 1)
-                            .padding(.horizontal, 20)
-                    }
-
-                HStack(alignment: .center, spacing: 4) {
-                    Text("20")
-                        .font(.system(size: 108, weight: .heavy))
-                    VStack(alignment: .leading, spacing: -8) {
-                        Text("%")
-                            .font(.system(size: 54, weight: .heavy))
-                        Text("OFF")
-                            .font(.system(size: 40, weight: .heavy))
-                    }
-                }
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.20), radius: 2, y: 3)
-                .minimumScaleFactor(0.72)
-
-                Text("Limited Time Only")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 26)
-                    .frame(height: 42)
-                    .overlay(Capsule().stroke(.white, lineWidth: 1.5))
-                    .padding(.top, 4)
-
-                Spacer(minLength: 12)
+            VStack(spacing: -2) {
+                Text("SPECIAL")
+                    .font(.system(size: 48, weight: .heavy))
+                Text("OFFER")
+                    .font(.system(size: 58, weight: .heavy))
             }
-            .padding(.vertical, 10)
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.21), radius: 2, y: 3)
+            .position(x: 150, y: 182)
+
+            Text("Limited Time Only")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 207, height: 37)
+                .overlay(Capsule().stroke(.white, lineWidth: 1.2))
+                .position(x: 150, y: 283)
+
+            TicketDispenser()
+                .frame(width: 292, height: 59)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
-        .shadow(color: .orange.opacity(0.28), radius: 18, y: 8)
+    }
+}
+
+private struct TicketDispenser: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white, Color(white: 0.70), Color(white: 0.94)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.9), lineWidth: 1)
+                )
+
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(white: 0.20))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color(white: 0.52), lineWidth: 4)
+                )
+                .padding(.horizontal, 11)
+                .padding(.vertical, 15)
+        }
+        .shadow(color: .black.opacity(0.7), radius: 5, y: 3)
+    }
+}
+
+private struct TicketDashedRule: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return path
     }
 }
 
@@ -372,6 +429,8 @@ struct LimitedTimeOfferPopup: View {
     @State private var remainingHundredths = 60 * 100 - 1
     @State private var isPurchasing = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+    @State private var purchaseTask: Task<Void, Never>?
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     init(
         onClose: @escaping () -> Void,
@@ -403,7 +462,7 @@ struct LimitedTimeOfferPopup: View {
             )
                 .opacity(0.92)
                 .ignoresSafeArea()
-                .onTapGesture(perform: onClose)
+                .onTapGesture(perform: closeOffer)
 
             GeometryReader { proxy in
                 ScrollView {
@@ -411,7 +470,7 @@ struct LimitedTimeOfferPopup: View {
                         offerCard
                             .frame(maxWidth: min(390, proxy.size.width - 32))
 
-                        Button(action: onClose) {
+                        Button(action: closeOffer) {
                             Image(systemName: "xmark")
                                 .font(.title3)
                                 .foregroundStyle(LimitedOfferPalette.onAccentText)
@@ -426,6 +485,7 @@ struct LimitedTimeOfferPopup: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close limited offer")
+                        .accessibilityIdentifier("limited-offer-close")
                     }
                     .frame(minHeight: proxy.size.height)
                     .frame(maxWidth: .infinity)
@@ -443,18 +503,29 @@ struct LimitedTimeOfferPopup: View {
                 promotion: promotionContext
             )
         }
-        .task {
-            while remainingHundredths > 0 && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000)
-                if !Task.isCancelled { remainingHundredths -= 1 }
-            }
-        }
         .alert(item: $purchaseAlert) { alert in
             Alert(
                 title: Text(alert.title),
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .onDisappear {
+            purchaseTask?.cancel()
+        }
+        .task {
+            while remainingHundredths > 0 && !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(10))
+                if !Task.isCancelled { remainingHundredths -= 1 }
+            }
+        }
+        .task {
+            let productID = SubscriptionProductID.limitedTimeOfferYearly.rawValue
+            await priceStore.load(productIDs: [productID])
+            if priceStore.hasIntroductoryOffer(productID: productID),
+               !(await priceStore.isEligibleForIntroOffer(productID: productID)) {
+                closeOffer()
+            }
         }
     }
 
@@ -506,12 +577,8 @@ struct LimitedTimeOfferPopup: View {
                     .stroke(LimitedOfferPalette.warmStroke.opacity(0.55), lineWidth: 1)
             )
 
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("50%")
-                    .font(.system(size: 72, weight: .heavy))
-                Text("OFF")
-                    .font(.system(size: 32, weight: .heavy))
-            }
+            Text("SPECIAL OFFER")
+                .font(.system(size: 43, weight: .heavy))
             .foregroundStyle(
                 LinearGradient(
                     colors: [LimitedOfferPalette.coral, LimitedOfferPalette.orange],
@@ -522,15 +589,29 @@ struct LimitedTimeOfferPopup: View {
 
             VStack(spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("$24.99")
+                    Text(
+                        priceStore.introductoryDisplayPrice(
+                            for: SubscriptionProductID.limitedTimeOfferYearly.rawValue
+                        ) ?? priceStore.displayPrice(
+                            for: SubscriptionProductID.limitedTimeOfferYearly.rawValue
+                        )
+                    )
                         .font(.system(size: 35, weight: .bold))
-                    Text("first year")
+                    Text(
+                        priceStore.hasIntroductoryOffer(
+                            productID: SubscriptionProductID.limitedTimeOfferYearly.rawValue
+                        ) ? "first year" : "/year"
+                    )
                         .font(.headline)
                 }
                 .foregroundStyle(LimitedOfferPalette.primaryText)
-                Text("Then $49.99/year")
-                    .font(.title3)
-                    .foregroundStyle(LimitedOfferPalette.secondaryText)
+                if priceStore.hasIntroductoryOffer(
+                    productID: SubscriptionProductID.limitedTimeOfferYearly.rawValue
+                ) {
+                    Text("Then \(priceStore.displayPrice(for: SubscriptionProductID.limitedTimeOfferYearly.rawValue))/year")
+                        .font(.title3)
+                        .foregroundStyle(LimitedOfferPalette.secondaryText)
+                }
             }
 
             CountdownView(hundredths: remainingHundredths)
@@ -577,11 +658,18 @@ struct LimitedTimeOfferPopup: View {
         guard !isPurchasing else { return }
 
         isPurchasing = true
-        Task {
+        purchaseTask = Task {
+#if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-simulateLimitedOfferConnecting") {
+                try? await Task.sleep(for: .seconds(30))
+                return
+            }
+#endif
             let outcome = await SubscriptionPurchaseService.purchase(
                 .limitedTimeOfferYearly,
                 promotion: promotionContext
             )
+            guard !Task.isCancelled else { return }
             isPurchasing = false
 
             switch outcome {
@@ -607,6 +695,13 @@ struct LimitedTimeOfferPopup: View {
                 )
             }
         }
+    }
+
+    private func closeOffer() {
+        purchaseTask?.cancel()
+        purchaseTask = nil
+        isPurchasing = false
+        onClose()
     }
 
     private func benefitColumn(_ items: [String]) -> some View {
@@ -707,8 +802,12 @@ struct SummerSalePaywallView: View {
             GeometryReader { proxy in
                 let compact = proxy.size.height < 820
                 let horizontalPadding: CGFloat = compact ? 18 : 26
-                let signHeight = min(max(proxy.size.height * 0.255, 192), 248)
+                let signHeight = min(
+                    max(proxy.size.height * (compact ? 0.265 : 0.29), compact ? 210 : 250),
+                    compact ? 232 : 278
+                )
                 let cardHeight = min(max(proxy.size.height * 0.215, 176), 218)
+                let signCardSpacing: CGFloat = compact ? 34 : 40
 
                 VStack(spacing: 0) {
                     HStack {
@@ -757,8 +856,8 @@ struct SummerSalePaywallView: View {
 
                     SummerDiscountSign()
                         .frame(height: signHeight)
-                        .padding(.horizontal, compact ? 7 : 11)
-                        .padding(.top, compact ? 1 : 5)
+                        .padding(.horizontal, compact ? 2 : 4)
+                        .padding(.top, compact ? 3 : 6)
 
                     HStack(spacing: compact ? 12 : 16) {
                         SummerPlanCard(
@@ -774,7 +873,7 @@ struct SummerSalePaywallView: View {
                     }
                     .frame(height: cardHeight)
                     .padding(.horizontal, horizontalPadding)
-                    .padding(.top, compact ? 5 : 9)
+                    .padding(.top, signCardSpacing)
 
                     Spacer(minLength: compact ? 10 : 18)
 
@@ -966,11 +1065,18 @@ private struct SummerPlanCard: View {
     let kind: CouponPlanKind
     let plan: CMSCouponPlan
     @Binding var selectedPlan: CouponPlanKind
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     private var title: String { kind == .weekly ? "Weekly Plan" : "Annual Plan" }
-    private var price: String { kind == .weekly ? "$9.99" : "$39.99" }
+    private var price: String { priceStore.displayPrice(for: plan.productID) }
     private var period: String { kind == .weekly ? "/week" : "/year" }
-    private var dailyPrice: String { kind == .weekly ? "$1.43" : "$0.11" }
+    private var dailyPrice: String {
+        priceStore.periodicPrice(
+            for: plan.productID,
+            divisor: kind == .weekly ? 7 : 365,
+            suffix: ""
+        )
+    }
     private var accent: Color {
         kind == .weekly
             ? Color(red: 0.20, green: 0.68, blue: 0.86)
@@ -1078,6 +1184,9 @@ private struct SummerPlanCard: View {
             }
         }
         .buttonStyle(TemplatePressStyle())
+        .task {
+            await priceStore.load(productIDs: [plan.productID])
+        }
         .accessibilityLabel(title)
         .accessibilityValue(selectedPlan == kind ? "Selected" : "Not selected")
     }
@@ -1086,15 +1195,20 @@ private struct SummerPlanCard: View {
 private struct SummerDiscountSign: View {
     var body: some View {
         GeometryReader { proxy in
+            let imageAspectRatio: CGFloat = 1.5
+            let fittedImageWidth = min(proxy.size.width, proxy.size.height * imageAspectRatio)
+            let fittedImageHeight = fittedImageWidth / imageAspectRatio
+            let boardContentWidth = fittedImageWidth * 0.62
+
             ZStack {
                 Image("SummerPromoSign")
                     .resizable()
                     .scaledToFit()
                     .frame(width: proxy.size.width, height: proxy.size.height)
 
-                VStack(spacing: proxy.size.height * 0.025) {
-                    Text("65% OFF")
-                        .font(.system(size: min(proxy.size.width * 0.145, 61), weight: .black, design: .rounded))
+                VStack(spacing: fittedImageHeight * 0.025) {
+                    Text("SPECIAL OFFER")
+                        .font(.system(size: min(fittedImageWidth * 0.13, 56), weight: .black, design: .rounded))
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [Color(red: 1.00, green: 0.65, blue: 0.02), Color(red: 1.00, green: 0.20, blue: 0.02)],
@@ -1103,22 +1217,27 @@ private struct SummerDiscountSign: View {
                             )
                         )
                         .shadow(color: .white.opacity(0.78), radius: 0, y: 2)
-                        .minimumScaleFactor(0.76)
+                        .minimumScaleFactor(0.60)
+                        .allowsTightening(true)
                         .lineLimit(1)
+                        .frame(maxWidth: .infinity)
 
                     Text("LIMITED TIME ONLY")
-                        .font(.system(size: min(proxy.size.width * 0.038, 16), weight: .heavy))
+                        .font(.system(size: min(fittedImageWidth * 0.04, 17), weight: .heavy))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 28)
-                        .frame(height: min(proxy.size.height * 0.16, 35))
+                        .padding(.horizontal, 24)
+                        .frame(height: min(fittedImageHeight * 0.16, 36))
                         .background(Color(red: 0.04, green: 0.55, blue: 0.70), in: SummerRibbonShape())
                 }
-                .offset(y: proxy.size.height * 0.045)
-                .padding(.horizontal, proxy.size.width * 0.21)
+                .frame(width: boardContentWidth)
+                .position(
+                    x: proxy.size.width * 0.5 + fittedImageWidth * 0.022,
+                    y: proxy.size.height * 0.5 + fittedImageHeight * 0.045
+                )
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("65 percent off, limited time only")
+        .accessibilityLabel("Special offer, limited time only")
     }
 }
 
@@ -1171,35 +1290,54 @@ private struct SummerBeachBackdrop: View {
     }
 }
 
-private struct VoucherShape: Shape {
+private struct ReceiptPaperShape: Shape {
     var notchRadius: CGFloat
+    var scallopCount: Int
 
     func path(in rect: CGRect) -> Path {
-        let cornerRadius: CGFloat = 14
-        let middleY = rect.midY
+        let topInset = rect.width * 0.075
+        let cornerRadius: CGFloat = 7
+        let notchY = rect.height * 0.52
+        let bottomEdge = rect.maxY
+        let scallopDiameter = rect.width / CGFloat(scallopCount + 1)
         var path = Path()
 
-        path.move(to: CGPoint(x: cornerRadius, y: 0))
-        path.addLine(to: CGPoint(x: rect.maxX - cornerRadius, y: 0))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: cornerRadius), control: CGPoint(x: rect.maxX, y: 0))
-        path.addLine(to: CGPoint(x: rect.maxX, y: middleY - notchRadius))
-        path.addCurve(
-            to: CGPoint(x: rect.maxX, y: middleY + notchRadius),
-            control1: CGPoint(x: rect.maxX - notchRadius * 1.25, y: middleY - notchRadius),
-            control2: CGPoint(x: rect.maxX - notchRadius * 1.25, y: middleY + notchRadius)
+        path.move(to: CGPoint(x: topInset + cornerRadius, y: 0))
+        path.addLine(to: CGPoint(x: rect.maxX - topInset - cornerRadius, y: 0))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - topInset + 1, y: cornerRadius),
+            control: CGPoint(x: rect.maxX - topInset, y: 0)
         )
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - cornerRadius))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX - cornerRadius, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: cornerRadius, y: rect.maxY))
-        path.addQuadCurve(to: CGPoint(x: 0, y: rect.maxY - cornerRadius), control: CGPoint(x: 0, y: rect.maxY))
-        path.addLine(to: CGPoint(x: 0, y: middleY + notchRadius))
+        path.addLine(to: CGPoint(x: rect.maxX - (topInset * 0.48), y: notchY - notchRadius))
         path.addCurve(
-            to: CGPoint(x: 0, y: middleY - notchRadius),
-            control1: CGPoint(x: notchRadius * 1.25, y: middleY + notchRadius),
-            control2: CGPoint(x: notchRadius * 1.25, y: middleY - notchRadius)
+            to: CGPoint(x: rect.maxX - (topInset * 0.40), y: notchY + notchRadius),
+            control1: CGPoint(x: rect.maxX - notchRadius - (topInset * 0.45), y: notchY - notchRadius),
+            control2: CGPoint(x: rect.maxX - notchRadius - (topInset * 0.42), y: notchY + notchRadius)
         )
-        path.addLine(to: CGPoint(x: 0, y: cornerRadius))
-        path.addQuadCurve(to: CGPoint(x: cornerRadius, y: 0), control: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: rect.maxX, y: bottomEdge))
+
+        for index in stride(from: scallopCount, through: 1, by: -1) {
+            let rightX = CGFloat(index + 1) * scallopDiameter
+            let leftX = CGFloat(index) * scallopDiameter
+            path.addLine(to: CGPoint(x: rightX, y: bottomEdge))
+            path.addQuadCurve(
+                to: CGPoint(x: leftX, y: bottomEdge),
+                control: CGPoint(x: (rightX + leftX) / 2, y: bottomEdge - scallopDiameter * 0.72)
+            )
+        }
+
+        path.addLine(to: CGPoint(x: 0, y: bottomEdge))
+        path.addLine(to: CGPoint(x: topInset * 0.40, y: notchY + notchRadius))
+        path.addCurve(
+            to: CGPoint(x: topInset * 0.48, y: notchY - notchRadius),
+            control1: CGPoint(x: notchRadius + (topInset * 0.42), y: notchY + notchRadius),
+            control2: CGPoint(x: notchRadius + (topInset * 0.45), y: notchY - notchRadius)
+        )
+        path.addLine(to: CGPoint(x: topInset - 1, y: cornerRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: topInset + cornerRadius, y: 0),
+            control: CGPoint(x: topInset, y: 0)
+        )
         path.closeSubpath()
         return path
     }
@@ -1207,34 +1345,100 @@ private struct VoucherShape: Shape {
 
 private struct CelebrationFragments: View {
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                fragment(.yellow, x: 0.08, y: 0.31, rotation: -36, in: proxy.size)
-                fragment(.blue, x: 0.13, y: 0.52, rotation: 28, in: proxy.size)
-                fragment(.pink, x: 0.88, y: 0.44, rotation: -18, in: proxy.size)
-                fragment(.mint, x: 0.91, y: 0.30, rotation: 76, in: proxy.size)
-                fragment(.orange, x: 0.88, y: 0.69, rotation: 42, in: proxy.size)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 60))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.cyan, .pink)
-                    .position(x: proxy.size.width * 0.88, y: proxy.size.height * 0.22)
-            }
+        ZStack {
+            ribbon(
+                colors: [.purple, .pink, .cyan, .white],
+                size: CGSize(width: 96, height: 42),
+                position: CGPoint(x: 413, y: 220),
+                rotation: -37
+            )
+            ribbon(
+                colors: [.yellow, .white, .orange],
+                size: CGSize(width: 72, height: 35),
+                position: CGPoint(x: 12, y: 297),
+                rotation: 58
+            )
+            ribbon(
+                colors: [.blue, .cyan],
+                size: CGSize(width: 57, height: 24),
+                position: CGPoint(x: 18, y: 420),
+                rotation: -52
+            )
+            ribbon(
+                colors: [.pink, .purple],
+                size: CGSize(width: 45, height: 21),
+                position: CGPoint(x: 405, y: 416),
+                rotation: -34
+            )
+            ribbon(
+                colors: [.white, .yellow, .pink],
+                size: CGSize(width: 78, height: 35),
+                position: CGPoint(x: 4, y: 517),
+                rotation: 57
+            )
+            ribbon(
+                colors: [.yellow, .orange, .pink],
+                size: CGSize(width: 102, height: 42),
+                position: CGPoint(x: 413, y: 617),
+                rotation: 42
+            )
+            ribbon(
+                colors: [.mint, .cyan],
+                size: CGSize(width: 35, height: 18),
+                position: CGPoint(x: 405, y: 333),
+                rotation: 12
+            )
+
+            Circle()
+                .fill(.pink)
+                .frame(width: 5, height: 5)
+                .position(x: 403, y: 367)
+
+            Circle()
+                .fill(.green)
+                .frame(width: 5, height: 5)
+                .position(x: 34, y: 346)
         }
     }
 
-    private func fragment(
-        _ color: Color,
-        x: CGFloat,
-        y: CGFloat,
-        rotation: Double,
-        in size: CGSize
+    private func ribbon(
+        colors: [Color],
+        size: CGSize,
+        position: CGPoint,
+        rotation: Double
     ) -> some View {
-        Capsule()
-            .fill(color)
-            .frame(width: 48, height: 16)
+        ConfettiRibbonShape()
+            .fill(
+                LinearGradient(
+                    colors: colors,
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: size.width, height: size.height)
             .rotationEffect(.degrees(rotation))
-            .position(x: size.width * x, y: size.height * y)
-            .blur(radius: 1)
+            .position(position)
+            .blur(radius: 2.2)
+            .shadow(color: colors.first?.opacity(0.65) ?? .clear, radius: 7)
+    }
+}
+
+private struct ConfettiRibbonShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.height * 0.18))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control1: CGPoint(x: rect.width * 0.35, y: rect.height * 0.65),
+            control2: CGPoint(x: rect.width * 0.70, y: -rect.height * 0.22)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.height * 0.72))
+        path.addCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY),
+            control1: CGPoint(x: rect.width * 0.67, y: rect.height * 0.38),
+            control2: CGPoint(x: rect.width * 0.34, y: rect.height * 1.20)
+        )
+        path.closeSubpath()
+        return path
     }
 }

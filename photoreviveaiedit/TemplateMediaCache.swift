@@ -1,6 +1,97 @@
 import CryptoKit
 import Foundation
+import ImageIO
+import os
 import UIKit
+
+/// Process-wide startup/cache counters. Firebase receives only four bounded
+/// milestones per process and never receives a media URL.
+nonisolated final class TemplateMediaMetrics: @unchecked Sendable {
+    enum MediaKind { case image, video }
+    enum CacheTier { case memory, disk, network }
+
+    static let shared = TemplateMediaMetrics()
+
+    private struct Snapshot {
+        var catalogSource: String?
+        var imageMemoryHits = 0
+        var imageDiskHits = 0
+        var imageNetworkLoads = 0
+        var videoDiskHits = 0
+        var videoNetworkLoads = 0
+    }
+
+    private let lock = NSLock()
+    private let startedAt = ContinuousClock.now
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "PhotoRevival", category: "HomeMedia")
+    private var snapshot = Snapshot()
+    private var emittedMilestones = Set<String>()
+    private var displayedPosterURLs = Set<URL>()
+
+    private init() {}
+
+    func record(_ tier: CacheTier, media: MediaKind) {
+        lock.withLock {
+            switch (media, tier) {
+            case (.image, .memory): snapshot.imageMemoryHits += 1
+            case (.image, .disk): snapshot.imageDiskHits += 1
+            case (.image, .network): snapshot.imageNetworkLoads += 1
+            case (.video, .disk): snapshot.videoDiskHits += 1
+            case (.video, .network): snapshot.videoNetworkLoads += 1
+            case (.video, .memory): break
+            }
+        }
+    }
+
+    func markCatalogAvailable(source: String) {
+        lock.withLock {
+            if snapshot.catalogSource == nil { snapshot.catalogSource = source }
+        }
+        emitOnce("catalog_ready")
+    }
+
+    func markPosterDisplayed(for url: URL) {
+        let displayedCount = lock.withLock {
+            displayedPosterURLs.insert(url)
+            return displayedPosterURLs.count
+        }
+        if displayedCount == 1 {
+            emitOnce("first_poster")
+        }
+        if displayedCount >= 9 {
+            emitOnce("first_screen_posters_ready")
+        }
+    }
+
+    func markVideoFrameDisplayed() {
+        emitOnce("first_video_frame")
+    }
+
+    private func emitOnce(_ milestone: String) {
+        let payload: (Snapshot, Int)? = lock.withLock {
+            guard emittedMilestones.insert(milestone).inserted else { return nil }
+            let elapsed = startedAt.duration(to: .now)
+            let milliseconds = Int(elapsed.components.seconds * 1_000)
+                + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
+            return (snapshot, max(0, milliseconds))
+        }
+        guard let (snapshot, elapsedMilliseconds) = payload else { return }
+
+        logger.info("\(milestone, privacy: .public) elapsed_ms=\(elapsedMilliseconds, privacy: .public) catalog=\(snapshot.catalogSource ?? "unknown", privacy: .public) image_memory=\(snapshot.imageMemoryHits, privacy: .public) image_disk=\(snapshot.imageDiskHits, privacy: .public) image_network=\(snapshot.imageNetworkLoads, privacy: .public) video_disk=\(snapshot.videoDiskHits, privacy: .public) video_network=\(snapshot.videoNetworkLoads, privacy: .public)")
+        Task { @MainActor in
+            AppAnalytics.homeMediaMilestone(
+                milestone,
+                elapsedMilliseconds: elapsedMilliseconds,
+                catalogSource: snapshot.catalogSource,
+                imageMemoryHits: snapshot.imageMemoryHits,
+                imageDiskHits: snapshot.imageDiskHits,
+                imageNetworkLoads: snapshot.imageNetworkLoads,
+                videoDiskHits: snapshot.videoDiskHits,
+                videoNetworkLoads: snapshot.videoNetworkLoads
+            )
+        }
+    }
+}
 
 /// A process-wide memory cache plus an app-owned disk cache. The CMS image
 /// endpoints currently return `no-cache`, so relying on URLCache alone causes
@@ -9,8 +100,8 @@ import UIKit
 final class TemplateImageMemoryCache: @unchecked Sendable {
     static let shared = TemplateImageMemoryCache()
 
-    private let storage: NSCache<NSURL, UIImage> = {
-        let cache = NSCache<NSURL, UIImage>()
+    private let storage: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 80
         cache.totalCostLimit = 160 * 1_024 * 1_024
         return cache
@@ -18,22 +109,97 @@ final class TemplateImageMemoryCache: @unchecked Sendable {
 
     private init() {}
 
-    func image(for url: URL) -> UIImage? {
-        storage.object(forKey: url as NSURL)
+    func image(for url: URL, maxPixelSize: Int = 960) -> UIImage? {
+        storage.object(forKey: cacheKey(for: url, maxPixelSize: maxPixelSize))
     }
 
-    func insert(_ image: UIImage, for url: URL) {
+    func insert(_ image: UIImage, for url: URL, maxPixelSize: Int = 960) {
         let width = Int(image.size.width * image.scale)
         let height = Int(image.size.height * image.scale)
-        storage.setObject(image, forKey: url as NSURL, cost: width * height * 4)
+        let frameCount = max(image.images?.count ?? 1, 1)
+        storage.setObject(
+            image,
+            forKey: cacheKey(for: url, maxPixelSize: maxPixelSize),
+            cost: width * height * 4 * frameCount
+        )
+    }
+
+    private func cacheKey(for url: URL, maxPixelSize: Int) -> NSString {
+        "\(maxPixelSize)|\(url.absoluteString)" as NSString
+    }
+}
+
+enum TemplateImageDecoder {
+    /// ImageIO performs both decompression and display-size downsampling on the
+    /// repository's worker task instead of making SwiftUI decode full originals
+    /// while laying out a scrolling row.
+    nonisolated static func image(from data: Data, maxPixelSize: Int = 960) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            return UIImage(data: data)
+        }
+
+        let frameCount = CGImageSourceGetCount(source)
+        guard frameCount > 1 else {
+            guard let cgImage = thumbnail(at: 0, in: source, maxPixelSize: maxPixelSize) else {
+                return UIImage(data: data)
+            }
+            return UIImage(cgImage: cgImage)
+        }
+
+        var frames = [UIImage]()
+        var duration = 0.0
+        frames.reserveCapacity(frameCount)
+
+        for index in 0..<frameCount {
+            guard let cgImage = thumbnail(at: index, in: source, maxPixelSize: maxPixelSize) else {
+                continue
+            }
+            frames.append(UIImage(cgImage: cgImage))
+            duration += frameDuration(at: index, in: source)
+        }
+
+        guard frames.count > 1 else { return frames.first ?? UIImage(data: data) }
+        return UIImage.animatedImage(with: frames, duration: max(duration, 0.1 * Double(frames.count)))
+    }
+
+    private nonisolated static func thumbnail(
+        at index: Int,
+        in source: CGImageSource,
+        maxPixelSize: Int
+    ) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
+
+    private nonisolated static func frameDuration(at index: Int, in source: CGImageSource) -> TimeInterval {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil)
+                as? [CFString: Any],
+              let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any] else {
+            return 0.1
+        }
+
+        let delay = (gif[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue
+            ?? (gif[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue
+            ?? 0.1
+        return delay < 0.02 ? 0.1 : delay
     }
 }
 
 actor TemplateImageRepository {
     static let shared = TemplateImageRepository()
 
+    private struct RequestKey: Hashable, Sendable {
+        let url: URL
+        let maxPixelSize: Int
+    }
+
     private let session: URLSession
-    private var inFlight: [URL: Task<UIImage, Error>] = [:]
+    private var inFlight: [RequestKey: Task<UIImage, Error>] = [:]
 
     private init() {
         let configuration = URLSessionConfiguration.default
@@ -53,35 +219,49 @@ actor TemplateImageRepository {
         }
     }
 
-    func image(for url: URL) async throws -> UIImage {
-        if let image = await TemplateImageMemoryCache.shared.image(for: url) {
+    func image(for url: URL, maxPixelSize: Int = 960) async throws -> UIImage {
+        let key = RequestKey(url: url, maxPixelSize: maxPixelSize)
+        if let image = await TemplateImageMemoryCache.shared.image(
+            for: url,
+            maxPixelSize: maxPixelSize
+        ) {
+            TemplateMediaMetrics.shared.record(.memory, media: .image)
             return image
         }
-        if let task = inFlight[url] {
+        if let task = inFlight[key] {
             return try await task.value
         }
 
         let session = session
         let task = Task(priority: .userInitiated) {
-            try await Self.loadImage(for: url, using: session)
+            try await Self.loadImage(for: url, maxPixelSize: maxPixelSize, using: session)
         }
-        inFlight[url] = task
+        inFlight[key] = task
 
         do {
             let image = try await task.value
-            inFlight[url] = nil
-            await TemplateImageMemoryCache.shared.insert(image, for: url)
+            inFlight[key] = nil
+            await TemplateImageMemoryCache.shared.insert(
+                image,
+                for: url,
+                maxPixelSize: maxPixelSize
+            )
             return image
         } catch {
-            inFlight[url] = nil
+            inFlight[key] = nil
             throw error
         }
     }
 
-    private static func loadImage(for originalURL: URL, using session: URLSession) async throws -> UIImage {
-        let diskURL = cacheURL(for: originalURL)
+    private static func loadImage(
+        for originalURL: URL,
+        maxPixelSize: Int,
+        using session: URLSession
+    ) async throws -> UIImage {
+        let diskURL = cacheURL(for: originalURL, maxPixelSize: maxPixelSize)
         if let data = try? Data(contentsOf: diskURL, options: .mappedIfSafe),
-           let image = UIImage(data: data) {
+           let image = TemplateImageDecoder.image(from: data, maxPixelSize: maxPixelSize) {
+            TemplateMediaMetrics.shared.record(.disk, media: .image)
             try? FileManager.default.setAttributes(
                 [.modificationDate: Date()],
                 ofItemAtPath: diskURL.path
@@ -91,14 +271,22 @@ actor TemplateImageRepository {
 
         await TemplateMediaTransferGate.shared.acquire()
         do {
-            let requestURL = optimizedRequestURL(for: originalURL)
+            let requestURL = optimizedRequestURL(for: originalURL, maxPixelSize: maxPixelSize)
             let loaded: (Data, UIImage)
             do {
-                loaded = try await downloadImage(at: requestURL, using: session)
+                loaded = try await downloadImage(
+                    at: requestURL,
+                    maxPixelSize: maxPixelSize,
+                    using: session
+                )
             } catch where requestURL != originalURL {
                 // Image transformations may be disabled per Supabase project.
                 // Falling back keeps the card functional in that deployment.
-                loaded = try await downloadImage(at: originalURL, using: session)
+                loaded = try await downloadImage(
+                    at: originalURL,
+                    maxPixelSize: maxPixelSize,
+                    using: session
+                )
             }
 
             await TemplateMediaTransferGate.shared.release()
@@ -110,7 +298,11 @@ actor TemplateImageRepository {
         }
     }
 
-    private static func downloadImage(at url: URL, using session: URLSession) async throws -> (Data, UIImage) {
+    private static func downloadImage(
+        at url: URL,
+        maxPixelSize: Int,
+        using session: URLSession
+    ) async throws -> (Data, UIImage) {
         var request = URLRequest(
             url: url,
             cachePolicy: .returnCacheDataElseLoad,
@@ -120,17 +312,19 @@ actor TemplateImageRepository {
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode),
-              let image = UIImage(data: data) else {
+              let image = TemplateImageDecoder.image(from: data, maxPixelSize: maxPixelSize) else {
             throw URLError(.cannotDecodeContentData)
         }
+        TemplateMediaMetrics.shared.record(.network, media: .image)
         return (data, image)
     }
 
     /// Supabase's render endpoint transfers a card-sized version instead of a
     /// multi-megabyte original. The original URL remains the cache key, so all
     /// screens still share one rendered result.
-    private static func optimizedRequestURL(for url: URL) -> URL {
-        guard url.host?.hasSuffix(".supabase.co") == true,
+    private static func optimizedRequestURL(for url: URL, maxPixelSize: Int) -> URL {
+        guard url.pathExtension.lowercased() != "gif",
+              url.host?.hasSuffix(".supabase.co") == true,
               url.path.contains("/storage/v1/object/public/") else {
             return url
         }
@@ -142,8 +336,8 @@ actor TemplateImageRepository {
         )
         var queryItems = components?.queryItems ?? []
         queryItems.append(contentsOf: [
-            URLQueryItem(name: "width", value: "540"),
-            URLQueryItem(name: "height", value: "960"),
+            URLQueryItem(name: "width", value: String(maxPixelSize)),
+            URLQueryItem(name: "height", value: String(maxPixelSize)),
             URLQueryItem(name: "resize", value: "contain"),
             URLQueryItem(name: "quality", value: "65")
         ])
@@ -168,8 +362,9 @@ actor TemplateImageRepository {
         }
     }
 
-    private static func cacheURL(for url: URL) -> URL {
-        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+    private static func cacheURL(for url: URL, maxPixelSize: Int) -> URL {
+        let cacheIdentity = "\(maxPixelSize)|\(url.absoluteString)"
+        let digest = SHA256.hash(data: Data(cacheIdentity.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
         return cacheDirectory.appendingPathComponent(digest).appendingPathExtension("image")
@@ -178,7 +373,7 @@ actor TemplateImageRepository {
     private static var cacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TemplateImageCache", isDirectory: true)
-            .appendingPathComponent("v2", isDirectory: true)
+            .appendingPathComponent("v3", isDirectory: true)
     }
 
     private static func trimDiskCacheIfNeeded() {

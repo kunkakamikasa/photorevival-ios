@@ -54,6 +54,20 @@ struct SubscriptionVerificationResult: Decodable {
     }
 }
 
+struct AppleIAPVerificationResult: Decodable {
+    let success: Bool
+    let type: String?
+    let productID: String?
+    let creditsGranted: Int?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success, type, message
+        case productID = "product_id"
+        case creditsGranted = "credits_granted"
+    }
+}
+
 struct DailyCheckInReward: Identifiable, Decodable {
     let day: Int
     let credits: Int
@@ -191,12 +205,14 @@ struct RewardTaskClaimResult: Decodable {
     let taskCode: String?
     let creditsGranted: Int
     let creditsBalance: Int?
+    let creditsExpireAt: String?
 
     enum CodingKeys: String, CodingKey {
         case claimed, status
         case taskCode = "task_code"
         case creditsGranted = "credits_granted"
         case creditsBalance = "credits_balance"
+        case creditsExpireAt = "credits_expire_at"
     }
 }
 
@@ -397,6 +413,34 @@ struct PhotoReviveVideoGenerationSubmission: Decodable {
     }
 }
 
+struct PhotoReviveImageGenerationOptions: Encodable {
+    let resolution: String
+    let aspectRatio: String
+    let outputCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case resolution
+        case aspectRatio = "aspect_ratio"
+        case outputCount = "output_count"
+    }
+}
+
+struct PhotoReviveImageGenerationSubmission: Decodable {
+    let taskID: String
+    let outputURL: String
+    let creditsUsed: Int
+    let creditsBalance: Int
+
+    var resultURL: URL? { URL(string: outputURL) }
+
+    enum CodingKeys: String, CodingKey {
+        case taskID = "task_id"
+        case outputURL = "output_url"
+        case creditsUsed = "credits_used"
+        case creditsBalance = "credits_balance"
+    }
+}
+
 struct PhotoReviveGenerationTask: Decodable {
     let id: String
     let status: String
@@ -469,7 +513,9 @@ final class PhotoReviveAPIClient {
             let configuration = URLSessionConfiguration.default
             configuration.waitsForConnectivity = false
             configuration.timeoutIntervalForRequest = 20
-            configuration.timeoutIntervalForResource = 60
+            // Image generation endpoints return the completed image in the
+            // submission response and can legitimately take over a minute.
+            configuration.timeoutIntervalForResource = 300
             self.session = URLSession(configuration: configuration)
         }
     }
@@ -485,6 +531,19 @@ final class PhotoReviveAPIClient {
         try await post(
             "subscription-verify",
             body: SubscriptionVerificationRequest(
+                transactionID: transactionID,
+                signedTransactionInfo: signedTransactionInfo
+            )
+        )
+    }
+
+    func verifyAppleIAP(
+        transactionID: String,
+        signedTransactionInfo: String
+    ) async throws -> AppleIAPVerificationResult {
+        try await post(
+            "apple-iap-verify",
+            body: AppleIAPVerificationRequest(
                 transactionID: transactionID,
                 signedTransactionInfo: signedTransactionInfo
             )
@@ -607,6 +666,66 @@ final class PhotoReviveAPIClient {
         )
     }
 
+    func createImageToImage(
+        itemID: String,
+        imageURLs: [String],
+        prompt: String?,
+        options: PhotoReviveImageGenerationOptions
+    ) async throws -> PhotoReviveImageGenerationSubmission {
+        guard let firstImageURL = imageURLs.first else {
+            throw PhotoReviveAPIError.invalidResponse
+        }
+        return try await post(
+            "image-to-image",
+            body: PhotoReviveImageToImageRequest(
+                itemID: itemID,
+                imageURL: imageURLs.count == 1 ? .single(firstImageURL) : .multiple(imageURLs),
+                prompt: prompt,
+                resolution: options.resolution,
+                aspectRatio: options.aspectRatio,
+                outputCount: options.outputCount
+            ),
+            timeoutInterval: 300
+        )
+    }
+
+    func createTextToImage(
+        itemID: String,
+        prompt: String?,
+        options: PhotoReviveImageGenerationOptions
+    ) async throws -> PhotoReviveImageGenerationSubmission {
+        try await post(
+            "text-to-image",
+            body: PhotoReviveTextToImageRequest(
+                itemID: itemID,
+                prompt: prompt,
+                resolution: options.resolution,
+                aspectRatio: options.aspectRatio,
+                outputCount: options.outputCount
+            ),
+            timeoutInterval: 300
+        )
+    }
+
+    func createTextToVideo(
+        itemID: String,
+        prompt: String?,
+        options: PhotoReviveVideoGenerationOptions
+    ) async throws -> PhotoReviveVideoGenerationSubmission {
+        try await post(
+            "text-to-video",
+            body: PhotoReviveTextToVideoRequest(
+                itemID: itemID,
+                prompt: prompt,
+                resolution: options.resolution,
+                aspectRatio: options.aspectRatio,
+                duration: options.duration,
+                sound: options.sound,
+                multiShot: options.multiShot
+            )
+        )
+    }
+
     func generationTask(id: String) async throws -> PhotoReviveGenerationTask {
         try await get("get-task", query: ["task_id": id])
     }
@@ -706,12 +825,16 @@ final class PhotoReviveAPIClient {
 
     private func post<Response: Decodable, Body: Encodable>(
         _ path: String,
-        body: Body
+        body: Body,
+        timeoutInterval: TimeInterval? = nil
     ) async throws -> Response {
         var request = URLRequest(
             url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/\(path)")
         )
         request.httpMethod = "POST"
+        if let timeoutInterval {
+            request.timeoutInterval = timeoutInterval
+        }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
         return try await send(request)
@@ -825,6 +948,55 @@ private struct PhotoReviveImageToVideoRequest: Encodable {
     }
 }
 
+private struct PhotoReviveImageToImageRequest: Encodable {
+    let itemID: String
+    let imageURL: PhotoReviveImageURLRequestValue
+    let prompt: String?
+    let resolution: String
+    let aspectRatio: String
+    let outputCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case itemID = "item_id"
+        case imageURL = "image_url"
+        case prompt, resolution
+        case aspectRatio = "aspect_ratio"
+        case outputCount = "output_count"
+    }
+}
+
+private struct PhotoReviveTextToImageRequest: Encodable {
+    let itemID: String
+    let prompt: String?
+    let resolution: String
+    let aspectRatio: String
+    let outputCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case itemID = "item_id"
+        case prompt, resolution
+        case aspectRatio = "aspect_ratio"
+        case outputCount = "output_count"
+    }
+}
+
+private struct PhotoReviveTextToVideoRequest: Encodable {
+    let itemID: String
+    let prompt: String?
+    let resolution: String
+    let aspectRatio: String
+    let duration: Int
+    let sound: Bool
+    let multiShot: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case itemID = "item_id"
+        case prompt, resolution, duration, sound
+        case aspectRatio = "aspect_ratio"
+        case multiShot = "multi_shot"
+    }
+}
+
 private struct SubscriptionVerificationRequest: Encodable {
     let transactionID: String
     let signedTransactionInfo: String
@@ -832,6 +1004,16 @@ private struct SubscriptionVerificationRequest: Encodable {
     enum CodingKeys: String, CodingKey {
         case transactionID = "transaction_id"
         case signedTransactionInfo = "signed_transaction_info"
+    }
+}
+
+private struct AppleIAPVerificationRequest: Encodable {
+    let transactionID: String
+    let signedTransactionInfo: String
+
+    enum CodingKeys: String, CodingKey {
+        case transactionID = "transactionId"
+        case signedTransactionInfo
     }
 }
 
@@ -1130,13 +1312,33 @@ final class AppAccountStore: ObservableObject {
             code: SubscriberScratchCampaign.rewardTaskCode,
             evidence: [
                 "source": "subscriber_return_scratch",
-                "campaign_version": String(SubscriberScratchCampaign.version)
+                "campaign_version": String(SubscriberScratchCampaign.version),
+                "expires_in_seconds": String(Int(SubscriberScratchCampaign.freeCreditLifetime))
             ]
         )
         if let balance = result.creditsBalance {
             creditsBalance = balance
             hasLoadedCredits = true
         }
+        await refreshCreditTransactions()
+        return result
+    }
+
+    func verifyCreditPurchase(
+        transactionID: String,
+        signedTransactionInfo: String
+    ) async throws -> AppleIAPVerificationResult {
+        let result = try await api.verifyAppleIAP(
+            transactionID: transactionID,
+            signedTransactionInfo: signedTransactionInfo
+        )
+        guard result.success, result.type == "consumable" else {
+            throw PhotoReviveAPIError.requestFailed(
+                statusCode: 409,
+                message: result.message ?? "The credit purchase could not be verified."
+            )
+        }
+        await refreshCredits()
         await refreshCreditTransactions()
         return result
     }

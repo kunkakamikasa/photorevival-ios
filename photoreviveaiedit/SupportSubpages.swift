@@ -19,6 +19,7 @@ struct MembershipPaywallView: View {
     @State private var isRestoring = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
     @State private var legalDocument: LegalDocument?
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     private let designWidth: CGFloat = 430
     private let designHeight: CGFloat = 862
@@ -156,6 +157,17 @@ struct MembershipPaywallView: View {
         .fullScreenCover(item: $legalDocument) { document in
             InAppBrowserView(url: document.url)
                 .ignoresSafeArea()
+        }
+        .task {
+            let productIDs = MembershipTier.allCases.flatMap { tier in
+                MembershipBilling.allCases.flatMap { billing in
+                    [
+                        billing.productIdentifier(for: tier, isLoggedIn: false).rawValue,
+                        billing.productIdentifier(for: tier, isLoggedIn: true).rawValue
+                    ]
+                }
+            }
+            await priceStore.load(productIDs: productIDs)
         }
     }
 
@@ -427,7 +439,7 @@ struct MembershipPaywallView: View {
                         .foregroundStyle(.white)
 
                     if option == .annual {
-                        Text(option.loggedInAnnualPrice(for: tier))
+                        Text(displayPrice(for: option, tier: tier, loggedIn: true))
                             .font(.system(size: 18.5, weight: .heavy))
                             .foregroundStyle(.white)
                     }
@@ -435,7 +447,7 @@ struct MembershipPaywallView: View {
 
                 Spacer(minLength: 8)
 
-                Text(option.loggedInTrailingPrice(for: tier))
+                Text(trailingPrice(for: option, tier: tier, loggedIn: true))
                     .font(.system(size: 17.5, weight: option == .annual ? .heavy : .semibold))
                     .foregroundStyle(option == .annual ? .white : Color.white.opacity(0.72))
             }
@@ -472,7 +484,7 @@ struct MembershipPaywallView: View {
         .buttonStyle(.plain)
         .disabled(!canSelect)
         .opacity(canSelect ? 1 : 0.34)
-        .accessibilityLabel("\(option.loggedInTitle), \(option.loggedInTrailingPrice(for: tier))")
+        .accessibilityLabel("\(option.loggedInTitle), \(trailingPrice(for: option, tier: tier, loggedIn: true))")
         .accessibilityValue(option.productIdentifier(for: tier, isLoggedIn: true).rawValue)
         .accessibilityAddTraits(billing == option ? .isSelected : [])
         .accessibilityIdentifier("membership-billing-\(option.rawValue)")
@@ -480,10 +492,9 @@ struct MembershipPaywallView: View {
 
     private var loggedInRefundGuarantee: some View {
         HStack(spacing: 6) {
-            Text("100% Refund Guarantee")
             Image(systemName: "apple.logo")
                 .font(.system(size: 16, weight: .medium))
-            Text("Secured By Apple")
+            Text("Purchases are securely processed by Apple")
         }
         .font(.system(size: 13.5, weight: .regular))
         .foregroundStyle(Color.white.opacity(0.36))
@@ -735,15 +746,15 @@ struct MembershipPaywallView: View {
 
                 if option == .annual {
                     VStack(alignment: .trailing, spacing: 3) {
-                        Text(option.price(for: tier))
+                        Text(displayPrice(for: option, tier: tier, loggedIn: false))
                             .font(.system(size: 18.5, weight: .heavy))
                             .foregroundStyle(.white)
-                        Text(option.weeklyEquivalent(for: tier))
+                        Text(trailingPrice(for: option, tier: tier, loggedIn: false))
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(Color.white.opacity(0.72))
                     }
                 } else {
-                    Text(option.price(for: tier))
+                    Text(displayPrice(for: option, tier: tier, loggedIn: false))
                         .font(.system(size: 18.5, weight: .heavy))
                         .foregroundStyle(.white)
                 }
@@ -779,7 +790,7 @@ struct MembershipPaywallView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(option.title), \(option.price(for: tier))")
+        .accessibilityLabel("\(option.title), \(displayPrice(for: option, tier: tier, loggedIn: false))")
         .accessibilityValue(option.productIdentifier(for: tier, isLoggedIn: usesLoggedInPaywall).rawValue)
         .accessibilityAddTraits(billing == option ? .isSelected : [])
         .accessibilityIdentifier("membership-billing-\(option.rawValue)")
@@ -800,12 +811,38 @@ struct MembershipPaywallView: View {
         .frame(width: 22, height: 22)
     }
 
+    private func displayPrice(
+        for billing: MembershipBilling,
+        tier: MembershipTier,
+        loggedIn: Bool
+    ) -> String {
+        priceStore.displayPrice(
+            for: billing.productIdentifier(for: tier, isLoggedIn: loggedIn).rawValue
+        )
+    }
+
+    private func trailingPrice(
+        for billing: MembershipBilling,
+        tier: MembershipTier,
+        loggedIn: Bool
+    ) -> String {
+        let productID = billing.productIdentifier(for: tier, isLoggedIn: loggedIn).rawValue
+        if billing == .annual {
+            return priceStore.periodicPrice(
+                for: productID,
+                divisor: 52,
+                suffix: "/week"
+            )
+        }
+        return "\(priceStore.displayPrice(for: productID))/week"
+    }
+
     private var annualDiscountBadge: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
                 .font(.system(size: 11, weight: .black))
 
-            Text("90% OFF")
+            Text("BEST VALUE")
                 .font(.system(size: 13.5, weight: .heavy))
                 .tracking(0.25)
         }
@@ -868,7 +905,7 @@ struct MembershipPaywallView: View {
 
     private var footerLinks: some View {
         HStack(spacing: 12) {
-            Button("Privacy") { showPrivacyInformationAlert() }
+            Button("Privacy") { legalDocument = .privacyPolicy }
             Text("|")
             Button("Terms") { legalDocument = .termsOfService }
 
@@ -921,13 +958,6 @@ struct MembershipPaywallView: View {
                 )
             }
         }
-    }
-
-    private func showPrivacyInformationAlert() {
-        purchaseAlert = SubscriptionPurchaseAlert(
-            title: "Coming Soon",
-            message: "The Privacy Policy destination will be connected when its production URL is available."
-        )
     }
 
     private func restorePurchases() {
@@ -988,15 +1018,27 @@ private enum DailyFreeCreditEntry: Identifiable {
     }
 }
 
+private extension RewardTask {
+    var isShareCreation: Bool {
+        taskCode == "share_creation"
+    }
+}
+
 struct CreditCenterView: View {
     @Binding var credits: Int
     @ObservedObject var accountStore: AppAccountStore
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.homeSubscriptionCouponOffer) private var homeSubscriptionCouponOffer
+    @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var showCheckInSuccess = false
     @State private var showMembership = false
+    @State private var presentedSubscriptionOffer: CMSCouponOffer?
     @State private var isCheckingIn = false
     @State private var claimingTaskID: String?
+    @State private var preparingShareTaskID: String?
+    @State private var rewardShareRequest: RewardShareRequest?
+    @State private var preparedShareFileURL: URL?
     @State private var grantedCredits = 0
     @State private var rewardError: String?
 
@@ -1045,6 +1087,26 @@ struct CreditCenterView: View {
         .preferredColorScheme(.light)
         .fullScreenCover(isPresented: $showMembership) {
             PaywallOfferFlowView()
+        }
+        .fullScreenCover(item: $presentedSubscriptionOffer) { offer in
+            SummerSalePaywallView(offer: offer)
+        }
+        .sheet(item: $rewardShareRequest, onDismiss: cleanupPreparedShareFile) { request in
+            RewardActivityView(activityItems: [request.fileURL]) { activityType, completed, error in
+                Task { @MainActor in
+                    rewardShareRequest = nil
+
+                    if let error {
+                        rewardError = error.localizedDescription
+                    } else if completed {
+                        claimSharedCreation(
+                            task: request.rewardTask,
+                            creationTaskID: request.creationTaskID,
+                            activityType: activityType
+                        )
+                    }
+                }
+            }
         }
         .task {
             await accountStore.prepareRewardSessionIfNeeded()
@@ -1148,6 +1210,9 @@ struct CreditCenterView: View {
     private func tasks(in group: RewardCenterGroupKey) -> [RewardTask] {
         accountStore.rewardTasks
             .filter { task in
+                guard task.taskCode != SubscriberScratchCampaign.rewardTaskCode else {
+                    return false
+                }
                 let fallback: RewardCenterGroupKey = task.taskCode == "share_creation"
                     ? .dailyFreeCredits
                     : .oneTimeRewards
@@ -1178,16 +1243,18 @@ struct CreditCenterView: View {
             }
 
         case .specialOffer:
-            if accountStore.specialOfferConfig.isActive {
+            if !isSubscribed,
+               accountStore.specialOfferConfig.isActive,
+               let offer = homeSubscriptionCouponOffer {
                 RewardsActionRow(
-                    title: "Save Up to 65%",
+                    title: "Special Membership Offer",
                     creditAmount: 400,
                     icon: .asset("RewardsGiftIcon", size: 42),
                     actionTitle: "Get",
                     enabled: true,
                     highlightOffer: true
                 ) {
-                    showMembership = true
+                    presentedSubscriptionOffer = offer
                 }
                 .padding(.top, 10)
             }
@@ -1226,8 +1293,11 @@ struct CreditCenterView: View {
             creditAmount: task.rewardCredits,
             icon: rewardIcon(for: task.taskCode),
             actionTitle: rewardActionTitle(for: task),
-            enabled: canClaim(task),
-            actionColor: RewardsPalette.red
+            enabled: canStart(task),
+            actionColor: RewardsPalette.red,
+            creditStatusText: task.isClaimed && task.isShareCreation
+                ? "\(task.rewardCredits) claimed today"
+                : nil
         ) {
             claim(task)
         }
@@ -1397,13 +1467,22 @@ struct CreditCenterView: View {
     }
 
     private func canClaim(_ task: RewardTask) -> Bool {
-        !task.isClaimed && !task.requiresServerVerification && claimingTaskID == nil
+        !task.isClaimed && canStart(task)
+    }
+
+    private func canStart(_ task: RewardTask) -> Bool {
+        guard !task.requiresServerVerification,
+              claimingTaskID == nil,
+              preparingShareTaskID == nil else { return false }
+        return task.isShareCreation || !task.isClaimed
     }
 
     private func rewardActionTitle(for task: RewardTask) -> String {
+        if preparingShareTaskID == task.id { return "Preparing" }
+        if claimingTaskID == task.id { return "Claiming" }
+        if task.isShareCreation { return "Share" }
         if task.isClaimed { return "Claimed" }
         if task.requiresServerVerification { return "Pending" }
-        if claimingTaskID == task.id { return "Claiming" }
         return "Start"
     }
 
@@ -1425,6 +1504,11 @@ struct CreditCenterView: View {
     }
 
     private func claim(_ task: RewardTask) {
+        guard canStart(task) else { return }
+        if task.isShareCreation {
+            prepareCreationShare(task)
+            return
+        }
         guard canClaim(task) else { return }
         if task.taskCode == "enable_notifications" {
             enableNotificationsAndClaim(task)
@@ -1441,6 +1525,71 @@ struct CreditCenterView: View {
                 rewardError = error.localizedDescription
             }
         }
+    }
+
+    private func prepareCreationShare(_ task: RewardTask) {
+        preparingShareTaskID = task.id
+        rewardError = nil
+
+        Task {
+            defer { preparingShareTaskID = nil }
+
+            if accountStore.historyTasks.isEmpty {
+                await accountStore.refreshHistory()
+            }
+
+            guard let creation = accountStore.historyTasks.first(where: {
+                $0.status == "completed" && $0.resultURL != nil
+            }) else {
+                rewardError = "Create a photo or video first, then come back to share it."
+                return
+            }
+
+            do {
+                let fileURL = try await RewardShareAssetPreparer.download(creation)
+                preparedShareFileURL = fileURL
+                rewardShareRequest = RewardShareRequest(
+                    rewardTask: task,
+                    creationTaskID: creation.id,
+                    fileURL: fileURL
+                )
+            } catch {
+                rewardError = error.localizedDescription
+            }
+        }
+    }
+
+    private func claimSharedCreation(
+        task: RewardTask,
+        creationTaskID: String,
+        activityType: UIActivity.ActivityType?
+    ) {
+        guard !task.isClaimed, claimingTaskID == nil else { return }
+        claimingTaskID = task.id
+
+        Task {
+            defer { claimingTaskID = nil }
+            do {
+                _ = try await accountStore.claimRewardTask(
+                    task,
+                    evidence: [
+                        "source": "ios_reward_center",
+                        "share_completed": "true",
+                        "activity_type": activityType?.rawValue ?? "unknown",
+                        "creation_task_id": creationTaskID,
+                    ]
+                )
+                credits = accountStore.creditsBalance
+            } catch {
+                rewardError = error.localizedDescription
+            }
+        }
+    }
+
+    private func cleanupPreparedShareFile() {
+        guard let preparedShareFileURL else { return }
+        try? FileManager.default.removeItem(at: preparedShareFileURL)
+        self.preparedShareFileURL = nil
     }
 
     private func enableNotificationsAndClaim(_ task: RewardTask) {
@@ -1496,6 +1645,105 @@ struct CreditCenterView: View {
             nil
         @unknown default:
             nil
+        }
+    }
+}
+
+private struct RewardShareRequest: Identifiable {
+    let id = UUID()
+    let rewardTask: RewardTask
+    let creationTaskID: String
+    let fileURL: URL
+}
+
+private struct RewardActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    let completion: (UIActivity.ActivityType?, Bool, Error?) -> Void
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: nil
+        )
+        controller.completionWithItemsHandler = { activityType, completed, _, error in
+            completion(activityType, completed, error)
+        }
+        return controller
+    }
+
+    func updateUIViewController(
+        _ uiViewController: UIActivityViewController,
+        context: Context
+    ) {}
+}
+
+private enum RewardShareAssetPreparer {
+    static func download(_ creation: GenerationHistoryTask) async throws -> URL {
+        guard let sourceURL = creation.resultURL else {
+            throw RewardShareAssetError.missingCreation
+        }
+
+        let (temporaryURL, response) = try await URLSession.shared.download(from: sourceURL)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw RewardShareAssetError.downloadFailed
+        }
+
+        let fileExtension = preferredExtension(
+            sourceURL: sourceURL,
+            response: response,
+            isVideo: creation.isVideo
+        )
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Photo-Revival-Creation-\(UUID().uuidString)")
+            .appendingPathExtension(fileExtension)
+
+        do {
+            try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+            return destinationURL
+        } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw RewardShareAssetError.couldNotPrepare(error)
+        }
+    }
+
+    private static func preferredExtension(
+        sourceURL: URL,
+        response: URLResponse,
+        isVideo: Bool
+    ) -> String {
+        let candidates = [
+            response.suggestedFilename.map { URL(fileURLWithPath: $0).pathExtension },
+            Optional(sourceURL.pathExtension),
+        ]
+
+        if let candidate = candidates.compactMap({ $0 }).first(where: isSafeFileExtension) {
+            return candidate.lowercased()
+        }
+        return isVideo ? "mp4" : "jpg"
+    }
+
+    nonisolated private static func isSafeFileExtension(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.count <= 8
+            && value.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains)
+    }
+}
+
+private enum RewardShareAssetError: LocalizedError {
+    case missingCreation
+    case downloadFailed
+    case couldNotPrepare(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingCreation:
+            "This creation is no longer available. Please create a new one and try again."
+        case .downloadFailed:
+            "We couldn't download this creation for sharing. Please try again."
+        case .couldNotPrepare:
+            "We couldn't prepare this creation for sharing. Please try again."
         }
     }
 }
@@ -1637,6 +1885,7 @@ private struct RewardsActionRow: View {
     let enabled: Bool
     var highlightOffer = false
     var actionColor = RewardsPalette.orange
+    var creditStatusText: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -1648,7 +1897,7 @@ private struct RewardsActionRow: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     if highlightOffer {
-                        (Text("Save Up to ") + Text("65%").foregroundStyle(RewardsPalette.red))
+                        Text(title)
                             .font(.system(size: 16, weight: .regular))
                             .foregroundStyle(RewardsPalette.ink)
                     } else {
@@ -1657,14 +1906,20 @@ private struct RewardsActionRow: View {
                             .foregroundStyle(RewardsPalette.ink)
                     }
 
-                    HStack(spacing: 7) {
-                        Image("RewardsCreditToken")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 21, height: 21)
-                        Text(highlightOffer ? "400/week" : "\(creditAmount)")
-                            .font(.system(size: 15, weight: .regular))
+                    if let creditStatusText {
+                        Label(creditStatusText, systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(RewardsPalette.orange)
+                    } else {
+                        HStack(spacing: 7) {
+                            Image("RewardsCreditToken")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 21, height: 21)
+                            Text(highlightOffer ? "400/week" : "\(creditAmount)")
+                                .font(.system(size: 15, weight: .regular))
+                                .foregroundStyle(RewardsPalette.orange)
+                        }
                     }
                 }
 
@@ -2228,32 +2483,6 @@ private enum MembershipBilling: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String { self == .annual ? "Annual Plan" : "Weekly Plan" }
     var loggedInTitle: String { self == .annual ? "Annual" : "Weekly" }
-
-    func price(for tier: MembershipTier) -> String {
-        switch (self, tier) {
-        case (.annual, .pro): "$49.99"
-        case (.annual, .proPlus): "$89.99"
-        case (.weekly, .pro): "$9.99"
-        case (.weekly, .proPlus): "$17.99"
-        }
-    }
-
-    func weeklyEquivalent(for tier: MembershipTier) -> String {
-        tier == .pro ? "Just $0.96/week" : "Just $1.73/week"
-    }
-
-    func loggedInAnnualPrice(for tier: MembershipTier) -> String {
-        tier == .pro ? "$47.99" : "$89.99"
-    }
-
-    func loggedInTrailingPrice(for tier: MembershipTier) -> String {
-        switch (self, tier) {
-        case (.annual, .pro): "$0.92/week"
-        case (.annual, .proPlus): "$1.73/week"
-        case (.weekly, .pro): "$9.99/week"
-        case (.weekly, .proPlus): "$17.99/week"
-        }
-    }
 
     func planLevel(for tier: MembershipTier) -> SubscriptionPlanLevel {
         switch (self, tier) {

@@ -131,6 +131,41 @@ enum AppAnalytics {
         log("template_try_now", templateParameters(template))
     }
 
+    /// One low-volume event per startup milestone. Media URLs and item ids are
+    /// intentionally excluded so this remains suitable for aggregate startup
+    /// and cache diagnostics.
+    static func homeMediaMilestone(
+        _ milestone: String,
+        elapsedMilliseconds: Int,
+        catalogSource: String?,
+        imageMemoryHits: Int,
+        imageDiskHits: Int,
+        imageNetworkLoads: Int,
+        videoDiskHits: Int,
+        videoNetworkLoads: Int
+    ) {
+        let imageRequests = imageMemoryHits + imageDiskHits + imageNetworkLoads
+        let imageCacheHitPermille = imageRequests > 0
+            ? (imageMemoryHits + imageDiskHits) * 1_000 / imageRequests
+            : 0
+        let videoRequests = videoDiskHits + videoNetworkLoads
+        let videoCacheHitPermille = videoRequests > 0
+            ? videoDiskHits * 1_000 / videoRequests
+            : 0
+        log("home_media_perf", [
+            "milestone": milestone,
+            "elapsed_ms": elapsedMilliseconds,
+            "catalog_source": normalized(catalogSource) as Any,
+            "image_memory_hits": imageMemoryHits,
+            "image_disk_hits": imageDiskHits,
+            "image_network_loads": imageNetworkLoads,
+            "image_cache_hit_permille": imageCacheHitPermille,
+            "video_disk_hits": videoDiskHits,
+            "video_network_loads": videoNetworkLoads,
+            "video_cache_hit_permille": videoCacheHitPermille
+        ])
+    }
+
     static func fixedFeatureSelected(_ feature: FixedFeature, source: String) {
         log("select_content", [
             "content_type": "fixed_feature",
@@ -223,6 +258,28 @@ enum AppAnalytics {
         if result == "purchased" {
             updateSubscription(isSubscribed: true)
         }
+    }
+
+    static func creditPurchaseResult(
+        productID: String,
+        result: String,
+        failureStage: String? = nil,
+        value: Double? = nil,
+        currency: String? = nil,
+        promotion: PromotionContext? = nil
+    ) {
+        var parameters: [String: Any] = [
+            "product_id": productID,
+            "result": result,
+            "items": [["item_id": productID]]
+        ]
+        parameters["failure_stage"] = normalized(failureStage)
+        parameters["value"] = value
+        parameters["currency"] = normalized(currency)
+        if let promotion {
+            parameters = merging(parameters, with: promotion.parameters)
+        }
+        log("credit_purchase_result", parameters)
     }
 
     static func storeTransaction(_ transaction: StoreKit.Transaction) {

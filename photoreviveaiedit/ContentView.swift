@@ -12,7 +12,6 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var fullScreenDestination: AppDestination?
     @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
-    @State private var showQuickCreator = false
     @State private var showHomeOfferBanner = true
     @StateObject private var accountStore = AppAccountStore.shared
     @State private var returningOffer: ReturningOfferVariant?
@@ -39,7 +38,7 @@ struct ContentView: View {
                 if selectedTab == .me {
                     MePage(
                         accountStore: accountStore,
-                        onCreate: { showQuickCreator = true },
+                        onCreate: { feature in fullScreenDestination = .fixedFeature(feature) },
                         onSettings: { showSettings = true }
                     )
                 } else {
@@ -51,7 +50,11 @@ struct ContentView: View {
                         heroEntries: featureConfigStore.heroEntries(for: selectedTab),
                         homeQuickActions: featureConfigStore.homeQuickActions,
                         videoModeActions: featureConfigStore.videoModeActions,
-                        homeHeroOffer: isSubscribed ? nil : featureConfigStore.homeHeroOffer,
+                        homeHeroPromotion: CMSHomeHeroPromotion.visible(
+                            isSubscribed: isSubscribed,
+                            coupon: featureConfigStore.homeHeroOffer,
+                            creditPurchase: featureConfigStore.homeCreditPurchasePromotion
+                        ),
                         isLoadingTemplates: featureConfigStore.isLoading,
                         credits: accountStore.creditsBalance,
                         onSelectTemplate: { template in
@@ -95,8 +98,13 @@ struct ContentView: View {
                         onCredits: { requireLogin { fullScreenDestination = .credits } },
                         onGift: { requireLogin { fullScreenDestination = .credits } },
                         onSuggestion: { fullScreenDestination = .suggestion },
-                        onSummerOffer: { offer in
-                            requireLogin { fullScreenDestination = .summerSale(offer) }
+                        onHeroPromotion: { promotion in
+                            switch promotion {
+                            case .subscriptionCoupon(let offer):
+                                requireLogin { fullScreenDestination = .summerSale(offer) }
+                            case .creditPurchase:
+                                requireLogin { fullScreenDestination = .credits }
+                            }
                         },
                         isSubscribed: isSubscribed,
                         isLoggedIn: isLoggedIn,
@@ -126,12 +134,22 @@ struct ContentView: View {
                 }
 
                 if selectedTab == .home,
-                   !isSubscribed,
                    showHomeOfferBanner,
-                   let offer = featureConfigStore.homeBottomOffer {
+                   let promotion = CMSHomeHeroPromotion.visible(
+                        isSubscribed: isSubscribed,
+                        coupon: featureConfigStore.homeBottomOffer,
+                        creditPurchase: featureConfigStore.homeBottomCreditPurchasePromotion
+                   ) {
                     HomeDiscountBannerView(
-                        imageURL: offer.coverImageURL,
-                        onOpen: { requireLogin { fullScreenDestination = .summerSale(offer) } },
+                        imageURL: promotion.coverImageURL,
+                        onOpen: {
+                            switch promotion {
+                            case .subscriptionCoupon(let offer):
+                                requireLogin { fullScreenDestination = .summerSale(offer) }
+                            case .creditPurchase:
+                                requireLogin { fullScreenDestination = .credits }
+                            }
+                        },
                         onClose: {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 showHomeOfferBanner = false
@@ -153,6 +171,12 @@ struct ContentView: View {
                 creationItemsProvider: { item in
                     featureConfigStore.detailItems(for: item)
                 },
+                recommendationItemsProvider: { item in
+                    featureConfigStore.imageRecommendations(for: item)
+                },
+                photoToVideoGenerationTarget: featureConfigStore.homeQuickActions
+                    .first { $0.feature == .photoToVideo }?
+                    .generationTarget,
                 creditPricing: featureConfigStore.creditPricing,
                 credits: creditsBinding
             ) {
@@ -178,19 +202,13 @@ struct ContentView: View {
                     feature: feature,
                     quickActions: featureConfigStore.homeQuickActions,
                     creditPricing: featureConfigStore.creditPricing,
+                    imageRecommendationItems: featureConfigStore.imageRecommendations(for: nil),
                     credits: creditsBinding
                 )
             }
         }
         .fullScreenCover(isPresented: $showSettings) {
             SettingsView(credits: creditsBinding)
-        }
-        .fullScreenCover(isPresented: $showQuickCreator) {
-            CreateFlowView(
-                template: nil,
-                creditPricing: featureConfigStore.creditPricing,
-                credits: creditsBinding
-            )
         }
         .fullScreenCover(item: $returningOffer) { variant in
             ReturningPromotionFlowView(variant: variant)
@@ -232,6 +250,18 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             fullScreenDestination = .credits
         }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showLimitedOfferPreview") else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            returningOffer = .limitedTime
+        }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showSuperPrizePreview") else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            returningOffer = .superPrize
+        }
 #endif
         .task(id: isLoggedIn) {
             if isLoggedIn {
@@ -244,7 +274,9 @@ struct ContentView: View {
             guard startupPresentationsAllowed else { return }
 #if DEBUG
             guard !ProcessInfo.processInfo.arguments.contains("-showSummerOfferPreview"),
-                  !ProcessInfo.processInfo.arguments.contains("-showRewardsPreview") else { return }
+                  !ProcessInfo.processInfo.arguments.contains("-showRewardsPreview"),
+                  !ProcessInfo.processInfo.arguments.contains("-showLimitedOfferPreview"),
+                  !ProcessInfo.processInfo.arguments.contains("-showSuperPrizePreview") else { return }
 #endif
             guard !hasEvaluatedReturningOffer else { return }
             hasEvaluatedReturningOffer = true

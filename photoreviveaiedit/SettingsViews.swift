@@ -104,7 +104,7 @@ struct SettingsView: View {
                         SettingsRow(title: "Feedback", action: { destination = .feedback })
                         SettingsRow(title: "Rate us", action: { requestReview() })
                         SettingsRow(title: "Terms of Service", action: { legalDocument = .termsOfService })
-                        SettingsRow(title: "Privacy Policy", action: { showNotice("Privacy Policy", "Privacy Policy will open here when the production URL is connected.") })
+                        SettingsRow(title: "Privacy Policy", action: { legalDocument = .privacyPolicy })
                         SettingsRow(title: "Version", value: appVersion, action: nil)
                     }
                     .padding(.top, 20)
@@ -406,14 +406,12 @@ private struct ProfileAvatarImage: View {
                     .resizable()
                     .scaledToFill()
             } else if let url {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        avatarPlaceholder
-                    }
+                CachedRemoteImage(url: url) { image in
+                    Image(uiImage: image).resizable().scaledToFill()
+                } placeholder: {
+                    avatarPlaceholder
+                } failure: {
+                    avatarPlaceholder
                 }
             } else {
                 avatarPlaceholder
@@ -836,7 +834,6 @@ struct CreditDetailView: View {
     @State private var showCreditStore = false
     @State private var showExitOfferAfterStoreDismisses = false
     @State private var showExitOffer = false
-    @State private var showProductNotice = false
     @State private var showFAQ = false
 
     init(credits: Binding<Int>, accountStore: AppAccountStore? = nil) {
@@ -885,8 +882,11 @@ struct CreditDetailView: View {
                             showExitOffer = false
                         }
                     },
-                    onClaim: { _ in
-                        showProductNotice = true
+                    onPurchased: { _ in
+                        Task {
+                            await accountStore.refreshCreditTransactions()
+                            credits = accountStore.creditsBalance
+                        }
                     }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
@@ -905,6 +905,14 @@ struct CreditDetailView: View {
                 onClose: {
                     showExitOfferAfterStoreDismisses = true
                     showCreditStore = false
+                },
+                onPurchased: { _ in
+                    showExitOfferAfterStoreDismisses = false
+                    showCreditStore = false
+                    Task {
+                        await accountStore.refreshCreditTransactions()
+                        credits = accountStore.creditsBalance
+                    }
                 }
             )
         }
@@ -912,11 +920,6 @@ struct CreditDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Credits are consumed when you generate images or videos and added by rewards.")
-        }
-        .alert("Products coming next", isPresented: $showProductNotice) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("The bonus purchase flow is ready. Add the consumable Product IDs to CreditProductCatalog to connect checkout.")
         }
         .task {
             await accountStore.refreshCreditTransactions()

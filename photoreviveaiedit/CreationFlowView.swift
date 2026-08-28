@@ -1,8 +1,10 @@
 import AVFoundation
+import CoreTransferable
 import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 private enum CreateFlowCropTarget: Identifiable {
     case source
@@ -191,6 +193,14 @@ struct CreateFlowView: View {
         .onAppear {
             AppAnalytics.screen("generation_editor", className: "CreateFlowView")
         }
+#if DEBUG
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showGeneratedVideoPreview") else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            showGenerationFlow = true
+        }
+#endif
         .onChange(of: selectedMedia) { _, item in
             loadImage(from: item)
         }
@@ -598,7 +608,11 @@ struct CreateFlowView: View {
                             }
                         } label: {
                             ZStack(alignment: .bottom) {
-                                TemplateMediaView(item: item, gravity: .resizeAspectFill, playsVideo: false)
+                                TemplateMediaView(
+                                    item: item,
+                                    gravity: .resizeAspectFill,
+                                    playsVideo: true
+                                )
                                     .frame(
                                         width: resolvedWidth,
                                         height: resolvedHeight,
@@ -1059,14 +1073,12 @@ private struct FrostedTemplateBackdrop: View {
                     .resizable()
                     .scaledToFill()
             } else if let coverImageURL = item.coverImageURL {
-                AsyncImage(url: coverImageURL) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        TemplateMediaView(item: item, gravity: .resizeAspectFill)
-                    }
+                CachedRemoteImage(url: coverImageURL) { image in
+                    Image(uiImage: image).resizable().scaledToFill()
+                } placeholder: {
+                    TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                } failure: {
+                    TemplateMediaView(item: item, gravity: .resizeAspectFill)
                 }
             } else {
                 TemplateMediaView(item: item, gravity: .resizeAspectFill)
@@ -1162,7 +1174,9 @@ private struct GenerationOptionsSheet: View {
                     if isImageFlow {
                         optionSection("Resolution", values: ["1k"], selection: $imageResolution, columns: 3)
                         optionSection("Ratio", values: ratios, selection: $ratio, columns: 3)
-                        optionSection("Output Image Number", values: ["1", "2", "4"], selection: $outputCount, columns: 3)
+                        // The current image endpoints return one canonical
+                        // output URL. Do not advertise unsupported batch output.
+                        optionSection("Output Image Number", values: ["1"], selection: $outputCount, columns: 1)
                     } else {
                         binarySection(
                             "Sounds",
@@ -1364,7 +1378,16 @@ private struct VideoGenerationFlowView: View {
     @State private var selectedTab: AppTab = .me
     @State private var showPreview = false
     @State private var showPaywall = false
+    @State private var showSettings = false
+    @State private var settingsCredits = 0
+    @State private var showDeleteConfirmation = false
+    @State private var isExporting = false
+    @State private var isDeleting = false
+    @State private var shareURL: URL?
+    @State private var showShareSheet = false
+    @State private var exportError: String?
     @State private var pollingStartedAt = Date()
+    @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
         ZStack {
@@ -1414,11 +1437,11 @@ private struct VideoGenerationFlowView: View {
                 },
                 onSave: {
                     showPreview = false
-                    AppAnalytics.contentSaved(
-                        contentType: "video",
-                        itemID: template?.id
-                    )
-                    stage = .saved
+                    saveVideo()
+                },
+                onShare: {
+                    showPreview = false
+                    shareVideo()
                 },
                 onRemoveWatermark: {
                     showPreview = false
@@ -1430,6 +1453,35 @@ private struct VideoGenerationFlowView: View {
         }
         .fullScreenCover(isPresented: $showPaywall) {
             PaywallOfferFlowView(analyticsSource: "video_remove_watermark")
+        }
+        .fullScreenCover(isPresented: $showSettings) {
+            SettingsView(credits: $settingsCredits)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let shareURL {
+                GeneratedMediaActivityView(activityItems: [shareURL])
+            }
+        }
+        .confirmationDialog(
+            "Delete this creation?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive, action: deleteGeneration)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the creation from My Creations and cannot be undone.")
+        }
+        .alert(
+            "Export unavailable",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "Please try again.")
         }
         .preferredColorScheme(.light)
         .onAppear {
@@ -1460,8 +1512,8 @@ private struct VideoGenerationFlowView: View {
 
             Spacer(minLength: 0)
 
-            Button(action: onClose) {
-                Text("Delete")
+            Button { showDeleteConfirmation = true } label: {
+                Text(isDeleting ? "Deleting…" : "Delete")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(AppPalette.ink)
                     .padding(.horizontal, 20)
@@ -1470,9 +1522,13 @@ private struct VideoGenerationFlowView: View {
                     .overlay(Capsule().stroke(.white.opacity(0.72), lineWidth: 1))
             }
             .buttonStyle(.plain)
+            .disabled(isDeleting)
             .accessibilityLabel("Delete generation")
 
-            Button {} label: {
+            Button {
+                settingsCredits = AppAccountStore.shared.creditsBalance
+                showSettings = true
+            } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 22, weight: .medium))
                     .foregroundStyle(AppPalette.ink)
@@ -1561,11 +1617,7 @@ private struct VideoGenerationFlowView: View {
 
                 HStack(spacing: 0) {
                     Button {
-                        AppAnalytics.contentSaved(
-                            contentType: "video",
-                            itemID: template?.id
-                        )
-                        stage = .saved
+                        saveVideo()
                     } label: {
                         Label("Save", systemImage: "arrow.down.to.line")
                             .font(.system(size: 21, weight: .medium))
@@ -1574,21 +1626,24 @@ private struct VideoGenerationFlowView: View {
                             .frame(height: 48)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isExporting)
                     .accessibilityLabel("Save generated video")
 
-                    Divider()
+                    if !isSubscribed {
+                        Divider()
 
-                    Button {
-                        showPaywall = true
-                    } label: {
-                        Label("No Watermark", systemImage: "eraser")
-                            .font(.system(size: 21, weight: .medium))
-                            .foregroundStyle(AppPalette.ink)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
+                        Button {
+                            showPaywall = true
+                        } label: {
+                            Label("No Watermark", systemImage: "eraser")
+                                .font(.system(size: 21, weight: .medium))
+                                .foregroundStyle(AppPalette.ink)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove watermark")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Remove watermark")
                 }
                 .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
@@ -1637,7 +1692,7 @@ private struct VideoGenerationFlowView: View {
 
             generationMedia(gravity: .resizeAspect)
 
-            VideoWatermarkPattern()
+            GeneratedContentWatermark()
                 .allowsHitTesting(false)
 
             Button {
@@ -1666,12 +1721,12 @@ private struct VideoGenerationFlowView: View {
                 .foregroundStyle(AppPalette.ink)
 
             HStack(spacing: 18) {
-                VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp")
-                VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages")
-                VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger")
-                VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook")
-                VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram")
-                VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok")
+                VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareVideo)
+                VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareVideo)
+                VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareVideo)
+                VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareVideo)
+                VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareVideo)
+                VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok", action: shareVideo)
             }
         }
         .padding(17)
@@ -1722,42 +1777,40 @@ private struct VideoGenerationFlowView: View {
                 .foregroundStyle(AppPalette.accent)
                 .padding(.top, 62)
 
-            ZStack(alignment: .bottomTrailing) {
+            ZStack {
                 generationMedia(gravity: .resizeAspectFill)
-                Text("Photo Revival")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .italic()
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(15)
+                GeneratedContentWatermark()
             }
             .frame(width: 244, height: 432)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.74), lineWidth: 1))
             .padding(.top, 55)
 
-            Button {
-                showPaywall = true
-            } label: {
-                Label("Remove Watermark", systemImage: "eraser")
-                    .font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(Color(red: 1.0, green: 0.84, blue: 0.43))
-                    .padding(.horizontal, 27)
-                    .frame(height: 53)
-                    .background(AppPalette.ink, in: Capsule())
+            if !isSubscribed {
+                Button {
+                    showPaywall = true
+                } label: {
+                    Label("Remove Watermark", systemImage: "eraser")
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(Color(red: 1.0, green: 0.84, blue: 0.43))
+                        .padding(.horizontal, 27)
+                        .frame(height: 53)
+                        .background(AppPalette.ink, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove watermark")
+                .padding(.top, 11)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Remove watermark")
-            .padding(.top, 11)
 
             Spacer(minLength: 26)
 
             HStack(spacing: 21) {
-                VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp")
-                VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages")
-                VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger")
-                VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook")
-                VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram")
-                VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok")
+                VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareVideo)
+                VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareVideo)
+                VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareVideo)
+                VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareVideo)
+                VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareVideo)
+                VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok", action: shareVideo)
             }
             .padding(.bottom, 28)
         }
@@ -1804,6 +1857,10 @@ private struct VideoGenerationFlowView: View {
                     return
                 }
                 if task.status == "failed" {
+                    // get-task performs the server-side failure refund before
+                    // returning. Refresh the wallet so the UI never keeps the
+                    // pre-refund balance after a failed generation.
+                    await AppAccountStore.shared.refreshCredits()
                     AppAnalytics.generationFailed(
                         contentType: "video",
                         itemID: template?.id,
@@ -1847,6 +1904,75 @@ private struct VideoGenerationFlowView: View {
     private var pollingElapsedMilliseconds: Int {
         max(0, Int(Date().timeIntervalSince(pollingStartedAt) * 1_000))
     }
+
+    private var exportSourceURL: URL? {
+        if let generatedVideoURL { return generatedVideoURL }
+        guard let videoName else { return nil }
+        return ["mp4", "mov", "m4v"]
+            .lazy
+            .compactMap { Bundle.main.url(forResource: videoName, withExtension: $0) }
+            .first
+    }
+
+    private func saveVideo() {
+        guard !isExporting, let exportSourceURL else {
+            exportError = GeneratedMediaExportError.mediaUnavailable.localizedDescription
+            return
+        }
+        isExporting = true
+        Task {
+            defer { isExporting = false }
+            do {
+                let fileURL = try await GeneratedMediaExporter.prepareVideo(
+                    from: exportSourceURL,
+                    addsWatermark: !isSubscribed
+                )
+                try await GeneratedMediaExporter.saveVideo(at: fileURL)
+                AppAnalytics.contentSaved(contentType: "video", itemID: template?.id)
+                stage = .saved
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    private func shareVideo() {
+        guard !isExporting, let exportSourceURL else {
+            exportError = GeneratedMediaExportError.mediaUnavailable.localizedDescription
+            return
+        }
+        isExporting = true
+        Task {
+            defer { isExporting = false }
+            do {
+                shareURL = try await GeneratedMediaExporter.prepareVideo(
+                    from: exportSourceURL,
+                    addsWatermark: !isSubscribed
+                )
+                showShareSheet = true
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    private func deleteGeneration() {
+        guard !isDeleting else { return }
+        guard let taskID else {
+            onClose()
+            return
+        }
+        isDeleting = true
+        Task {
+            defer { isDeleting = false }
+            do {
+                try await AppAccountStore.shared.deleteHistoryTask(id: taskID)
+                onClose()
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
 }
 
 private struct VideoGenerationPreviewView: View {
@@ -1856,7 +1982,9 @@ private struct VideoGenerationPreviewView: View {
     let onClose: () -> Void
     let onRegenerate: () -> Void
     let onSave: () -> Void
+    let onShare: () -> Void
     let onRemoveWatermark: () -> Void
+    @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
         ZStack {
@@ -1865,7 +1993,7 @@ private struct VideoGenerationPreviewView: View {
             previewMedia
                 .ignoresSafeArea(edges: .horizontal)
 
-            VideoWatermarkPattern()
+            GeneratedContentWatermark()
                 .allowsHitTesting(false)
 
             VStack {
@@ -1893,8 +2021,10 @@ private struct VideoGenerationPreviewView: View {
                 VStack(spacing: 17) {
                     previewAction("arrow.clockwise", label: "Regenerate", action: onRegenerate)
                     previewAction("arrow.down.to.line", label: "Save generated video", action: onSave)
-                    previewAction("eraser", label: "Remove watermark", action: onRemoveWatermark)
-                    previewAction("square.and.arrow.up", label: "Share generated video", accent: true, action: {})
+                    if !isSubscribed {
+                        previewAction("eraser", label: "Remove watermark", action: onRemoveWatermark)
+                    }
+                    previewAction("square.and.arrow.up", label: "Share generated video", accent: true, action: onShare)
                 }
                 .padding(.trailing, 20)
             }
@@ -1963,40 +2093,22 @@ private struct VideoGenerationDots: View {
     }
 }
 
-private struct VideoWatermarkPattern: View {
-    private let placements: [(CGFloat, CGFloat)] = [
-        (0.13, 0.17), (0.55, 0.20), (0.86, 0.34),
-        (0.23, 0.50), (0.67, 0.57), (0.11, 0.77), (0.73, 0.83)
-    ]
-
-    var body: some View {
-        GeometryReader { proxy in
-            ForEach(Array(placements.enumerated()), id: \.offset) { _, placement in
-                Text("Photo Revival")
-                    .font(.system(size: max(12, proxy.size.width * 0.05), weight: .medium))
-                    .foregroundStyle(.white.opacity(0.35))
-                    .rotationEffect(.degrees(-18))
-                    .position(
-                        x: proxy.size.width * placement.0,
-                        y: proxy.size.height * placement.1
-                    )
-            }
-        }
-    }
-}
-
 private struct VideoShareIcon: View {
     let symbol: String
     let color: Color
     let label: String
+    var action: () -> Void = {}
 
     var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: 21, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 45, height: 45)
-            .background(color, in: Circle())
-            .accessibilityLabel(label)
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 45, height: 45)
+                .background(color, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
@@ -2004,6 +2116,7 @@ struct FixedFeatureView: View {
     let feature: FixedFeature
     let quickActions: [HomeQuickAction]
     let creditPricing: AppCreditPricing
+    var imageRecommendationItems: [TemplateItem] = []
     @Binding var credits: Int
 
     private var photoToVideoCover: TemplateItem? {
@@ -2014,21 +2127,47 @@ struct FixedFeatureView: View {
         quickActions.first { $0.feature == .textToVideo }?.item
     }
 
+    private func generationTarget(for feature: FixedFeature) -> FeatureGenerationTarget? {
+        quickActions.first { $0.feature == feature }?.generationTarget
+    }
+
+    private func generationTarget(
+        for feature: FixedFeature,
+        endpoint: String
+    ) -> FeatureGenerationTarget? {
+        quickActions.first { $0.feature == feature }?
+            .generationTarget(endpoint: endpoint)
+    }
+
     var body: some View {
         switch feature {
         case .oneTapRestore:
-            FixedPhotoRestoreFeature(kind: .restore, cost: creditPricing.oneTapRestoreCredits, credits: $credits)
+            FixedPhotoRestoreFeature(
+                kind: .restore,
+                cost: creditPricing.oneTapRestoreCredits,
+                generationTarget: generationTarget(for: .oneTapRestore),
+                recommendationItems: imageRecommendationItems,
+                photoToVideoGenerationTarget: generationTarget(for: .photoToVideo),
+                credits: $credits
+            )
         case .enhancePhoto:
-            FixedPhotoRestoreFeature(kind: .enhance, cost: creditPricing.enhancePhotoCredits, credits: $credits)
-        case .enhanceVideo:
-            FixedVideoEnhanceFeature(creditPricing: creditPricing, credits: $credits)
+            FixedPhotoRestoreFeature(
+                kind: .enhance,
+                cost: creditPricing.enhancePhotoCredits,
+                generationTarget: generationTarget(for: .enhancePhoto),
+                recommendationItems: imageRecommendationItems,
+                photoToVideoGenerationTarget: generationTarget(for: .photoToVideo),
+                credits: $credits
+            )
         case .photoToVideo:
             FixedVideoGeneratorFeature(
                 initialMode: .image,
                 creditPricing: creditPricing,
                 credits: $credits,
                 imageCoverItem: photoToVideoCover,
-                textCoverItem: textToVideoCover
+                textCoverItem: textToVideoCover,
+                imageGenerationTarget: generationTarget(for: .photoToVideo),
+                textGenerationTarget: generationTarget(for: .textToVideo)
             )
         case .textToVideo:
             FixedVideoGeneratorFeature(
@@ -2036,14 +2175,37 @@ struct FixedFeatureView: View {
                 creditPricing: creditPricing,
                 credits: $credits,
                 imageCoverItem: photoToVideoCover,
-                textCoverItem: textToVideoCover
+                textCoverItem: textToVideoCover,
+                imageGenerationTarget: generationTarget(for: .photoToVideo),
+                textGenerationTarget: generationTarget(for: .textToVideo)
             )
         case .aiImage:
-            FixedAIImageFeature(creditPricing: creditPricing, credits: $credits)
+            FixedAIImageFeature(
+                creditPricing: creditPricing,
+                credits: $credits,
+                recommendationItems: imageRecommendationItems,
+                photoToVideoGenerationTarget: generationTarget(for: .photoToVideo),
+                imageGenerationTarget: generationTarget(for: .aiImage, endpoint: "image-to-image"),
+                textGenerationTarget: generationTarget(for: .aiImage, endpoint: "text-to-image")
+            )
         case .imageToImage:
-            FixedAIImageFeature(creditPricing: creditPricing, credits: $credits, initialMode: .image)
+            FixedAIImageFeature(
+                creditPricing: creditPricing,
+                credits: $credits,
+                initialMode: .image,
+                recommendationItems: imageRecommendationItems,
+                photoToVideoGenerationTarget: generationTarget(for: .photoToVideo),
+                imageGenerationTarget: generationTarget(for: .imageToImage, endpoint: "image-to-image")
+            )
         case .textToImage:
-            FixedAIImageFeature(creditPricing: creditPricing, credits: $credits, initialMode: .text)
+            FixedAIImageFeature(
+                creditPricing: creditPricing,
+                credits: $credits,
+                initialMode: .text,
+                recommendationItems: imageRecommendationItems,
+                photoToVideoGenerationTarget: generationTarget(for: .photoToVideo),
+                textGenerationTarget: generationTarget(for: .textToImage, endpoint: "text-to-image")
+            )
         }
     }
 }
@@ -2157,7 +2319,7 @@ private struct FixedFeatureScaffold<Content: View, Footer: View>: View {
     }
 }
 
-private enum FixedPhotoFeatureKind: Equatable {
+private enum FixedPhotoFeatureKind {
     case restore
     case enhance
 
@@ -2175,11 +2337,35 @@ private enum FixedPhotoFeatureKind: Equatable {
         }
     }
 
+    var featureCardImageName: String {
+        switch self {
+        case .restore: "RestoreFeatureCard"
+        case .enhance: "EnhanceFeatureCard"
+        }
+    }
+
+    var recommendedTip: (subtitle: String, names: [String]) {
+        switch self {
+        case .restore: ("Damaged, faded, or blurry photo", ["MemoryPortrait", "Gentleman"])
+        case .enhance: ("Blurry or unclear photo", ["MemoryPortrait", "AnimePortrait"])
+        }
+    }
+
+    var avoidTip: (subtitle: String, names: [String]) {
+        switch self {
+        case .restore: ("Clear Photo", ["Fashion", "Cowboy"])
+        case .enhance: ("Clear or damaged photos will not produce effective results", ["CartoonPortrait", "Cowboy"])
+        }
+    }
+
 }
 
 private struct FixedPhotoRestoreFeature: View {
     let kind: FixedPhotoFeatureKind
     let cost: Int
+    let generationTarget: FeatureGenerationTarget?
+    let recommendationItems: [TemplateItem]
+    let photoToVideoGenerationTarget: FeatureGenerationTarget?
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
     @State private var selectedItem: PhotosPickerItem?
@@ -2188,6 +2374,11 @@ private struct FixedPhotoRestoreFeature: View {
     @State private var showCredits = false
     @State private var showDraftWarning = false
     @State private var showCrop = false
+    @State private var isGenerating = false
+    @State private var generationError: String?
+    @State private var generatedImageURL: URL?
+    @State private var generationTaskID: String?
+    @State private var showGenerationFlow = false
 
     var body: some View {
         ZStack {
@@ -2201,7 +2392,7 @@ private struct FixedPhotoRestoreFeature: View {
                     PhotosPicker(selection: $selectedItem, matching: .images) {
                         ZStack(alignment: .bottom) {
                             if selectedImage == nil {
-                                Image(kind == .restore ? "RestoreFeatureCard" : "EnhanceFeatureCard")
+                                Image(kind.featureCardImageName)
                                     .resizable()
                                     .scaledToFill()
                             } else {
@@ -2257,12 +2448,13 @@ private struct FixedPhotoRestoreFeature: View {
                 }
             } footer: {
                 FeaturePrimaryButton(
-                    title: "Generate",
+                    title: isGenerating ? "Generating…" : "Generate",
                     cost: cost,
                     credits: $credits,
                     onNeedCredits: { showCredits = true },
-                    onCreate: {}
+                    onCreate: startGeneration
                 )
+                .disabled(isGenerating)
             }
 
             if showTips {
@@ -2290,6 +2482,33 @@ private struct FixedPhotoRestoreFeature: View {
                 }
             }
         }
+        .fullScreenCover(isPresented: $showGenerationFlow) {
+            ImageGenerationFlowView(
+                title: kind.title,
+                template: resultTemplate,
+                generatedImageURL: generatedImageURL,
+                taskID: generationTaskID,
+                recommendationItems: recommendationItems,
+                photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                credits: $credits,
+                onRegenerate: { showGenerationFlow = false },
+                onClose: {
+                    showGenerationFlow = false
+                    dismiss()
+                }
+            )
+        }
+        .alert(
+            "Generation unavailable",
+            isPresented: Binding(
+                get: { generationError != nil },
+                set: { if !$0 { generationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { generationError = nil }
+        } message: {
+            Text(generationError ?? "Please try again.")
+        }
         .onChange(of: selectedItem) { _, item in
             loadImage(item)
         }
@@ -2302,7 +2521,7 @@ private struct FixedPhotoRestoreFeature: View {
                 .resizable()
                 .scaledToFill()
         } else {
-            Image(kind == .restore ? "RestoreFeatureCard" : "EnhanceFeatureCard")
+            Image(kind.featureCardImageName)
                 .resizable()
                 .scaledToFill()
         }
@@ -2322,6 +2541,63 @@ private struct FixedPhotoRestoreFeature: View {
             showDraftWarning = true
         } else {
             dismiss()
+        }
+    }
+
+    private var resultTemplate: TemplateItem {
+        TemplateItem(
+            id: generationTarget?.itemID ?? "unconfigured-\(kind.title)",
+            title: kind.title,
+            generationKind: .image,
+            estimatedCredits: cost,
+            modelType: generationTarget?.modelType,
+            modelID: generationTarget?.modelID
+        )
+    }
+
+    private func startGeneration() {
+        guard !isGenerating else { return }
+        guard let selectedImage else {
+            generationError = "Please choose a source photo."
+            return
+        }
+        guard let generationTarget else {
+            generationError = "This feature has not been connected to a CMS generation template yet."
+            return
+        }
+        guard generationTarget.endpoint == "image-to-image" else {
+            generationError = "The CMS generation target for this feature is invalid."
+            return
+        }
+
+        isGenerating = true
+        Task {
+            defer { isGenerating = false }
+            do {
+                guard let data = selectedImage.jpegData(compressionQuality: 0.90) else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+                let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
+                let submission = try await PhotoReviveAPIClient.shared.createImageToImage(
+                    itemID: generationTarget.itemID,
+                    imageURLs: [imageURL],
+                    prompt: nil,
+                    options: PhotoReviveImageGenerationOptions(
+                        resolution: "1K",
+                        aspectRatio: "9:16",
+                        outputCount: 1
+                    )
+                )
+                guard let resultURL = submission.resultURL else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+                credits = submission.creditsBalance
+                generatedImageURL = resultURL
+                generationTaskID = submission.taskID
+                showGenerationFlow = true
+            } catch {
+                generationError = error.localizedDescription
+            }
         }
     }
 }
@@ -2387,16 +2663,16 @@ private struct FeatureTipOverlay: View {
 
                 tipSection(
                     title: "Recommended",
-                    subtitle: kind == .restore ? "Damaged, faded, or blurry photo" : "Blurry or unclear photo",
-                    names: kind == .restore ? ["MemoryPortrait", "Gentleman"] : ["MemoryPortrait", "AnimePortrait"],
+                    subtitle: kind.recommendedTip.subtitle,
+                    names: kind.recommendedTip.names,
                     color: Color(red: 0.58, green: 0.69, blue: 0.40),
                     icon: "checkmark.circle.fill"
                 )
 
                 tipSection(
                     title: "Not Recommended",
-                    subtitle: kind == .restore ? "Clear Photo" : "Clear or damaged photos will not produce effective results",
-                    names: kind == .restore ? ["Fashion", "Cowboy"] : ["CartoonPortrait", "Cowboy"],
+                    subtitle: kind.avoidTip.subtitle,
+                    names: kind.avoidTip.names,
                     color: Color(red: 0.88, green: 0.26, blue: 0.20),
                     icon: "xmark.circle.fill"
                 )
@@ -2458,7 +2734,6 @@ private struct FeaturePrimaryButton: View {
                     onNeedCredits()
                     return
                 }
-                if cost > 0 { credits -= cost }
                 onCreate()
             }
         } label: {
@@ -2585,224 +2860,6 @@ private struct FeatureDraftWarningOverlay: View {
     }
 }
 
-private struct FixedVideoEnhanceFeature: View {
-    let creditPricing: AppCreditPricing
-    @Binding var credits: Int
-    @Environment(\.dismiss) private var dismiss
-    @State private var showChooser = false
-    @State private var showSystemPicker = false
-    @State private var selectedVideo: PhotosPickerItem?
-    @State private var selectedVideoDuration: TimeInterval?
-    @State private var showCredits = false
-    @State private var showDraftWarning = false
-
-    var body: some View {
-        ZStack {
-            FixedFeatureScaffold(
-                title: "Enhance Video",
-                onBack: requestDismiss
-            ) {
-                VStack(alignment: .leading, spacing: 18) {
-                    FeatureVideoSourceCard(
-                        title: selectedVideo == nil ? "Choose Video" : "Change Video",
-                        detail: "Max 100 MB • Up to 30 sec • Up to 4K",
-                        imageName: selectedVideo == nil ? nil : "SchoolWaveLandscape",
-                        action: { showChooser = true }
-                    )
-
-                    HStack {
-                        Text("4K")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(AppPalette.surfaceEdge)
-                            .padding(.horizontal, 17)
-                            .frame(height: 34)
-                            .background(Color.white.opacity(0.45), in: Capsule())
-                        Spacer()
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .background(Color.white.opacity(0.44), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1.2))
-
-                    Text("Examples")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(AppPalette.ink)
-
-                    Image("EnhanceVideoExamples")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity)
-                }
-            } footer: {
-                FeaturePrimaryButton(
-                    title: "Generate",
-                    cost: enhancementCost,
-                    credits: $credits,
-                    onNeedCredits: { showCredits = true },
-                    onCreate: {}
-                )
-            }
-
-            if showDraftWarning {
-                FeatureDraftWarningOverlay(onConfirm: { dismiss() }, onCancel: { showDraftWarning = false })
-                    .zIndex(2)
-            }
-        }
-        .sheet(isPresented: $showChooser) {
-            FeatureVideoChooser(
-                onChooseFromPhotos: {
-                    showChooser = false
-                    showSystemPicker = true
-                }
-            )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.hidden)
-        }
-        .photosPicker(isPresented: $showSystemPicker, selection: $selectedVideo, matching: .videos)
-        .onChange(of: selectedVideo) { _, item in
-            loadDuration(for: item)
-        }
-    }
-
-    private var enhancementCost: Int {
-        guard selectedVideo != nil else { return 0 }
-        return creditPricing.videoEnhancementCredits(duration: selectedVideoDuration ?? 1)
-    }
-
-    private func loadDuration(for item: PhotosPickerItem?) {
-        guard let identifier = item?.itemIdentifier else {
-            selectedVideoDuration = nil
-            return
-        }
-        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
-        selectedVideoDuration = assets.firstObject?.duration
-    }
-
-    private func requestDismiss() {
-        if selectedVideo != nil { showDraftWarning = true } else { dismiss() }
-    }
-}
-
-private struct FeatureVideoSourceCard: View {
-    let title: String
-    let detail: String
-    let imageName: String?
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                if let imageName {
-                    Image(imageName)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Color.white.opacity(0.38)
-                }
-
-                VStack(spacing: 20) {
-                    HStack(spacing: 12) {
-                        FeatureAddPhotoIcon()
-                            .frame(width: 31, height: 31)
-                        Text(title)
-                            .font(.system(size: 21, weight: .bold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 25)
-                            .frame(height: 54)
-                            .background(.black.opacity(0.44), in: Capsule())
-                    .overlay(Capsule().stroke(.white.opacity(0.82), lineWidth: 1.5))
-
-                    Text(detail)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(AppPalette.brownInk)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 250)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1.2))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct FeatureVideoChooser: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var tab = 0
-    let onChooseFromPhotos: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("Choose Video")
-                    .font(.system(size: 27, weight: .heavy))
-                Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 23, weight: .medium))
-                }
-                .buttonStyle(.plain)
-            }
-
-            HStack(spacing: 0) {
-                chooserTab("Uploaded", index: 0)
-                chooserTab("Created", index: 1)
-            }
-            .padding(4)
-            .background(Color(red: 1, green: 0.96, blue: 0.87), in: RoundedRectangle(cornerRadius: 14))
-
-            if tab == 0 {
-                Button(action: onChooseFromPhotos) {
-                    VStack(spacing: 12) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 44, weight: .regular))
-                        Text("Choose\nfrom Photos")
-                            .font(.system(size: 20, weight: .regular))
-                            .multilineTextAlignment(.center)
-                    }
-                    .foregroundStyle(.gray)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 205)
-                    .background(Color(.systemGray5), in: RoundedRectangle(cornerRadius: 15))
-                }
-                .buttonStyle(.plain)
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 36))
-                    Image(systemName: "hand.draw")
-                        .font(.system(size: 70, weight: .light))
-                    Text("There is nothing now")
-                        .font(.system(size: 20))
-                }
-                .foregroundStyle(.gray.opacity(0.68))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 22)
-        .padding(.top, 22)
-        .background(.white)
-    }
-
-    private func chooserTab(_ title: String, index: Int) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { tab = index }
-        } label: {
-            Text(title)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(tab == index ? AppPalette.ink : .gray)
-                .frame(maxWidth: .infinity)
-                .frame(height: 48)
-                .background(tab == index ? Color(red: 1, green: 0.76, blue: 0.36) : .clear, in: RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 private enum FixedVideoGeneratorMode: Hashable {
     case image
     case text
@@ -2813,6 +2870,8 @@ private struct FixedVideoGeneratorFeature: View {
     let creditPricing: AppCreditPricing
     let imageCoverItem: TemplateItem?
     let textCoverItem: TemplateItem?
+    let imageGenerationTarget: FeatureGenerationTarget?
+    let textGenerationTarget: FeatureGenerationTarget?
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
     @State private var mode: FixedVideoGeneratorMode
@@ -2829,6 +2888,9 @@ private struct FixedVideoGeneratorFeature: View {
     @State private var resolution = "540p"
     @State private var ratio = "9:16"
     @State private var showGenerationFlow = false
+    @State private var isGenerating = false
+    @State private var generationError: String?
+    @State private var generationTaskID: String?
 
     init(
         initialMode: FixedVideoGeneratorMode,
@@ -2836,12 +2898,16 @@ private struct FixedVideoGeneratorFeature: View {
         credits: Binding<Int>,
         initialImage: UIImage? = nil,
         imageCoverItem: TemplateItem? = nil,
-        textCoverItem: TemplateItem? = nil
+        textCoverItem: TemplateItem? = nil,
+        imageGenerationTarget: FeatureGenerationTarget? = nil,
+        textGenerationTarget: FeatureGenerationTarget? = nil
     ) {
         self.initialMode = initialMode
         self.creditPricing = creditPricing
         self.imageCoverItem = imageCoverItem
         self.textCoverItem = textCoverItem
+        self.imageGenerationTarget = imageGenerationTarget
+        self.textGenerationTarget = textGenerationTarget
         _credits = credits
         _mode = State(initialValue: initialMode)
         _selectedImage = State(initialValue: initialImage)
@@ -2874,11 +2940,12 @@ private struct FixedVideoGeneratorFeature: View {
                                 image: selectedImage,
                                 template: imageCoverItem,
                                 showsChoosePhoto: selectedImage == nil,
-                                prompt: selectedImage == nil ? "" : "Using uploaded subject, keep exact appearance, riding motorcycle on city street, goggles"
+                                prompt: selectedImage == nil
+                                    ? ""
+                                    : prompt.trimmingCharacters(in: .whitespacesAndNewlines)
                             )
                         }
                         .buttonStyle(.plain)
-                        .padding(.horizontal, 20)
                         .overlay(alignment: .bottomTrailing) {
                             if selectedImage != nil {
                                 Button { showCrop = true } label: {
@@ -2898,27 +2965,28 @@ private struct FixedVideoGeneratorFeature: View {
                             showsChoosePhoto: false,
                             prompt: ""
                         )
-                        .padding(.horizontal, 20)
                     }
 
                     FeaturePromptBox(
                         text: $prompt,
-                        placeholder: mode == .image ? "Describe motion you want to add to your photo" : "Describe your video vision here"
+                        placeholder: mode == .image ? "Describe motion you want to add to your photo" : "Describe your video vision here",
+                        height: 220
                     )
 
                     FeatureSettingsSummary(
-                        values: [soundEnabled ? "sound" : "mute", multiShotEnabled ? "multi" : "single", duration, resolution, mode == .text ? ratio : nil].compactMap { $0 },
+                        values: [soundEnabled ? "sound" : "mute", multiShotEnabled ? "multi" : "single", duration, resolution, ratio],
                         onTap: { showSettings = true }
                     )
                 }
             } footer: {
                 FeaturePrimaryButton(
-                    title: "Generate",
+                    title: isGenerating ? "Generating…" : "Generate",
                     cost: generationCost,
                     credits: $credits,
                     onNeedCredits: { showCredits = true },
-                    onCreate: { showGenerationFlow = true }
+                    onCreate: startGeneration
                 )
+                .disabled(isGenerating)
             }
 
             if showDraftWarning {
@@ -2946,6 +3014,7 @@ private struct FixedVideoGeneratorFeature: View {
                 templateTitle: mode == .image ? "Photo To Video" : "Text To Video",
                 videoName: nil,
                 template: activeCoverItem,
+                taskID: generationTaskID,
                 onRegenerate: { showGenerationFlow = false },
                 onClose: { showGenerationFlow = false }
             )
@@ -2956,6 +3025,17 @@ private struct FixedVideoGeneratorFeature: View {
                     self.selectedImage = editedImage
                 }
             }
+        }
+        .alert(
+            "Generation unavailable",
+            isPresented: Binding(
+                get: { generationError != nil },
+                set: { if !$0 { generationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { generationError = nil }
+        } message: {
+            Text(generationError ?? "Please try again.")
         }
     }
 
@@ -2981,6 +3061,79 @@ private struct FixedVideoGeneratorFeature: View {
     private func requestDismiss() {
         if selectedImage != nil || !prompt.isEmpty { showDraftWarning = true } else { dismiss() }
     }
+
+    private var activeGenerationTarget: FeatureGenerationTarget? {
+        mode == .image ? imageGenerationTarget : textGenerationTarget
+    }
+
+    private func startGeneration() {
+        guard !isGenerating else { return }
+        guard let target = activeGenerationTarget else {
+            generationError = "This feature has not been connected to a CMS generation template yet."
+            return
+        }
+
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if mode == .image && selectedImage == nil {
+            generationError = "Please choose a source photo."
+            return
+        }
+        if mode == .text && trimmedPrompt.isEmpty && target.promptTemplate == nil {
+            generationError = "Please describe the video you want to create."
+            return
+        }
+
+        let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
+            ?? creditPricing.videoDefaultDurationSeconds
+        let options = PhotoReviveVideoGenerationOptions(
+            resolution: resolution,
+            aspectRatio: ratio,
+            duration: seconds,
+            sound: soundEnabled,
+            multiShot: multiShotEnabled
+        )
+
+        isGenerating = true
+        Task {
+            defer { isGenerating = false }
+            do {
+                let submission: PhotoReviveVideoGenerationSubmission
+                switch (mode, target.endpoint) {
+                case (.image, "image-to-video"):
+                    guard let selectedImage,
+                          let data = selectedImage.jpegData(compressionQuality: 0.90) else {
+                        throw PhotoReviveAPIError.invalidResponse
+                    }
+                    let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
+                    let appVersion = Bundle.main.object(
+                        forInfoDictionaryKey: "CFBundleShortVersionString"
+                    ) as? String
+                    submission = try await PhotoReviveAPIClient.shared.createImageToVideo(
+                        itemID: target.itemID,
+                        imageURLs: [imageURL],
+                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+                        appVersion: appVersion,
+                        options: options
+                    )
+                case (.text, "text-to-video"):
+                    submission = try await PhotoReviveAPIClient.shared.createTextToVideo(
+                        itemID: target.itemID,
+                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+                        options: options
+                    )
+                default:
+                    generationError = "The CMS generation target for this feature is invalid."
+                    return
+                }
+
+                credits = submission.creditsBalance
+                generationTaskID = submission.taskID
+                showGenerationFlow = true
+            } catch {
+                generationError = error.localizedDescription
+            }
+        }
+    }
 }
 
 private struct FeatureVideoGeneratorPreview: View {
@@ -2988,6 +3141,17 @@ private struct FeatureVideoGeneratorPreview: View {
     let template: TemplateItem?
     let showsChoosePhoto: Bool
     let prompt: String
+    @State private var loadedTemplateAspectRatio: CGFloat?
+
+    private var mediaAspectRatio: CGFloat {
+        if let image, image.size.height > 0 {
+            return image.size.width / image.size.height
+        }
+        if let loadedTemplateAspectRatio, loadedTemplateAspectRatio > 0 {
+            return loadedTemplateAspectRatio
+        }
+        return template?.orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -3052,9 +3216,62 @@ private struct FeatureVideoGeneratorPreview: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .aspectRatio(1048.0 / 1253.0, contentMode: .fit)
+        .aspectRatio(mediaAspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.75), lineWidth: 1.2))
+        .animation(.easeInOut(duration: 0.22), value: mediaAspectRatio)
+        .task(id: template?.id) {
+            guard image == nil, let template else {
+                loadedTemplateAspectRatio = nil
+                return
+            }
+            loadedTemplateAspectRatio = await Self.aspectRatio(for: template)
+        }
+    }
+
+    private static func aspectRatio(for template: TemplateItem) async -> CGFloat? {
+        if let videoURL = template.coverVideoURL ?? bundledVideoURL(named: template.videoName),
+           let ratio = await videoAspectRatio(at: videoURL) {
+            return ratio
+        }
+
+        if let imageURL = template.coverImageURL,
+           let (data, _) = try? await URLSession.shared.data(from: imageURL),
+           let image = UIImage(data: data),
+           image.size.height > 0 {
+            return image.size.width / image.size.height
+        }
+
+        if !template.imageName.isEmpty,
+           let image = UIImage(named: template.imageName),
+           image.size.height > 0 {
+            return image.size.width / image.size.height
+        }
+
+        return nil
+    }
+
+    private static func bundledVideoURL(named name: String?) -> URL? {
+        guard let name else { return nil }
+        if let url = Bundle.main.url(forResource: name, withExtension: "mp4") {
+            return url
+        }
+        return Bundle.main.url(forResource: name, withExtension: "mov")
+    }
+
+    private static func videoAspectRatio(at url: URL) async -> CGFloat? {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let naturalSize = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform) else {
+            return nil
+        }
+
+        let displayedSize = naturalSize.applying(transform)
+        let width = abs(displayedSize.width)
+        let height = abs(displayedSize.height)
+        guard width > 0, height > 0 else { return nil }
+        return width / height
     }
 }
 
@@ -3090,6 +3307,7 @@ private struct FeaturePromptBox: View {
     let placeholder: String
     var height: CGFloat = 152
     var isEditable = true
+    var insertionRequest: PromptEditorInsertionRequest?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -3104,10 +3322,11 @@ private struct FeaturePromptBox: View {
             ImageReferencePromptEditor(
                 text: $text,
                 isEditable: isEditable,
-                characterLimit: 2000
+                characterLimit: 2000,
+                insertionRequest: insertionRequest
             )
 
-            Text("\(text.count)/2000")
+            Text("\(ImageReferencePromptText.displayCharacterCount(in: text))/2000")
                 .font(.system(size: 14))
                 .foregroundStyle(AppPalette.surfaceEdge)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -3119,6 +3338,21 @@ private struct FeaturePromptBox: View {
         .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1.2))
+    }
+}
+
+private struct PromptEditorInsertionRequest: Equatable {
+    let id = UUID()
+    let text: String
+}
+
+private enum ImageReferencePromptText {
+    static func displayCharacterCount(in text: String) -> Int {
+        text.replacingOccurrences(
+            of: #"@Image\d+"#,
+            with: "@",
+            options: [.regularExpression, .caseInsensitive]
+        ).count
     }
 }
 
@@ -3164,6 +3398,7 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
     @Binding var text: String
     let isEditable: Bool
     let characterLimit: Int
+    let insertionRequest: PromptEditorInsertionRequest?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -3193,6 +3428,18 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
         context.coordinator.parent = self
         textView.isEditable = isEditable
         textView.accessibilityTraits = isEditable ? [.allowsDirectInteraction] : [.staticText]
+        if let insertionRequest,
+           context.coordinator.lastHandledInsertionID != insertionRequest.id {
+            context.coordinator.lastHandledInsertionID = insertionRequest.id
+            let updatedText = context.coordinator.insert(
+                insertionRequest.text,
+                in: textView
+            )
+            DispatchQueue.main.async {
+                text = updatedText
+            }
+            return
+        }
         if textView.attributedText.string != text {
             context.coordinator.render(text, in: textView, preservingSelection: true)
         }
@@ -3200,6 +3447,7 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ImageReferencePromptEditor
+        var lastHandledInsertionID: UUID?
         private var isRendering = false
         private let referenceRegex = try! NSRegularExpression(
             pattern: #"@Image\d+"#,
@@ -3215,9 +3463,44 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
             shouldChangeTextIn range: NSRange,
             replacementText replacement: String
         ) -> Bool {
+            let protectedRange = expandingToWholeImageReferences(
+                range,
+                in: textView.text ?? ""
+            )
+            if protectedRange != range {
+                let rawText = textView.text ?? ""
+                let next = (rawText as NSString).replacingCharacters(
+                    in: protectedRange,
+                    with: replacement
+                )
+                guard next.count <= parent.characterLimit else { return false }
+
+                parent.text = next
+                render(next, in: textView, preservingSelection: false)
+                textView.selectedRange = NSRange(
+                    location: protectedRange.location + (replacement as NSString).length,
+                    length: 0
+                )
+                return false
+            }
+
             guard let swiftRange = Range(range, in: textView.text) else { return false }
             let next = textView.text.replacingCharacters(in: swiftRange, with: replacement)
             return next.count <= parent.characterLimit
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard !isRendering, textView.selectedRange.length == 0 else { return }
+            let location = textView.selectedRange.location
+            let text = textView.text ?? ""
+            let fullRange = NSRange(location: 0, length: (text as NSString).length)
+            for match in referenceRegex.matches(in: text, range: fullRange) {
+                let tokenRange = match.range
+                if location > tokenRange.location, location < NSMaxRange(tokenRange) {
+                    textView.selectedRange = NSRange(location: NSMaxRange(tokenRange), length: 0)
+                    return
+                }
+            }
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -3225,6 +3508,63 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
             let rawText = String(textView.text.prefix(parent.characterLimit))
             parent.text = rawText
             render(rawText, in: textView, preservingSelection: true)
+        }
+
+        func insert(_ insertedText: String, in textView: UITextView) -> String {
+            let rawText = textView.text ?? ""
+            let rawNSString = rawText as NSString
+            let selection = textView.selectedRange
+            let safeLocation = min(selection.location, rawNSString.length)
+            let safeLength = min(selection.length, rawNSString.length - safeLocation)
+            let safeSelection = expandingToWholeImageReferences(
+                NSRange(location: safeLocation, length: safeLength),
+                in: rawText
+            )
+            let updatedText = rawNSString.replacingCharacters(
+                in: safeSelection,
+                with: insertedText
+            )
+
+            guard updatedText.count <= parent.characterLimit else {
+                textView.becomeFirstResponder()
+                return rawText
+            }
+
+            render(updatedText, in: textView, preservingSelection: false)
+            textView.selectedRange = NSRange(
+                location: safeSelection.location + (insertedText as NSString).length,
+                length: 0
+            )
+            textView.becomeFirstResponder()
+            return updatedText
+        }
+
+        private func expandingToWholeImageReferences(
+            _ proposedRange: NSRange,
+            in text: String
+        ) -> NSRange {
+            let fullRange = NSRange(location: 0, length: (text as NSString).length)
+            var expandedRange = proposedRange
+
+            for match in referenceRegex.matches(in: text, range: fullRange) {
+                let tokenRange = match.range
+                let selectionIntersectsToken: Bool
+                if proposedRange.length == 0 {
+                    selectionIntersectsToken = proposedRange.location > tokenRange.location
+                        && proposedRange.location < NSMaxRange(tokenRange)
+                } else {
+                    selectionIntersectsToken = NSIntersectionRange(
+                        expandedRange,
+                        tokenRange
+                    ).length > 0
+                }
+
+                if selectionIntersectsToken {
+                    expandedRange = NSUnionRange(expandedRange, tokenRange)
+                }
+            }
+
+            return expandedRange
         }
 
         func render(_ rawText: String, in textView: UITextView, preservingSelection: Bool) {
@@ -3311,6 +3651,8 @@ private struct FeatureSettingsSummary: View {
 struct ImageGenerationUploadView: View {
     let template: TemplateItem
     let creditPricing: AppCreditPricing
+    let recommendationItems: [TemplateItem]
+    let photoToVideoGenerationTarget: FeatureGenerationTarget?
     @Binding var credits: Int
 
     @Environment(\.dismiss) private var dismiss
@@ -3328,14 +3670,22 @@ struct ImageGenerationUploadView: View {
     @State private var showLogin = false
     @State private var showCropIndex: Int?
     @State private var pendingLoginAction: (() -> Void)?
+    @State private var isGenerating = false
+    @State private var generationError: String?
+    @State private var generatedImageURL: URL?
+    @State private var generationTaskID: String?
 
     init(
         template: TemplateItem,
         creditPricing: AppCreditPricing = .defaultValue,
-        credits: Binding<Int>
+        credits: Binding<Int>,
+        recommendationItems: [TemplateItem] = [],
+        photoToVideoGenerationTarget: FeatureGenerationTarget? = nil
     ) {
         self.template = template
         self.creditPricing = creditPricing
+        self.recommendationItems = recommendationItems
+        self.photoToVideoGenerationTarget = photoToVideoGenerationTarget
         _credits = credits
         // Every upload slot starts empty. A template cover is a preview, not
         // an implicit user photo or clothing reference.
@@ -3366,8 +3716,9 @@ struct ImageGenerationUploadView: View {
                 .accessibilityIdentifier("image-generation-upload")
             } footer: {
                 ImageGenerationPrimaryButton(
-                    cost: creditPricing.otherImageCredits,
+                    cost: generationCost,
                     credits: credits,
+                    isLoading: isGenerating,
                     action: beginGeneration
                 )
                 .accessibilityIdentifier("image-generate-button")
@@ -3400,7 +3751,12 @@ struct ImageGenerationUploadView: View {
             ImageGenerationFlowView(
                 title: template.title,
                 template: template,
+                generatedImageURL: generatedImageURL,
+                taskID: generationTaskID,
+                recommendationItems: recommendationItems,
+                photoToVideoGenerationTarget: photoToVideoGenerationTarget,
                 credits: $credits,
+                onRegenerate: { showGenerationFlow = false },
                 onClose: {
                     showGenerationFlow = false
                     dismiss()
@@ -3435,6 +3791,17 @@ struct ImageGenerationUploadView: View {
             }
         }
         .preferredColorScheme(.light)
+        .alert(
+            "Generation failed",
+            isPresented: Binding(
+                get: { generationError != nil },
+                set: { if !$0 { generationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { generationError = nil }
+        } message: {
+            Text(generationError ?? "Please try again.")
+        }
         .onAppear {
             AppAnalytics.screen(
                 "image_generation_upload",
@@ -3555,7 +3922,21 @@ struct ImageGenerationUploadView: View {
     }
 
     private func startGeneration() {
-        let cost = creditPricing.otherImageCredits
+        guard !isGenerating else { return }
+        let images = selectedImages.compactMap { $0 }
+        guard images.count == template.imageUploadCount else {
+            AppAnalytics.generationBlocked(
+                contentType: "image",
+                itemID: template.id,
+                reason: "missing_media"
+            )
+            generationError = template.imageUploadCount == 1
+                ? "Please choose a source photo."
+                : "Please fill all \(template.imageUploadCount) image slots."
+            return
+        }
+
+        let cost = generationCost
         guard credits >= cost else {
             AppAnalytics.generationBlocked(
                 contentType: "image",
@@ -3572,8 +3953,75 @@ struct ImageGenerationUploadView: View {
             inputCount: selectedImages.compactMap { $0 }.count,
             resolution: resolution
         )
-        credits -= cost
-        showGenerationFlow = true
+
+        isGenerating = true
+        let generationStartedAt = Date()
+        Task {
+            defer { isGenerating = false }
+            do {
+                var imageURLs: [String] = []
+                for image in images {
+                    guard let data = image.jpegData(compressionQuality: 0.90) else {
+                        throw PhotoReviveAPIError.invalidResponse
+                    }
+                    imageURLs.append(
+                        try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
+                    )
+                }
+
+                let submission = try await PhotoReviveAPIClient.shared.createImageToImage(
+                    itemID: template.id,
+                    imageURLs: imageURLs,
+                    prompt: nil,
+                    options: PhotoReviveImageGenerationOptions(
+                        resolution: normalizedImageResolution,
+                        aspectRatio: ratio,
+                        outputCount: 1
+                    )
+                )
+                guard let resultURL = submission.resultURL else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+
+                credits = submission.creditsBalance
+                generatedImageURL = resultURL
+                generationTaskID = submission.taskID
+                AppAnalytics.generationSubmitted(
+                    contentType: "image",
+                    itemID: template.id
+                )
+                AppAnalytics.generationCompleted(
+                    contentType: "image",
+                    itemID: template.id,
+                    elapsedMilliseconds: Int(
+                        Date().timeIntervalSince(generationStartedAt) * 1_000
+                    )
+                )
+                showGenerationFlow = true
+            } catch {
+                AppAnalytics.generationFailed(
+                    contentType: "image",
+                    itemID: template.id,
+                    stage: "submission",
+                    failureType: AppAnalytics.apiFailureType(error)
+                )
+                generationError = error.localizedDescription
+            }
+        }
+    }
+
+    private var generationCost: Int {
+        template.modelType == "text_to_image"
+            ? creditPricing.textToImageCredits
+            : creditPricing.imageToImageCredits
+    }
+
+    private var normalizedImageResolution: String {
+        switch resolution.lowercased() {
+        case "1k": "1K"
+        case "2k": "2K"
+        default: resolution
+        }
     }
 
     private func loadImages(_ items: [PhotosPickerItem]) {
@@ -3594,13 +4042,19 @@ struct ImageGenerationUploadView: View {
 private struct ImageGenerationPrimaryButton: View {
     let cost: Int
     let credits: Int
+    var isLoading = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                Text(credits >= cost ? "Generate" : "More Credits")
-                    .font(.system(size: 26, weight: .heavy))
+                if isLoading {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Text(credits >= cost ? "Generate" : "More Credits")
+                        .font(.system(size: 26, weight: .heavy))
+                }
 
                 HStack(spacing: 5) {
                     Spacer()
@@ -3621,6 +4075,7 @@ private struct ImageGenerationPrimaryButton: View {
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(AppPalette.ink, lineWidth: 1.2))
         }
         .buttonStyle(TemplatePressStyle())
+        .disabled(isLoading)
     }
 }
 
@@ -3646,14 +4101,12 @@ private struct ImageGenerationUploadSlot: View {
                     .resizable()
                     .scaledToFill()
             } else if let placeholderURL {
-                AsyncImage(url: placeholderURL) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        uploadPlaceholder
-                    }
+                CachedRemoteImage(url: placeholderURL) { image in
+                    Image(uiImage: image).resizable().scaledToFill()
+                } placeholder: {
+                    uploadPlaceholder
+                } failure: {
+                    uploadPlaceholder
                 }
             } else {
                 uploadPlaceholder
@@ -3763,14 +4216,12 @@ private struct TemplateFirstFrameView: View {
                     .resizable()
                     .scaledToFill()
             } else if let coverImageURL = item.coverImageURL {
-                AsyncImage(url: coverImageURL) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        Color(.systemGray4)
-                    }
+                CachedRemoteImage(url: coverImageURL) { image in
+                    Image(uiImage: image).resizable().scaledToFill()
+                } placeholder: {
+                    Color(.systemGray4)
+                } failure: {
+                    Color(.systemGray4)
                 }
             } else {
                 TemplateMediaView(item: item, gravity: .resizeAspectFill)
@@ -3860,17 +4311,26 @@ private enum ImageGenerationStage: Equatable {
 private struct ImageGenerationFlowView: View {
     let title: String
     let template: TemplateItem
+    let generatedImageURL: URL?
+    let taskID: String?
+    var recommendationItems: [TemplateItem] = []
+    var photoToVideoGenerationTarget: FeatureGenerationTarget? = nil
     @Binding var credits: Int
+    let onRegenerate: () -> Void
     let onClose: () -> Void
 
-    @State private var stage = ImageGenerationStage.loading
+    @State private var stage = ImageGenerationStage.result
     @State private var selectedTab = AppTab.me
     @State private var showPaywall = false
     @State private var showVideoGenerator = false
-
-    private var generatedImage: UIImage? {
-        template.imageName.isEmpty ? nil : UIImage(named: template.imageName)
-    }
+    @State private var showSettings = false
+    @State private var selectedRecommendation: TemplateItem?
+    @State private var generatedImage: UIImage?
+    @State private var isExporting = false
+    @State private var shareURL: URL?
+    @State private var showShareSheet = false
+    @State private var exportError: String?
+    @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
         ZStack {
@@ -3895,11 +4355,11 @@ private struct ImageGenerationFlowView: View {
                     .allowsHitTesting(false)
             }
         }
-        .task(id: stage) {
-            guard stage == .loading else { return }
-            try? await Task.sleep(for: .milliseconds(2_400))
-            guard !Task.isCancelled, stage == .loading else { return }
-            withAnimation(.easeInOut(duration: 0.24)) { stage = .result }
+        .task(id: generatedImageURL) {
+            guard let generatedImageURL else { return }
+            if let (data, _) = try? await URLSession.shared.data(from: generatedImageURL) {
+                generatedImage = UIImage(data: data)
+            }
         }
         .fullScreenCover(isPresented: $showPaywall) {
             PaywallOfferFlowView(analyticsSource: "image_remove_watermark")
@@ -3908,8 +4368,36 @@ private struct ImageGenerationFlowView: View {
             FixedVideoGeneratorFeature(
                 initialMode: .image,
                 credits: $credits,
-                initialImage: generatedImage
+                initialImage: generatedImage,
+                imageGenerationTarget: photoToVideoGenerationTarget
             )
+        }
+        .fullScreenCover(item: $selectedRecommendation) { item in
+            ImageGenerationUploadView(
+                template: item,
+                credits: $credits,
+                recommendationItems: recommendationItems.filter { $0.id != item.id },
+                photoToVideoGenerationTarget: photoToVideoGenerationTarget
+            )
+        }
+        .fullScreenCover(isPresented: $showSettings) {
+            SettingsView(credits: $credits)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let shareURL {
+                GeneratedMediaActivityView(activityItems: [shareURL])
+            }
+        }
+        .alert(
+            "Export unavailable",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "Please try again.")
         }
         .preferredColorScheme(stage == .detail ? .dark : .light)
     }
@@ -3928,7 +4416,7 @@ private struct ImageGenerationFlowView: View {
                     stage = .detail
                 } label: {
                     ZStack {
-                        TemplateMediaView(item: template, gravity: .resizeAspectFill)
+                        generatedImageView(contentMode: .fill)
 
                         if stage == .loading {
                             Color.black.opacity(0.50)
@@ -3939,6 +4427,8 @@ private struct ImageGenerationFlowView: View {
                                     .foregroundStyle(Color(red: 1.0, green: 0.76, blue: 0.32))
                                     .multilineTextAlignment(.center)
                             }
+                        } else {
+                            GeneratedContentWatermark()
                         }
                     }
                     .frame(width: 115, height: 174)
@@ -3983,7 +4473,7 @@ private struct ImageGenerationFlowView: View {
 
             Spacer()
 
-            Button(action: onClose) {
+            Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 23, weight: .medium))
                     .foregroundStyle(AppPalette.ink)
@@ -4017,26 +4507,30 @@ private struct ImageGenerationFlowView: View {
 
                     Spacer()
 
-                    Button { showPaywall = true } label: {
-                        Label("No Watermark", systemImage: "eraser")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color(red: 1.0, green: 0.84, blue: 0.48))
-                            .padding(.horizontal, 14)
-                            .frame(height: 38)
-                            .background(.black.opacity(0.46), in: Capsule())
+                    if !isSubscribed {
+                        Button { showPaywall = true } label: {
+                            Label("No Watermark", systemImage: "eraser")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color(red: 1.0, green: 0.84, blue: 0.48))
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .background(.black.opacity(0.46), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
 
-                TemplateMediaView(item: template, gravity: .resizeAspect)
+                generatedImageView(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: 557)
+                    .overlay { GeneratedContentWatermark() }
+                    .clipped()
                     .padding(.horizontal, 48)
                     .padding(.top, 17)
 
                 HStack(spacing: 14) {
                     Button {
-                        stage = .loading
+                        onRegenerate()
                     } label: {
                         Label("Recreate", systemImage: "arrow.clockwise")
                             .font(.system(size: 20, weight: .bold))
@@ -4047,7 +4541,7 @@ private struct ImageGenerationFlowView: View {
                     }
 
                     Button {
-                        stage = .saved
+                        saveImage()
                     } label: {
                         Label("Save", systemImage: "arrow.down.to.line")
                             .font(.system(size: 20, weight: .bold))
@@ -4056,6 +4550,7 @@ private struct ImageGenerationFlowView: View {
                             .frame(height: 56)
                             .background(AppPalette.accent, in: Capsule())
                     }
+                    .disabled(isExporting)
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 20)
@@ -4069,11 +4564,11 @@ private struct ImageGenerationFlowView: View {
                     .padding(.top, 18)
 
                 HStack(spacing: 18) {
-                    VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp")
-                    VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages")
-                    VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger")
-                    VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook")
-                    VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram")
+                    VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareImage)
+                    VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareImage)
+                    VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareImage)
+                    VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareImage)
+                    VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareImage)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -4117,42 +4612,47 @@ private struct ImageGenerationFlowView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 4)
 
-                TemplateMediaView(item: template, gravity: .resizeAspect)
+                generatedImageView(contentMode: .fit)
                     .frame(width: 212, height: 378)
                     .background(.white)
+                    .overlay { GeneratedContentWatermark() }
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .padding(.top, 12)
 
-                Button { showPaywall = true } label: {
-                    Text("Remove Watermark")
-                        .font(.system(size: 17, weight: .heavy))
-                        .foregroundStyle(Color(red: 1.0, green: 0.85, blue: 0.54))
-                        .padding(.horizontal, 24)
-                        .frame(height: 44)
-                        .background(AppPalette.ink, in: Capsule())
+                if !isSubscribed {
+                    Button { showPaywall = true } label: {
+                        Text("Remove Watermark")
+                            .font(.system(size: 17, weight: .heavy))
+                            .foregroundStyle(Color(red: 1.0, green: 0.85, blue: 0.54))
+                            .padding(.horizontal, 24)
+                            .frame(height: 44)
+                            .background(AppPalette.ink, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(y: -22)
+                    .padding(.bottom, -10)
                 }
-                .buttonStyle(.plain)
-                .offset(y: -22)
-                .padding(.bottom, -10)
 
-                Button { showVideoGenerator = true } label: {
-                    Label("Photo To Video", systemImage: "photo.badge.arrow.down")
-                        .font(.system(size: 24, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 58)
-                        .background(
-                            LinearGradient(
-                                colors: [Color(red: 1.0, green: 0.82, blue: 0.46), Color(red: 0.78, green: 0.50, blue: 0.23)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            in: Capsule()
-                        )
+                if photoToVideoGenerationTarget != nil {
+                    Button { showVideoGenerator = true } label: {
+                        Label("Photo To Video", systemImage: "photo.badge.arrow.down")
+                            .font(.system(size: 24, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 58)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(red: 1.0, green: 0.82, blue: 0.46), Color(red: 0.78, green: 0.50, blue: 0.23)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 20)
+                    .accessibilityIdentifier("image-to-video-button")
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 20)
-                .accessibilityIdentifier("image-to-video-button")
 
                 Text("Share to:")
                     .font(.system(size: 21, weight: .heavy))
@@ -4162,11 +4662,11 @@ private struct ImageGenerationFlowView: View {
                     .padding(.top, 20)
 
                 HStack(spacing: 18) {
-                    VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp")
-                    VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages")
-                    VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger")
-                    VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook")
-                    VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram")
+                    VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareImage)
+                    VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareImage)
+                    VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareImage)
+                    VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareImage)
+                    VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareImage)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 11)
@@ -4180,10 +4680,11 @@ private struct ImageGenerationFlowView: View {
 
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
-                        ImageGenerationSuggestion(image: "BabyFly", title: "Baby Fly")
-                        ImageGenerationSuggestion(image: "Motorcycle", title: "Motorcycle Boy")
-                        ImageGenerationSuggestion(image: "Skiing", title: "Baby Skiing")
-                        ImageGenerationSuggestion(image: "CartoonPortrait", title: "Playful Cartoon")
+                        ForEach(recommendationItems) { item in
+                            ImageGenerationSuggestion(item: item) {
+                                selectedRecommendation = item
+                            }
+                        }
                     }
                     .padding(.horizontal, 20)
                 }
@@ -4195,39 +4696,127 @@ private struct ImageGenerationFlowView: View {
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("saved-image-result")
     }
+
+    @ViewBuilder
+    private func generatedImageView(contentMode: ContentMode) -> some View {
+        if let generatedImageURL {
+            CachedRemoteImage(url: generatedImageURL) { image in
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: contentMode)
+            } placeholder: {
+                ZStack {
+                    Color.black.opacity(0.08)
+                    ProgressView()
+                }
+            } failure: {
+                ZStack {
+                    Color.black.opacity(0.08)
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(AppPalette.surfaceEdge)
+                }
+            }
+        } else {
+            ZStack {
+                Color.black.opacity(0.08)
+                Image(systemName: "photo")
+                    .font(.system(size: 28))
+                    .foregroundStyle(AppPalette.surfaceEdge)
+            }
+        }
+    }
+
+    private func saveImage() {
+        guard !isExporting else { return }
+        isExporting = true
+        Task {
+            defer { isExporting = false }
+            do {
+                let image = try await exportImage()
+                let fileURL = try GeneratedMediaExporter.prepareImage(
+                    image,
+                    addsWatermark: !isSubscribed
+                )
+                try await GeneratedMediaExporter.saveImage(at: fileURL)
+                AppAnalytics.contentSaved(contentType: "image", itemID: template.id)
+                stage = .saved
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    private func shareImage() {
+        guard !isExporting else { return }
+        isExporting = true
+        Task {
+            defer { isExporting = false }
+            do {
+                let image = try await exportImage()
+                shareURL = try GeneratedMediaExporter.prepareImage(
+                    image,
+                    addsWatermark: !isSubscribed
+                )
+                showShareSheet = true
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    private func exportImage() async throws -> UIImage {
+        if let generatedImage { return generatedImage }
+        guard let generatedImageURL else {
+            throw GeneratedMediaExportError.mediaUnavailable
+        }
+        let (data, response) = try await URLSession.shared.data(from: generatedImageURL)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              let image = UIImage(data: data) else {
+            throw GeneratedMediaExportError.mediaUnavailable
+        }
+        generatedImage = image
+        return image
+    }
 }
 
 private struct ImageGenerationSuggestion: View {
-    let image: String
-    let title: String
+    let item: TemplateItem
+    let action: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Image(image)
-                .resizable()
-                .scaledToFill()
-            LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
-            Text(title)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .padding(8)
+        Button(action: action) {
+            ZStack(alignment: .bottomLeading) {
+                TemplateMediaView(item: item, gravity: .resizeAspectFill)
+                LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
+                Text(item.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(8)
+            }
+            .frame(width: 86, height: 130)
+            .clipped()
         }
-        .frame(width: 86, height: 130)
-        .clipped()
+        .buttonStyle(.plain)
+        .accessibilityLabel("Try \(item.title)")
     }
 }
 
 private struct FixedAIImageFeature: View {
     let creditPricing: AppCreditPricing
+    let recommendationItems: [TemplateItem]
+    let photoToVideoGenerationTarget: FeatureGenerationTarget?
+    let imageGenerationTarget: FeatureGenerationTarget?
+    let textGenerationTarget: FeatureGenerationTarget?
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
     @State private var mode: AIImageMode
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
     @State private var prompt = ""
-    @State private var selectedModel = AIImageModel.nanoBanana
-    @State private var showModelMenu = false
+    @State private var promptInsertionRequest: PromptEditorInsertionRequest?
     @State private var showSettings = false
     @State private var showCredits = false
     @State private var showDraftWarning = false
@@ -4235,15 +4824,40 @@ private struct FixedAIImageFeature: View {
     @State private var resolution = "1k"
     @State private var ratio = "9:16"
     @State private var outputCount = "1"
+    @State private var isGenerating = false
+    @State private var generationError: String?
+    @State private var generatedImageURL: URL?
+    @State private var generationTaskID: String?
+    @State private var showGenerationFlow = false
 
     init(
         creditPricing: AppCreditPricing = .defaultValue,
         credits: Binding<Int>,
-        initialMode: AIImageMode = .image
+        initialMode: AIImageMode = .image,
+        recommendationItems: [TemplateItem] = [],
+        photoToVideoGenerationTarget: FeatureGenerationTarget? = nil,
+        imageGenerationTarget: FeatureGenerationTarget? = nil,
+        textGenerationTarget: FeatureGenerationTarget? = nil
     ) {
         self.creditPricing = creditPricing
+        self.recommendationItems = recommendationItems
+        self.photoToVideoGenerationTarget = photoToVideoGenerationTarget
+        self.imageGenerationTarget = imageGenerationTarget
+        self.textGenerationTarget = textGenerationTarget
         _credits = credits
-        _mode = State(initialValue: initialMode)
+        let resolvedMode: AIImageMode
+        if initialMode == .image,
+           imageGenerationTarget == nil,
+           textGenerationTarget != nil {
+            resolvedMode = .text
+        } else if initialMode == .text,
+                  textGenerationTarget == nil,
+                  imageGenerationTarget != nil {
+            resolvedMode = .image
+        } else {
+            resolvedMode = initialMode
+        }
+        _mode = State(initialValue: resolvedMode)
     }
 
     var body: some View {
@@ -4254,10 +4868,12 @@ private struct FixedAIImageFeature: View {
                 onBack: requestDismiss
             ) {
                 VStack(alignment: .leading, spacing: 22) {
-                    FeatureModeTabs(
-                        options: [("Image to Image", .image), ("Text to Image", .text)],
-                        selection: $mode
-                    )
+                    if imageGenerationTarget != nil, textGenerationTarget != nil {
+                        FeatureModeTabs(
+                            options: [("Image to Image", .image), ("Text to Image", .text)],
+                            selection: $mode
+                        )
+                    }
 
                     if mode == .image {
                         Text("Image(\(selectedImages.count)/3)")
@@ -4298,31 +4914,19 @@ private struct FixedAIImageFeature: View {
                         FeaturePromptBox(
                             text: $prompt,
                             placeholder: mode == .image ? "Describe the content you want to create." : "Describe the image you want to create.Example: A puppy running on the grass.",
-                            height: mode == .image ? 152 : 280
+                            height: mode == .image ? 220 : 280,
+                            insertionRequest: promptInsertionRequest
                         )
 
-                        HStack {
-                            if mode == .image {
-                                Button { prompt.append(" @") } label: {
-                                    Text("@")
-                                        .font(.system(size: 19, weight: .bold))
-                                        .foregroundStyle(AppPalette.surfaceEdge)
-                                        .frame(width: 42, height: 42)
-                                        .background(Color.white.opacity(0.40), in: RoundedRectangle(cornerRadius: 10))
-                                }
-                                .buttonStyle(.plain)
-                                Spacer(minLength: 0)
-                                modelButton
-                                Spacer(minLength: 0)
-                                Color.clear.frame(width: 42, height: 42)
-                            } else {
-                                modelButton
+                        if mode == .image {
+                            HStack {
+                                imageReferenceButton
                                 Spacer(minLength: 0)
                             }
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 9)
+                            .zIndex(2)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 9)
-                        .zIndex(2)
                     }
                     .padding(.top, mode == .text ? 12 : 0)
 
@@ -4330,14 +4934,15 @@ private struct FixedAIImageFeature: View {
                 }
             } footer: {
                 FeaturePrimaryButton(
-                    title: "Generate",
+                    title: isGenerating ? "Generating…" : "Generate",
                     cost: mode == .image
                         ? creditPricing.imageToImageCredits
                         : creditPricing.textToImageCredits,
                     credits: $credits,
                     onNeedCredits: { showCredits = true },
-                    onCreate: {}
+                    onCreate: startGeneration
                 )
+                .disabled(isGenerating)
             }
 
             if showDraftWarning {
@@ -4346,7 +4951,6 @@ private struct FixedAIImageFeature: View {
             }
         }
         .onChange(of: selectedItems) { _, items in loadImages(items) }
-        .onChange(of: mode) { _, _ in showModelMenu = false }
         .sheet(isPresented: $showSettings) {
             AIImageOutputSettingsSheet(
                 resolution: $resolution,
@@ -4358,6 +4962,22 @@ private struct FixedAIImageFeature: View {
             .presentationCornerRadius(30)
         }
         .fullScreenCover(isPresented: $showCredits) { CreditCenterView(credits: $credits) }
+        .fullScreenCover(isPresented: $showGenerationFlow) {
+            ImageGenerationFlowView(
+                title: "AI Image",
+                template: resultTemplate,
+                generatedImageURL: generatedImageURL,
+                taskID: generationTaskID,
+                recommendationItems: recommendationItems,
+                photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                credits: $credits,
+                onRegenerate: { showGenerationFlow = false },
+                onClose: {
+                    showGenerationFlow = false
+                    dismiss()
+                }
+            )
+        }
         .fullScreenCover(
             isPresented: Binding(
                 get: { showCropIndex != nil },
@@ -4371,41 +4991,54 @@ private struct FixedAIImageFeature: View {
             }
         }
         .preferredColorScheme(.light)
+        .alert(
+            "Generation unavailable",
+            isPresented: Binding(
+                get: { generationError != nil },
+                set: { if !$0 { generationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { generationError = nil }
+        } message: {
+            Text(generationError ?? "Please try again.")
+        }
     }
 
-    private var modelButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) { showModelMenu.toggle() }
-        } label: {
-            HStack(spacing: 7) {
-                Image(selectedModel.assetName)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 18, height: 18)
-                Text(selectedModel.title)
-                    .font(.system(size: 14, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.86)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+    @ViewBuilder
+    private var imageReferenceButton: some View {
+        if selectedImages.isEmpty {
+            Button {
+                requestPromptInsertion("@")
+            } label: {
+                imageReferenceButtonLabel
             }
-            .foregroundStyle(Color(red: 1.0, green: 0.62, blue: 0.16))
-            .padding(.horizontal, 8)
-            .frame(width: 146, height: 36)
-            .background(.white.opacity(0.28), in: Capsule())
-            .overlay(Capsule().stroke(Color(red: 1.0, green: 0.66, blue: 0.20), lineWidth: 1.1))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("ai-image-model-picker")
-        .overlay(alignment: .bottom) {
-            if showModelMenu {
-                AIImageModelMenu(selection: $selectedModel) {
-                    showModelMenu = false
+            .buttonStyle(.plain)
+            .accessibilityLabel("Insert at sign")
+        } else {
+            Menu {
+                ForEach(selectedImages.indices, id: \.self) { index in
+                    Button("@Image\(index + 1)") {
+                        requestPromptInsertion("@Image\(index + 1)")
+                    }
                 }
-                .offset(y: 8)
-                .zIndex(4)
+            } label: {
+                imageReferenceButtonLabel
             }
+            .menuStyle(.button)
+            .accessibilityLabel("Mention an uploaded image")
         }
+    }
+
+    private var imageReferenceButtonLabel: some View {
+        Text("@")
+            .font(.system(size: 19, weight: .bold))
+            .foregroundStyle(AppPalette.surfaceEdge)
+            .frame(width: 42, height: 42)
+            .background(Color.white.opacity(0.40), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func requestPromptInsertion(_ text: String) {
+        promptInsertionRequest = PromptEditorInsertionRequest(text: text)
     }
 
     private func loadImages(_ items: [PhotosPickerItem]) {
@@ -4423,66 +5056,104 @@ private struct FixedAIImageFeature: View {
     private func requestDismiss() {
         if !selectedImages.isEmpty || !prompt.isEmpty { showDraftWarning = true } else { dismiss() }
     }
+
+    private var activeGenerationTarget: FeatureGenerationTarget? {
+        mode == .image ? imageGenerationTarget : textGenerationTarget
+    }
+
+    private var resultTemplate: TemplateItem {
+        TemplateItem(
+            id: activeGenerationTarget?.itemID ?? "unconfigured-ai-image",
+            title: "AI Image",
+            generationKind: .image,
+            estimatedCredits: mode == .image
+                ? creditPricing.imageToImageCredits
+                : creditPricing.textToImageCredits,
+            modelType: activeGenerationTarget?.modelType,
+            modelID: activeGenerationTarget?.modelID
+        )
+    }
+
+    private func startGeneration() {
+        guard !isGenerating else { return }
+        guard let target = activeGenerationTarget else {
+            generationError = "This feature has not been connected to a CMS generation template yet."
+            return
+        }
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if mode == .image && selectedImages.isEmpty {
+            generationError = "Please choose at least one source photo."
+            return
+        }
+        if mode == .text && trimmedPrompt.isEmpty && target.promptTemplate == nil {
+            generationError = "Please describe the image you want to create."
+            return
+        }
+
+        let selectedMode = mode
+        let images = selectedImages
+        isGenerating = true
+        Task {
+            defer { isGenerating = false }
+            do {
+                let options = PhotoReviveImageGenerationOptions(
+                    resolution: normalizedImageResolution,
+                    aspectRatio: ratio,
+                    outputCount: 1
+                )
+                let submission: PhotoReviveImageGenerationSubmission
+                if selectedMode == .image && target.endpoint == "image-to-image" {
+                    var imageURLs: [String] = []
+                    for image in images {
+                        guard let data = image.jpegData(compressionQuality: 0.90) else {
+                            throw PhotoReviveAPIError.invalidResponse
+                        }
+                        imageURLs.append(
+                            try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
+                        )
+                    }
+                    submission = try await PhotoReviveAPIClient.shared.createImageToImage(
+                        itemID: target.itemID,
+                        imageURLs: imageURLs,
+                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+                        options: options
+                    )
+                } else if selectedMode == .text && target.endpoint == "text-to-image" {
+                    submission = try await PhotoReviveAPIClient.shared.createTextToImage(
+                        itemID: target.itemID,
+                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+                        options: options
+                    )
+                } else {
+                    generationError = "The CMS generation target for this feature is invalid."
+                    return
+                }
+
+                guard let resultURL = submission.resultURL else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+                credits = submission.creditsBalance
+                generatedImageURL = resultURL
+                generationTaskID = submission.taskID
+                showGenerationFlow = true
+            } catch {
+                generationError = error.localizedDescription
+            }
+        }
+    }
+
+    private var normalizedImageResolution: String {
+        switch resolution.lowercased() {
+        case "1k": "1K"
+        case "2k": "2K"
+        default: resolution
+        }
+    }
 }
 
 private enum AIImageMode: Hashable {
     case image
     case text
-}
-
-private enum AIImageModel: String, CaseIterable, Identifiable {
-    case gptImage = "GPT Image 2"
-    case kling = "Kling O1"
-    case nanoBanana = "Nano Banana2"
-
-    var id: String { rawValue }
-    var title: String { rawValue }
-
-    var assetName: String {
-        switch self {
-        case .gptImage: "GPTImageModelIcon"
-        case .kling: "KlingModelIcon"
-        case .nanoBanana: "NanoBananaModelIcon"
-        }
-    }
-}
-
-private struct AIImageModelMenu: View {
-    @Binding var selection: AIImageModel
-    let onSelect: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(AIImageModel.allCases) { model in
-                Button {
-                    selection = model
-                    onSelect()
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(model.assetName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 20, height: 20)
-                        Text(model.title)
-                            .font(.system(size: 13.5, weight: .medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.86)
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(Color(red: 0.95, green: 0.65, blue: 0.25))
-                    .padding(.horizontal, 8)
-                    .frame(width: 140, height: 44)
-                    .background(selection == model ? Color(red: 1.0, green: 0.97, blue: 0.90) : .white)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("ai-image-model-\(model.id)")
-            }
-        }
-        .padding(3)
-        .background(.white, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color(red: 1.0, green: 0.66, blue: 0.20), lineWidth: 1.2))
-        .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
-    }
 }
 
 private struct FeatureAddPhotoIcon: View {
@@ -4523,246 +5194,6 @@ private struct FeatureImageSlot: View {
         .background(Color.white.opacity(0.40), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.75), lineWidth: 1.2))
-    }
-}
-
-private struct FixedFusionFeature: View {
-    let creditPricing: AppCreditPricing
-    @Binding var credits: Int
-    @Environment(\.dismiss) private var dismiss
-    @State private var hasStarted = false
-    @State private var showPicker = false
-    @State private var selectedItems: [PhotosPickerItem] = []
-    @State private var selectedImages: [UIImage] = []
-    @State private var prompt = ""
-    @State private var showSettings = false
-    @State private var showCredits = false
-    @State private var showDraftWarning = false
-    @State private var showCropIndex: Int?
-    @State private var soundEnabled = false
-    @State private var multiShotEnabled = false
-    @State private var duration = "5s"
-    @State private var resolution = "540p"
-    @State private var ratio = "9:16"
-    @State private var showGenerationFlow = false
-
-    init(
-        creditPricing: AppCreditPricing = .defaultValue,
-        credits: Binding<Int>
-    ) {
-        self.creditPricing = creditPricing
-        _credits = credits
-        _soundEnabled = State(initialValue: creditPricing.defaultVideoSound)
-        _multiShotEnabled = State(initialValue: creditPricing.defaultVideoMultiShot)
-        _duration = State(initialValue: "\(creditPricing.videoDefaultDurationSeconds)s")
-        _resolution = State(initialValue: creditPricing.defaultVideoResolution)
-    }
-
-    var body: some View {
-        ZStack {
-            if hasStarted {
-                fusionEditor
-            } else {
-                fusionLanding
-            }
-
-            if showDraftWarning {
-                FeatureDraftWarningOverlay(onConfirm: { dismiss() }, onCancel: { showDraftWarning = false })
-                    .zIndex(4)
-            }
-        }
-        .photosPicker(isPresented: $showPicker, selection: $selectedItems, maxSelectionCount: 3, matching: .images)
-        .onChange(of: selectedItems) { _, items in
-            loadImages(items)
-            if !items.isEmpty { hasStarted = true }
-        }
-        .sheet(isPresented: $showSettings) {
-            FeatureSettingsSheet(
-                mode: .video,
-                soundEnabled: $soundEnabled,
-                multiShotEnabled: $multiShotEnabled,
-                duration: $duration,
-                resolution: $resolution,
-                ratio: $ratio,
-                outputCount: .constant("1")
-            )
-            .presentationDetents([.large])
-        }
-        .fullScreenCover(isPresented: $showCredits) { CreditCenterView(credits: $credits) }
-        .fullScreenCover(isPresented: $showGenerationFlow) {
-            VideoGenerationFlowView(
-                title: "Fusion",
-                templateTitle: "Generated Video",
-                videoName: "baby_fly",
-                template: nil,
-                onRegenerate: { showGenerationFlow = false },
-                onClose: { showGenerationFlow = false }
-            )
-        }
-        .fullScreenCover(
-            isPresented: Binding(
-                get: { showCropIndex != nil },
-                set: { if !$0 { showCropIndex = nil } }
-            )
-        ) {
-            if let index = showCropIndex, selectedImages.indices.contains(index) {
-                FeaturePhotoCropView(image: selectedImages[index]) { editedImage in
-                    selectedImages[index] = editedImage
-                }
-            }
-        }
-    }
-
-    private var fusionLanding: some View {
-        ZStack {
-            Image("FusionReferenceScene")
-                .resizable()
-                .scaledToFill()
-                .ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                HStack {
-                    Button { dismiss() } label: {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.001))
-                            .frame(width: 96, height: 96)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Back")
-
-                    Spacer()
-                }
-                .padding(.top, 28)
-                .padding(.horizontal, 8)
-
-                Spacer()
-
-                Button { showPicker = true } label: {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.001))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 92)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Choose Photo")
-                .padding(.horizontal, 44)
-                .padding(.bottom, 22)
-            }
-
-            Text("Fusion")
-                .foregroundStyle(.clear)
-                .accessibilityHidden(false)
-        }
-    }
-
-    private var fusionEditor: some View {
-        FixedFeatureScaffold(title: "Fusion", onBack: requestDismiss) {
-            VStack(alignment: .leading, spacing: 16) {
-                ScrollView(.horizontal) {
-                    PhotosPicker(selection: $selectedItems, maxSelectionCount: 3, matching: .images) {
-                        HStack(spacing: 14) {
-                            ForEach(0..<3, id: \.self) { index in
-                                FeatureImageSlot(
-                                    image: selectedImages.indices.contains(index) ? selectedImages[index] : nil,
-                                    title: index == 0 ? "Image\(index + 1)" : "Optional"
-                                )
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .overlay(alignment: .bottomLeading) {
-                        HStack(spacing: 14) {
-                            ForEach(0..<3, id: \.self) { index in
-                                UploadPhotoEditOverlay(
-                                    hasImage: selectedImages.indices.contains(index),
-                                    width: 158,
-                                    height: 218,
-                                    buttonSize: 34,
-                                    padding: 8,
-                                    action: { showCropIndex = index }
-                                )
-                            }
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-
-                FeaturePromptBox(text: $prompt, placeholder: "Describe your video vision here")
-
-                FeatureSettingsSummary(
-                    values: [soundEnabled ? "sound" : "mute", multiShotEnabled ? "multi" : "single", duration, resolution, ratio],
-                    onTap: { showSettings = true }
-                )
-
-                Text("Creative Exploration")
-                    .font(.system(size: 23, weight: .heavy))
-                    .foregroundStyle(AppPalette.ink)
-
-                ScrollView(.horizontal) {
-                    HStack(spacing: 13) {
-                        FeatureExploreCard(image: "Cowboy", title: "Horse")
-                        FeatureExploreCard(image: "BabyFly", title: "Happy Puppy")
-                        FeatureExploreCard(image: "Skiing", title: "Dragon & Volcano")
-                    }
-                }
-                .scrollIndicators(.hidden)
-            }
-        } footer: {
-            FeaturePrimaryButton(
-                title: "Generate",
-                cost: generationCost,
-                credits: $credits,
-                onNeedCredits: { showCredits = true },
-                onCreate: { showGenerationFlow = true }
-            )
-        }
-    }
-
-    private var generationCost: Int {
-        let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
-            ?? creditPricing.videoDefaultDurationSeconds
-        return creditPricing.videoGenerationCredits(
-            duration: seconds,
-            resolution: resolution,
-            sound: soundEnabled,
-            multiShot: multiShotEnabled
-        )
-    }
-
-    private func loadImages(_ items: [PhotosPickerItem]) {
-        Task {
-            var images: [UIImage] = []
-            for item in items {
-                if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) { images.append(image) }
-            }
-            await MainActor.run { selectedImages = images }
-        }
-    }
-
-    private func requestDismiss() {
-        if !selectedImages.isEmpty || !prompt.isEmpty { showDraftWarning = true } else { dismiss() }
-    }
-}
-
-private struct FeatureExploreCard: View {
-    let image: String
-    let title: String
-
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Image(image)
-                .resizable()
-                .scaledToFill()
-            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
-            Text(title)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(10)
-        }
-        .frame(width: 145, height: 190)
-        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
     }
 }
 

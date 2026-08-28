@@ -41,6 +41,8 @@
 	</array>
 	<key>FacebookAppID</key>
 	<string>29314349348154327</string>
+	<key>FacebookAutoLogAppEventsEnabled</key>
+	<false/>
 	<key>FacebookClientToken</key>
 	<string>1ac8941288801affd01b3c5c8fea23dc</string>
 	<key>FacebookDisplayName</key>
@@ -65,6 +67,8 @@
 	<true/>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>We use device data to measure advertising performance and improve Photo Revival.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Photo Revival saves the photos and videos you create to your photo library.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

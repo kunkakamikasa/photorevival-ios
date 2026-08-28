@@ -73,16 +73,27 @@ struct ReturningUserOfferFlowView: View {
     @State private var isPurchasing = false
     @State private var purchaseAlert: ReturningOfferPurchaseAlert?
     @State private var legalDocument: LegalDocument?
+    @State private var isTrialEligible = false
+    @StateObject private var priceStore = StoreProductPriceStore.shared
 
     private let designSize = CGSize(width: 430, height: 932)
     private let analyticsSource: String
+    private let startsAtTrial: Bool
 
     init(
         startsAtTrial: Bool = false,
+        startsAtRetention: Bool = false,
         analyticsSource: String = "returning_offer"
     ) {
         self.analyticsSource = analyticsSource
-        _screen = State(initialValue: startsAtTrial ? .trial : .family)
+        self.startsAtTrial = startsAtTrial
+        let initialScreen: ReturningOfferScreen
+        if startsAtRetention {
+            initialScreen = .retention
+        } else {
+            initialScreen = .family
+        }
+        _screen = State(initialValue: initialScreen)
     }
 
     var body: some View {
@@ -93,6 +104,14 @@ struct ReturningUserOfferFlowView: View {
                 if screen == .family {
                     familyOfferBackground(size: proxy.size)
                     familyOfferContent(using: layout)
+                } else if screen == .trial {
+                    Image(screen.assetName)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                    trialOfferContent(using: layout)
                 } else {
                     Image(screen.assetName)
                         .resizable()
@@ -133,6 +152,19 @@ struct ReturningUserOfferFlowView: View {
             InAppBrowserView(url: document.url)
                 .ignoresSafeArea()
         }
+        .task {
+            let familyID = SubscriptionProductID.familyExclusiveWeekly.rawValue
+            let trialID = SubscriptionProductID.threeDayFreeTrialYearly.rawValue
+            await priceStore.load(productIDs: [familyID, trialID])
+            isTrialEligible = await priceStore.isEligibleForIntroOffer(productID: trialID)
+            if startsAtTrial {
+                if isTrialEligible {
+                    screen = .trial
+                } else {
+                    dismiss()
+                }
+            }
+        }
     }
 
     private func familyOfferBackground(size: CGSize) -> some View {
@@ -170,6 +202,137 @@ struct ReturningUserOfferFlowView: View {
                 y: layout.origin.y + (designSize.height * layout.scale / 2)
             )
             .allowsHitTesting(false)
+    }
+
+    private func trialOfferContent(using layout: AspectFillLayout) -> some View {
+        trialOfferDesign
+            .frame(width: designSize.width, height: designSize.height)
+            .scaleEffect(layout.scale)
+            .position(
+                x: layout.origin.x + (designSize.width * layout.scale / 2),
+                y: layout.origin.y + (designSize.height * layout.scale / 2)
+            )
+            .allowsHitTesting(false)
+    }
+
+    private var trialOfferDesign: some View {
+        let productID = SubscriptionProductID.threeDayFreeTrialYearly.rawValue
+        let period = priceStore.introductoryPeriodDescription(for: productID) ?? "Free trial"
+        let renewalPrice = priceStore.displayPrice(for: productID)
+        let weeklyPrice = priceStore.periodicPrice(
+            for: productID,
+            divisor: 52,
+            suffix: "/week"
+        )
+
+        return ZStack {
+            Image(systemName: "xmark")
+                .font(.system(size: 23, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 46, height: 46)
+                .background(Color.brown.opacity(0.72), in: Circle())
+                .position(x: 34, y: 65)
+
+            VStack(spacing: 4) {
+                Text("PREMIUM")
+                    .font(.system(size: 21, weight: .black))
+                    .foregroundStyle(Color(red: 1, green: 0.22, blue: 0.12))
+                Text("\(period.capitalized) Free Trial")
+                    .font(.system(size: 31, weight: .black))
+                    .foregroundStyle(Color(red: 0.28, green: 0.20, blue: 0.14))
+                Text("Try every premium feature before you subscribe")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.62))
+            }
+            .position(x: 215, y: 374)
+
+            VStack(alignment: .leading, spacing: 14) {
+                trialTimelineRow(
+                    icon: "lock.open.fill",
+                    title: "Today",
+                    detail: "Premium access begins"
+                )
+                trialTimelineRow(
+                    icon: "calendar.badge.clock",
+                    title: "During the trial",
+                    detail: "Cancel anytime in your App Store settings"
+                )
+                trialTimelineRow(
+                    icon: "star.fill",
+                    title: "After \(period)",
+                    detail: "Renews for \(renewalPrice) per year"
+                )
+            }
+            .padding(20)
+            .frame(width: 390, height: 228, alignment: .leading)
+            .background(Color.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.86), lineWidth: 1))
+            .position(x: 215, y: 552)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Annual membership")
+                        .font(.system(size: 18, weight: .bold))
+                    Text("12 months of premium access")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+                Spacer()
+                Text(period.capitalized + " Free")
+                    .font(.system(size: 19, weight: .black))
+                    .foregroundStyle(Color(red: 1, green: 0.26, blue: 0.16))
+            }
+            .padding(.horizontal, 19)
+            .frame(width: 390, height: 86)
+            .background(Color.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 17))
+            .overlay(RoundedRectangle(cornerRadius: 17).stroke(Color.orange, lineWidth: 1.4))
+            .position(x: 215, y: 708)
+
+            HStack {
+                Spacer()
+                Text("Start My Free Trial")
+                    .font(.system(size: 21, weight: .bold))
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 23, weight: .bold))
+                    .padding(.trailing, 22)
+            }
+            .foregroundStyle(.white)
+            .frame(width: 382, height: 66)
+            .background(
+                LinearGradient(
+                    colors: [Color.orange, Color(red: 1, green: 0.20, blue: 0.12)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: Capsule()
+            )
+            .position(x: 215, y: 828)
+
+            Text("\(period.capitalized) free, then \(renewalPrice)/year (\(weeklyPrice))")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.52))
+                .position(x: 215, y: 878)
+        }
+    }
+
+    private func trialTimelineRow(icon: String, title: String, detail: String) -> some View {
+        HStack(spacing: 13) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(Color.orange, in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color(red: 0.36, green: 0.22, blue: 0.12))
+                Text(detail)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.58))
+                    .lineLimit(2)
+            }
+        }
     }
 
     private var familyOfferDesign: some View {
@@ -249,9 +412,13 @@ struct ReturningUserOfferFlowView: View {
                     .background(offerRed, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
 
                 HStack(alignment: .lastTextBaseline, spacing: 5) {
-                    Text("$")
-                        .font(.system(size: 18, weight: .heavy))
-                    Text("1.28")
+                    Text(
+                        priceStore.periodicPrice(
+                            for: SubscriptionProductID.familyExclusiveWeekly.rawValue,
+                            divisor: 7,
+                            suffix: ""
+                        )
+                    )
                         .font(.system(size: 49, weight: .heavy))
                     Text("per day")
                         .font(.system(size: 18, weight: .bold))
@@ -260,7 +427,7 @@ struct ReturningUserOfferFlowView: View {
                 .shadow(color: .white.opacity(0.72), radius: 1, y: 1)
                 .frame(height: 58)
 
-                Text("$8.99/week")
+                Text("\(priceStore.displayPrice(for: SubscriptionProductID.familyExclusiveWeekly.rawValue))/week")
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(Color.black.opacity(0.82))
 
@@ -345,6 +512,7 @@ struct ReturningUserOfferFlowView: View {
                 beginPurchase(.weekly, origin: .family)
             }
 
+            privacyHotspot(using: layout)
             termsHotspot(using: layout)
 
         case .retention:
@@ -367,6 +535,7 @@ struct ReturningUserOfferFlowView: View {
                 action: dismiss.callAsFunction
             )
 
+            privacyHotspot(using: layout)
             termsHotspot(using: layout)
 
         case .trial:
@@ -389,6 +558,18 @@ struct ReturningUserOfferFlowView: View {
                 beginPurchase(.annual, origin: .trial)
             }
 
+        }
+    }
+
+    private func privacyHotspot(using layout: AspectFillLayout) -> some View {
+        hotspot(
+            label: "Privacy Policy",
+            identifier: "returning-offer-privacy",
+            center: CGPoint(x: 145, y: 890),
+            size: CGSize(width: 130, height: 34),
+            layout: layout
+        ) {
+            legalDocument = .privacyPolicy
         }
     }
 
@@ -426,6 +607,10 @@ struct ReturningUserOfferFlowView: View {
     }
 
     private func showTrial() {
+        guard isTrialEligible else {
+            dismiss()
+            return
+        }
         withAnimation(.easeInOut(duration: 0.2)) {
             screen = .trial
         }
@@ -501,7 +686,7 @@ struct ReturningUserOfferFlowView: View {
             case .family, .retention:
                 screen = .retention
             case .trial:
-                screen = .trial
+                if isTrialEligible { screen = .trial }
             }
         }
     }
@@ -612,7 +797,7 @@ struct ReturningPromotionFlowView: View {
                     )
                 case .limitedTime:
                     LimitedTimeOfferPopup(
-                        onClose: showTrial,
+                        onClose: dismiss.callAsFunction,
                         onPurchased: { dismiss() },
                         analyticsSource: "returning_offer"
                     )

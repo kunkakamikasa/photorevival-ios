@@ -3,15 +3,20 @@
 实现基线：`AIVideoAiApiCms` 的 `codex/photorevive-cms-backend` 分支，
 2026-08-24。本文中的接口和字段已在代码中实现，部署后生效。
 
-## 1. `get-app-carousels` 优惠券内容结构
+## 1. `get-app-carousels` 运营内容结构
 
 现有模板轮播结构保持不变。新增字段：
 
-- `content_kind`: `template`（默认）或 `coupon`
+- `content_kind`: `template`（默认）、`coupon` 或 `credit_purchase`
 - `placement`: `hero`（默认）或 `bottom_banner`
 - `target_kind`: `none`、`try_now` 或 `fixed_feature`
 - `target_fixed_feature_key`: `target_kind=fixed_feature` 时必填，绑定固定功能模板库
 - `coupon`: 仅 `content_kind=coupon` 时必填
+
+首页顶部按订阅状态展示运营内容：未订阅用户只看 `coupon`，已订阅用户只看
+`credit_purchase`。首页底部同样按订阅状态切换：未订阅用户显示订阅优惠券横幅，
+已订阅用户显示积分购买横幅。`credit_purchase` 必须是 `home + image`，点击后进入积分
+购买页；`placement` 可为 `hero` 或 `bottom_banner`。普通 `template` 对两类用户都展示。
 
 首页第一张优惠券和底部横幅都使用同一数据结构。App 只接受周订阅和年订阅各一项；商品 ID、价格文案、周期文案、日均价格和积分说明均由 CMS 返回。
 
@@ -59,10 +64,12 @@
 后端/CMS 已实现的校验：
 
 - `page=home, placement=hero, content_kind=coupon` 最多一条启用记录，并固定在第一位。
-- `placement=bottom_banner` 仅允许 `page=home`，最多一条启用记录。
+- `page=home, content_kind=credit_purchase` 每个 `placement` 最多一条启用记录。
+- `placement=bottom_banner` 仅允许 `page=home`；`coupon` 和 `credit_purchase` 各最多一条启用记录。
 - 两个 `product_id`、`cover_image_url`、全部价格显示字段必填。
 - `content_kind=template` 时沿用现有成对的模板/滤镜目标校验。
 - `content_kind=coupon` 时模板/滤镜目标必须为空。
+- `content_kind=credit_purchase` 时优惠券及模板/滤镜目标必须为空。
 - App 已兼容旧响应；未返回新字段的记录按 `template + hero` 处理。
 
 ## 2. 已可直接使用的接口
@@ -93,6 +100,8 @@
 4. 固定功能配置新增 CMS item 绑定。`get-app-fixed-features` 返回稳定的
    `generation_target`（含 `item_id`、scene、model、积分和生成 endpoint），
    无需再增加一套专用生成接口。
+   `ai_image` 额外返回按 Image to Image、Text to Image 排序的
+   `generation_targets`；单数 `generation_target` 保留为第一项兼容旧版。
 5. 新增 CMS 应用级 `credit_pricing`。客户端与生成接口共用该配置：Restore
    35、视频增强每秒 10、图/文生视频按时长/分辨率/声音/多镜头组合计价、
    其他视频 60、图片生成统一 30。所有展示声音、多镜头、时长和分辨率设置的

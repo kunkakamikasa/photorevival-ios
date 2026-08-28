@@ -38,7 +38,6 @@ enum AppTab: String, CaseIterable, Identifiable {
 
 enum FixedFeature: String, CaseIterable, Identifiable {
     case oneTapRestore
-    case enhanceVideo
     case photoToVideo
     case aiImage
     case enhancePhoto
@@ -48,10 +47,9 @@ enum FixedFeature: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    init?(cmsKey: String) {
+    nonisolated init?(cmsKey: String) {
         switch cmsKey {
         case "restore": self = .oneTapRestore
-        case "enhance_video": self = .enhanceVideo
         case "photo_to_video": self = .photoToVideo
         case "ai_image": self = .aiImage
         case "enhance_photo": self = .enhancePhoto
@@ -65,7 +63,6 @@ enum FixedFeature: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .oneTapRestore: "One-Tap Restore"
-        case .enhanceVideo: "Enhance Video"
         case .photoToVideo: "Photo To Video"
         case .aiImage: "AI Image"
         case .enhancePhoto: "Enhance Photo"
@@ -78,7 +75,6 @@ enum FixedFeature: String, CaseIterable, Identifiable {
 
 struct AppCreditPricing: Hashable, Decodable {
     let oneTapRestoreCredits: Int
-    let enhanceVideoCreditsPerSecond: Int
     let videoBaseCredits: Int
     let videoDefaultDurationSeconds: Int
     let videoExtraDurationCreditsPerSecond: Int
@@ -99,7 +95,6 @@ struct AppCreditPricing: Hashable, Decodable {
 
     init(
         oneTapRestoreCredits: Int = 35,
-        enhanceVideoCreditsPerSecond: Int = 10,
         videoBaseCredits: Int = 40,
         videoDefaultDurationSeconds: Int = 5,
         videoExtraDurationCreditsPerSecond: Int = 8,
@@ -117,7 +112,6 @@ struct AppCreditPricing: Hashable, Decodable {
         defaultVideoMultiShot: Bool = false
     ) {
         self.oneTapRestoreCredits = max(0, oneTapRestoreCredits)
-        self.enhanceVideoCreditsPerSecond = max(0, enhanceVideoCreditsPerSecond)
         self.videoBaseCredits = max(0, videoBaseCredits)
         self.videoDefaultDurationSeconds = max(1, videoDefaultDurationSeconds)
         self.videoExtraDurationCreditsPerSecond = max(0, videoExtraDurationCreditsPerSecond)
@@ -156,14 +150,8 @@ struct AppCreditPricing: Hashable, Decodable {
             + (multiShot ? videoMultiShotCredits : 0)
     }
 
-    func videoEnhancementCredits(duration: TimeInterval) -> Int {
-        guard duration > 0 else { return 0 }
-        return Int(ceil(duration)) * enhanceVideoCreditsPerSecond
-    }
-
     private enum CodingKeys: String, CodingKey {
         case oneTapRestoreCredits = "one_tap_restore_credits"
-        case enhanceVideoCreditsPerSecond = "enhance_video_credits_per_second"
         case videoBaseCredits = "video_base_credits"
         case videoDefaultDurationSeconds = "video_default_duration_seconds"
         case videoExtraDurationCreditsPerSecond = "video_extra_duration_credits_per_second"
@@ -186,7 +174,6 @@ struct AppCreditPricing: Hashable, Decodable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             oneTapRestoreCredits: try values.decodeIfPresent(Int.self, forKey: .oneTapRestoreCredits) ?? defaults.oneTapRestoreCredits,
-            enhanceVideoCreditsPerSecond: try values.decodeIfPresent(Int.self, forKey: .enhanceVideoCreditsPerSecond) ?? defaults.enhanceVideoCreditsPerSecond,
             videoBaseCredits: try values.decodeIfPresent(Int.self, forKey: .videoBaseCredits) ?? defaults.videoBaseCredits,
             videoDefaultDurationSeconds: try values.decodeIfPresent(Int.self, forKey: .videoDefaultDurationSeconds) ?? defaults.videoDefaultDurationSeconds,
             videoExtraDurationCreditsPerSecond: try values.decodeIfPresent(Int.self, forKey: .videoExtraDurationCreditsPerSecond) ?? defaults.videoExtraDurationCreditsPerSecond,
@@ -252,7 +239,7 @@ struct TemplateItem: Identifiable, Hashable {
     let modelType: String?
     let modelID: String?
 
-    /// Fusion-style templates support up to three image inputs. Larger malformed
+    /// Multi-reference templates support up to three image inputs. Larger malformed
     /// CMS values are clamped so the upload screen stays usable on iPhone.
     var imageUploadCount: Int {
         min(max(imageReferenceCount, 1), 3)
@@ -464,14 +451,38 @@ struct HomeQuickAction: Identifiable, Hashable {
     let feature: FixedFeature
     let title: String
     let item: TemplateItem
+    let generationTargets: [FeatureGenerationTarget]
 
     var id: String { feature.id }
+    var generationTarget: FeatureGenerationTarget? { generationTargets.first }
 
-    init(feature: FixedFeature, title: String? = nil, item: TemplateItem) {
+    init(
+        feature: FixedFeature,
+        title: String? = nil,
+        item: TemplateItem,
+        generationTarget: FeatureGenerationTarget? = nil,
+        generationTargets: [FeatureGenerationTarget] = []
+    ) {
         self.feature = feature
         self.title = title ?? feature.title
         self.item = item
+        self.generationTargets = generationTargets.isEmpty
+            ? generationTarget.map { [$0] } ?? []
+            : generationTargets
     }
+
+    func generationTarget(endpoint: String) -> FeatureGenerationTarget? {
+        generationTargets.first { $0.endpoint == endpoint }
+    }
+}
+
+struct FeatureGenerationTarget: Hashable {
+    let itemID: String
+    let endpoint: String
+    let modelType: String
+    let modelID: String
+    let estimatedCredits: Int
+    let promptTemplate: String?
 }
 
 enum CouponPlanKind: String, CaseIterable, Identifiable, Hashable {
@@ -494,6 +505,66 @@ struct CMSCouponOffer: Identifiable, Hashable {
 
     func plan(for kind: CouponPlanKind) -> CMSCouponPlan {
         kind == .weekly ? weeklyPlan : annualPlan
+    }
+}
+
+private struct HomeSubscriptionCouponOfferKey: EnvironmentKey {
+    static let defaultValue: CMSCouponOffer? = nil
+}
+
+extension EnvironmentValues {
+    var homeSubscriptionCouponOffer: CMSCouponOffer? {
+        get { self[HomeSubscriptionCouponOfferKey.self] }
+        set { self[HomeSubscriptionCouponOfferKey.self] = newValue }
+    }
+}
+
+struct CMSCreditPurchasePromotion: Identifiable, Hashable {
+    let id: String
+    let placement: String
+    let coverImageURL: URL
+
+    init(id: String, placement: String = "hero", coverImageURL: URL) {
+        self.id = id
+        self.placement = placement
+        self.coverImageURL = coverImageURL
+    }
+}
+
+enum CMSHomeHeroPromotion: Identifiable, Hashable {
+    case subscriptionCoupon(CMSCouponOffer)
+    case creditPurchase(CMSCreditPurchasePromotion)
+
+    var id: String {
+        switch self {
+        case .subscriptionCoupon(let offer): "subscription-coupon-\(offer.id)"
+        case .creditPurchase(let promotion): "credit-purchase-\(promotion.id)"
+        }
+    }
+
+    var coverImageURL: URL {
+        switch self {
+        case .subscriptionCoupon(let offer): offer.coverImageURL
+        case .creditPurchase(let promotion): promotion.coverImageURL
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .subscriptionCoupon: "Open special gift"
+        case .creditPurchase: "Open credit store"
+        }
+    }
+
+    static func visible(
+        isSubscribed: Bool,
+        coupon: CMSCouponOffer?,
+        creditPurchase: CMSCreditPurchasePromotion?
+    ) -> CMSHomeHeroPromotion? {
+        if isSubscribed {
+            return creditPurchase.map(Self.creditPurchase)
+        }
+        return coupon.map(Self.subscriptionCoupon)
     }
 }
 
@@ -655,26 +726,6 @@ enum TemplateCatalog {
         imageName: "BabyFly",
         videoName: "baby_fly"
     )
-    static let belovedBaby = TemplateItem(
-        id: "dear-baby-beloved-baby",
-        title: "Beloved Baby",
-        videoName: "dear_baby_beloved_baby"
-    )
-    static let ourChildren = TemplateItem(
-        id: "dear-baby-our-children",
-        title: "Our Children",
-        videoName: "dear_baby_our_children"
-    )
-    static let growUp = TemplateItem(
-        id: "dear-baby-grow-up",
-        title: "Grow up",
-        videoName: "dear_baby_grow_up"
-    )
-    static let birthday = TemplateItem(
-        id: "dear-baby-birthday",
-        title: "Birthday",
-        videoName: "dear_baby_birthday"
-    )
     static let motorcycle = TemplateItem(
         id: "motorcycle-boy",
         title: "Motorcycle Boy",
@@ -748,7 +799,6 @@ enum TemplateCatalog {
 
     static let homeQuickActions: [HomeQuickAction] = [
         .oneTapRestore,
-        .enhanceVideo,
         .photoToVideo,
         .aiImage,
         .enhancePhoto,
@@ -779,7 +829,6 @@ enum TemplateCatalog {
 
     static let videoSections = [
         TemplateSection("Baby Adventure", items: [babyFly, motorcycle, skiing, cartoon], generationKind: .video),
-        TemplateSection("Dear Baby", items: [belovedBaby, ourChildren, growUp, birthday], generationKind: .video),
         TemplateSection("Revive Old Photos", items: [memory, gentleman, fashion, cowboy], generationKind: .video),
         TemplateSection("Stylized", items: [mangaRide, cartoon, anime, babyFly], generationKind: .video)
     ]

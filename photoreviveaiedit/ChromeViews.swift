@@ -103,22 +103,12 @@ struct HomeDiscountBannerView: View {
         ZStack(alignment: .topTrailing) {
             Button(action: onOpen) {
                 ConfiguredPromotionImage(url: imageURL)
-                    .aspectRatio(1290.0 / 244.0, contentMode: .fit)
+                    .aspectRatio(3.0, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
             }
             .buttonStyle(TemplatePressStyle())
             .accessibilityIdentifier("home-discount-banner")
-            .overlay {
-                GeometryReader { proxy in
-                    HomeDiscountTapHint()
-                        .position(
-                            x: proxy.size.width * 0.84,
-                            y: proxy.size.height * 0.76
-                        )
-                }
-                .allowsHitTesting(false)
-            }
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -137,36 +127,11 @@ struct HomeDiscountBannerView: View {
     }
 }
 
-private struct HomeDiscountTapHint: View {
-    @State private var isTapping = false
-
-    var body: some View {
-        Image(systemName: "hand.point.up.left.fill")
-            .font(.system(size: 31, weight: .bold))
-            .foregroundStyle(Color(red: 1.0, green: 0.89, blue: 0.73))
-            .shadow(color: .white.opacity(0.8), radius: 2)
-            .shadow(color: .black.opacity(0.28), radius: 3, y: 2)
-            .rotationEffect(.degrees(-11))
-            .scaleEffect(isTapping ? 0.91 : 1.0)
-            .offset(x: isTapping ? -2 : 1, y: isTapping ? -7 : 2)
-            .animation(
-                .easeInOut(duration: 0.58).repeatForever(autoreverses: true),
-                value: isTapping
-            )
-            .onAppear {
-                isTapping = true
-            }
-            .accessibilityHidden(true)
-    }
-}
-
 struct MePage: View {
     @ObservedObject var accountStore: AppAccountStore
-    let onCreate: () -> Void
+    let onCreate: (FixedFeature) -> Void
     let onSettings: () -> Void
     @State private var kind = "Video"
-    @State private var hasVideoRecord = true
-    @State private var showPreview = false
     @State private var showNotice = false
     @State private var noticeTitle = ""
     @State private var noticeMessage = ""
@@ -175,7 +140,7 @@ struct MePage: View {
 
     init(
         accountStore: AppAccountStore? = nil,
-        onCreate: @escaping () -> Void,
+        onCreate: @escaping (FixedFeature) -> Void,
         onSettings: @escaping () -> Void
     ) {
         self.accountStore = accountStore ?? .shared
@@ -201,11 +166,6 @@ struct MePage: View {
                 Spacer(minLength: 0)
                 legalNotice
                     .padding(.bottom, 112)
-            }
-        }
-        .fullScreenCover(isPresented: $showPreview) {
-            MeVideoPreviewView(videoName: "baby_fly") {
-                showPreview = false
             }
         }
         .fullScreenCover(item: $selectedHistoryTask) { task in
@@ -295,72 +255,6 @@ struct MePage: View {
         .scrollIndicators(.hidden)
     }
 
-    private var videoRecordContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Baby Adventure")
-                        .font(.system(size: 25, weight: .heavy))
-                        .foregroundStyle(Color(red: 0.31, green: 0.23, blue: 0.16))
-                    Text("Dog Friends")
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(Color(red: 0.31, green: 0.23, blue: 0.16))
-                }
-
-                Spacer(minLength: 8)
-
-                Text("Yesterday")
-                    .font(.system(size: 19, weight: .regular))
-                    .foregroundStyle(Color(red: 0.31, green: 0.23, blue: 0.16))
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-
-            MeVideoCard(videoName: "baby_fly", onOpen: { showPreview = true })
-                .frame(maxWidth: 390)
-                .padding(.horizontal, 20)
-                .padding(.top, 0)
-
-            HStack(spacing: 0) {
-                Button {
-                    presentNotice(title: "Saved", message: "The generated video is ready to save to your Photos library.")
-                } label: {
-                    Label("Save", systemImage: "arrow.down.to.line")
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(AppPalette.ink)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Save generated video")
-
-                Divider()
-                    .frame(height: 50)
-
-                Button {
-                    presentNotice(title: "No Watermark", message: "Upgrade your membership to export without a watermark.")
-                } label: {
-                    Label("No Watermark", systemImage: "eraser")
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(AppPalette.ink)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove watermark")
-            }
-            .frame(height: 50)
-            .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
-            .padding(.horizontal, 20)
-            .padding(.top, 2)
-
-            MeSharePanel()
-                .padding(.horizontal, 20)
-                .padding(.top, 4)
-        }
-    }
-
     private var emptyContent: some View {
         VStack(spacing: 17) {
             VStack(spacing: 3) {
@@ -375,8 +269,7 @@ struct MePage: View {
                 .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(AppPalette.brownInk)
             Button {
-                hasVideoRecord = true
-                onCreate()
+                onCreate(kind == "Video" ? .photoToVideo : .imageToImage)
             } label: {
                 Text("Create Now")
                     .font(.system(size: 20, weight: .heavy))
@@ -459,12 +352,12 @@ private struct MeHistoryTaskCard: View {
                     Color.black.opacity(0.90)
                     if task.resultURL != nil, task.status == "completed" {
                         if let coverURL = task.coverURL {
-                            AsyncImage(url: coverURL) { phase in
-                                if case .success(let image) = phase {
-                                    image.resizable().scaledToFill()
-                                } else {
-                                    ProgressView().tint(.white)
-                                }
+                            CachedRemoteImage(url: coverURL) { image in
+                                Image(uiImage: image).resizable().scaledToFill()
+                            } placeholder: {
+                                ProgressView().tint(.white)
+                            } failure: {
+                                Image(systemName: "photo").foregroundStyle(.white.opacity(0.72))
                             }
                         } else {
                             VStack(spacing: 10) {
@@ -482,6 +375,10 @@ private struct MeHistoryTaskCard: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.78))
                         }
+                    }
+
+                    if task.coverURL != nil, task.status == "completed" {
+                        GeneratedContentWatermark()
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -515,16 +412,18 @@ private struct MeHistoryPreviewView: View {
                     RemoteLoopingVideoView(url: url, videoGravity: .resizeAspect)
                         .ignoresSafeArea(edges: .horizontal)
                 } else {
-                    AsyncImage(url: url) { phase in
-                        if case .success(let image) = phase {
-                            image.resizable().scaledToFit()
-                        } else {
-                            ProgressView().tint(.white)
-                        }
+                    CachedRemoteImage(url: url) { image in
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } placeholder: {
+                        ProgressView().tint(.white)
+                    } failure: {
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.white)
                     }
                     .padding()
                 }
             }
+
+            GeneratedContentWatermark()
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -536,144 +435,6 @@ private struct MeHistoryPreviewView: View {
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             .padding(18)
-        }
-        .preferredColorScheme(.dark)
-    }
-}
-
-private struct MeVideoCard: View {
-    let videoName: String
-    let onOpen: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Color.black
-
-            MeVideoWatermarkPattern()
-                .allowsHitTesting(false)
-
-            Button(action: onOpen) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(.black.opacity(0.54), in: Circle())
-                    .overlay(Circle().stroke(.white.opacity(0.76), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .padding(12)
-            .accessibilityLabel("Open generated video")
-
-            Button(action: onOpen) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 21, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 54, height: 54)
-                    .background(.black.opacity(0.56), in: Circle())
-                    .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .accessibilityLabel("Play generated video")
-        }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-}
-
-private struct MeVideoWatermarkPattern: View {
-    private let placements: [(CGFloat, CGFloat)] = [
-        (0.08, 0.16), (0.43, 0.18), (0.82, 0.22),
-        (0.20, 0.49), (0.61, 0.52), (0.92, 0.61),
-        (0.09, 0.80), (0.48, 0.82), (0.80, 0.86)
-    ]
-
-    var body: some View {
-        GeometryReader { proxy in
-            ForEach(Array(placements.enumerated()), id: \.offset) { _, placement in
-                Text("Photo Revival")
-                    .font(.system(size: max(10, proxy.size.width * 0.025), weight: .medium))
-                    .foregroundStyle(.white.opacity(0.34))
-                    .rotationEffect(.degrees(-17))
-                    .position(
-                        x: proxy.size.width * placement.0,
-                        y: proxy.size.height * placement.1
-                    )
-            }
-        }
-    }
-}
-
-private struct MeSharePanel: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text("Share to:")
-                .font(.system(size: 20, weight: .heavy))
-                .foregroundStyle(AppPalette.ink)
-
-            HStack(spacing: 0) {
-                shareLink(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp")
-                shareLink(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages")
-                shareLink(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger")
-                shareLink(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook")
-                shareLink(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram")
-                shareLink(symbol: "music.note", color: .black, label: "TikTok")
-            }
-        }
-        .padding(.horizontal, 17)
-        .padding(.vertical, 15)
-        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
-    }
-
-    private func shareLink(symbol: String, color: Color, label: String) -> some View {
-        ShareLink(item: "I am sharing a Photo Revival video") {
-            Image(systemName: symbol)
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 45, height: 45)
-                .background(color, in: Circle())
-                .overlay(Circle().stroke(.white.opacity(0.64), lineWidth: 1))
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Share to \(label)")
-    }
-}
-
-private struct MeVideoPreviewView: View {
-    let videoName: String
-    let onClose: () -> Void
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            LoopingVideoView(resourceName: videoName, videoGravity: .resizeAspect)
-                .ignoresSafeArea(edges: .horizontal)
-
-            MeVideoWatermarkPattern()
-                .allowsHitTesting(false)
-
-            VStack {
-                HStack {
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(.white)
-                            .frame(width: 48, height: 48)
-                            .background(.black.opacity(0.46), in: Circle())
-                            .overlay(Circle().stroke(.white.opacity(0.66), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close generated video")
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
-
-                Spacer()
-            }
         }
         .preferredColorScheme(.dark)
     }
