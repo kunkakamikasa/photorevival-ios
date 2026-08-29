@@ -13,13 +13,13 @@ final class DebugTestControlsUITests: XCTestCase {
         XCTAssertTrue(statePicker.waitForExistence(timeout: 3))
         statePicker.tap()
 
-        var signedInState = app.buttons["已登录用户（未订阅）"]
+        var signedInState = app.buttons["Signed-In User (Not Subscribed)"]
         XCTAssertTrue(signedInState.waitForExistence(timeout: 3))
         if signedInState.isSelected {
-            app.buttons["未登录用户"].tap()
+            app.buttons["Signed-Out User"].tap()
             XCTAssertTrue(statePicker.waitForExistence(timeout: 3))
             statePicker.tap()
-            signedInState = app.buttons["已登录用户（未订阅）"]
+            signedInState = app.buttons["Signed-In User (Not Subscribed)"]
             XCTAssertTrue(signedInState.waitForExistence(timeout: 3))
         }
         signedInState.tap()
@@ -41,7 +41,7 @@ final class DebugTestControlsUITests: XCTestCase {
         XCTAssertTrue(bubble.waitForExistence(timeout: 5))
         bubble.tap()
 
-        let subscriberPromotion = revealButton("已订阅回访 · 积分刮刮卡", in: app)
+        let subscriberPromotion = revealButton("Returning Subscriber · Credit Scratch Card", in: app)
         XCTAssertTrue(subscriberPromotion.waitForExistence(timeout: 3))
         XCTAssertTrue(subscriberPromotion.isHittable)
         subscriberPromotion.tap()
@@ -57,7 +57,7 @@ final class DebugTestControlsUITests: XCTestCase {
         XCTAssertTrue(bubble.waitForExistence(timeout: 5))
         bubble.tap()
 
-        let creditExitOffer = revealButton("积分购买退出挽回弹窗", in: app)
+        let creditExitOffer = revealButton("Credit Purchase Exit Offer", in: app)
         XCTAssertTrue(creditExitOffer.waitForExistence(timeout: 3))
         XCTAssertTrue(creditExitOffer.isHittable)
         creditExitOffer.tap()

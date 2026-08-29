@@ -2,7 +2,7 @@
 //  photoreviveaieditUITests.swift
 //  photoreviveaieditUITests
 //
-//  Created by 马颖昆 on 2026/8/15.
+//  Created by Mayingkun on 2026/8/15.
 //
 
 import XCTest
@@ -140,6 +140,31 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testSubscriberRewardsOffersCreditPacks() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-forceSignedOut",
+            "-forceSubscriberRewardsOffer",
+            "-showRewardsPreview",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let creditPacks = app.buttons["rewards-credit-store-entry"]
+        XCTAssertTrue(creditPacks.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Top Up Credits"].exists)
+        XCTAssertTrue(app.staticTexts["One-time packs · Never expire"].exists)
+        attachScreenshot(named: "Subscriber Rewards Credit Packs", app: app)
+
+        creditPacks.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["credit-store-screen"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testSubscriberScratchMarketingFlow() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -161,7 +186,7 @@ final class photoreviveaieditUITests: XCTestCase {
 
         let claimFree = app.buttons["subscriber-scratch-claim-free"]
         XCTAssertTrue(claimFree.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Use them within 2 hours — they expire today."].exists)
+        XCTAssertTrue(app.staticTexts["They expire 2 hours after you claim them."].exists)
         attachScreenshot(named: "Subscriber Scratch Expiring Reward", app: app)
         claimFree.tap()
 
@@ -322,6 +347,14 @@ final class photoreviveaieditUITests: XCTestCase {
         let primaryAction = app.buttons["creation-primary-action"]
         XCTAssertTrue(primaryAction.waitForExistence(timeout: 3))
         XCTAssertLessThanOrEqual(primaryAction.frame.maxY, app.windows.firstMatch.frame.maxY + 1)
+        let originalActionY = primaryAction.frame.minY
+        app.swipeUp()
+        XCTAssertEqual(
+            primaryAction.frame.minY,
+            originalActionY,
+            accuracy: 1,
+            "No-prompt upload page should not scroll vertically"
+        )
         attachScreenshot(named: "Video No Prompt Upload One Screen", app: app)
     }
 
@@ -344,6 +377,11 @@ final class photoreviveaieditUITests: XCTestCase {
 
         let tryMotorcycle = app.buttons["Try Motorcycle Boy"]
         XCTAssertTrue(tryMotorcycle.waitForExistence(timeout: 3))
+        let tryMotorcycleReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: tryMotorcycle
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [tryMotorcycleReady], timeout: 3), .completed)
         tryMotorcycle.tap()
 
         XCTAssertTrue(app.navigationBars["Baby Adventure"].waitForExistence(timeout: 3))
@@ -356,7 +394,7 @@ final class photoreviveaieditUITests: XCTestCase {
         let chooserTitle = app.staticTexts["Choose Template"]
         let firstTemplate = app.buttons["Select Baby Fly"]
         XCTAssertTrue(settings.exists)
-        XCTAssertTrue(primaryAction.exists)
+        XCTAssertTrue(primaryAction.waitForExistence(timeout: 3))
         XCTAssertTrue(chooserTitle.exists)
         XCTAssertTrue(firstTemplate.exists)
 
@@ -414,8 +452,58 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Upload Image"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Image1"].exists)
         XCTAssertTrue(app.staticTexts["Image2"].exists)
-        XCTAssertTrue(app.buttons["image-generate-button"].exists)
+        let generateButton = app.buttons["image-generate-button"]
+        XCTAssertTrue(generateButton.waitForExistence(timeout: 3))
+        let settings = app.buttons["Edit output settings"].firstMatch
+        XCTAssertTrue(settings.exists)
+        XCTAssertLessThanOrEqual(settings.frame.maxY, generateButton.frame.minY - 1)
+        XCTAssertLessThanOrEqual(generateButton.frame.maxY, app.windows.firstMatch.frame.maxY + 1)
+        let originalSettingsY = settings.frame.minY
+        app.swipeUp()
+        XCTAssertEqual(
+            settings.frame.minY,
+            originalSettingsY,
+            accuracy: 1,
+            "Image-generation upload page should not scroll vertically"
+        )
         attachScreenshot(named: "Image Generation Upload", app: app)
+    }
+
+    @MainActor
+    func testImageDataNoticeKeepsIconInsideCard() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-loggedIn",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showImageDataNoticePreview"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["AI Photo"].waitForExistence(timeout: 5))
+        app.buttons["AI Photo"].tap()
+
+        let cowboy = app.buttons["template-cowboy-style"].firstMatch
+        for _ in 0..<8 where !cowboy.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(cowboy.waitForExistence(timeout: 3))
+        cowboy.tap()
+
+        XCTAssertTrue(app.buttons["Try Cowboy Style"].waitForExistence(timeout: 3))
+        app.buttons["Try Cowboy Style"].tap()
+
+        let notice = app.descendants(matching: .any)["image-ai-data-notice"]
+        let icon = app.descendants(matching: .any)["image-ai-data-notice-icon"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 3))
+        XCTAssertTrue(icon.exists)
+        XCTAssertTrue(notice.frame.contains(icon.frame))
+        XCTAssertTrue(app.buttons["image-ai-data-notice-agree"].isHittable)
+        XCTAssertTrue(app.buttons["image-ai-data-notice-cancel"].isHittable)
+        attachScreenshot(named: "AI Data Processing Notice", app: app)
     }
 
     @MainActor
@@ -444,9 +532,9 @@ final class photoreviveaieditUITests: XCTestCase {
         attachScreenshot(named: "Template Detail Swipe Hint", app: app)
 
         app.swipeUp()
-        let tryMangaRider = app.buttons["Try Manga Rider"]
-        XCTAssertTrue(tryMangaRider.waitForExistence(timeout: 3))
-        XCTAssertTrue(tryMangaRider.isHittable)
+        let tryGentleman = app.buttons["Try Gentleman"]
+        XCTAssertTrue(tryGentleman.waitForExistence(timeout: 3))
+        XCTAssertTrue(tryGentleman.isHittable)
         XCTAssertFalse(app.descendants(matching: .any)["template-swipe-hint"].exists)
 
         app.swipeDown()
@@ -454,11 +542,11 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(tryCowboy.isHittable)
 
         app.swipeUp()
-        XCTAssertTrue(tryMangaRider.waitForExistence(timeout: 3))
-        XCTAssertTrue(tryMangaRider.isHittable)
-        tryMangaRider.tap()
+        XCTAssertTrue(tryGentleman.waitForExistence(timeout: 3))
+        XCTAssertTrue(tryGentleman.isHittable)
+        tryGentleman.tap()
         XCTAssertTrue(app.staticTexts["Upload Image"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.descendants(matching: .any)["upload-sample-preview"].exists)
+        XCTAssertTrue(app.staticTexts["Gentleman"].exists)
     }
 
     @MainActor
@@ -514,6 +602,8 @@ final class photoreviveaieditUITests: XCTestCase {
         app.buttons["Open Pro membership"].tap()
         XCTAssertTrue(app.buttons["Close membership"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["membership-continue"].exists)
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         attachScreenshot(named: "Membership", app: app)
 
         let proPlus = app.buttons["membership-tier-proPlus"]
@@ -526,6 +616,8 @@ final class photoreviveaieditUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Close limited offer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["limited-offer-try-now"].exists)
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         attachScreenshot(named: "Limited Time Offer", app: app)
         app.buttons["Close limited offer"].tap()
 
@@ -585,12 +677,18 @@ final class photoreviveaieditUITests: XCTestCase {
         let continueButton = app.buttons["Continue"]
 
         XCTAssertTrue(close.waitForExistence(timeout: 3))
-        XCTAssertTrue(close.isHittable)
+        let closeReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: close
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [closeReady], timeout: 3), .completed)
         XCTAssertTrue(restore.waitForExistence(timeout: 2))
         XCTAssertTrue(restore.isHittable)
         XCTAssertTrue(weekly.isHittable)
         XCTAssertTrue(annual.isHittable)
         XCTAssertTrue(continueButton.isHittable)
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         XCTAssertEqual(annual.value as? String, "Selected")
         XCTAssertEqual(continueButton.value as? String, "special_gift_yearly")
 
@@ -611,7 +709,7 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testSuggestionRoute() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-skipOnboarding", "-loggedIn"]
+        app.launchArguments += ["-skipOnboarding", "-loggedIn", "-useLocalFeatureCatalog"]
         app.launch()
 
         for (tab, screenshotName) in [
@@ -655,6 +753,52 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testPrimaryPagesStayWithinHorizontalScreenBounds() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-loggedIn",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let windowFrame = app.windows.firstMatch.frame
+        for tab in ["Home", "AI Photo", "AI Video", "Me"] {
+            let tabButton = app.buttons[tab]
+            XCTAssertTrue(tabButton.waitForExistence(timeout: 3))
+            tabButton.tap()
+            XCTAssertHorizontallyContained(tabButton, in: windowFrame, named: "\(tab) tab")
+        }
+
+        app.buttons["AI Photo"].tap()
+        let photoHero = app.buttons["Try AI Photo"]
+        XCTAssertTrue(photoHero.waitForExistence(timeout: 3))
+        XCTAssertHorizontallyContained(photoHero, in: windowFrame, named: "AI Photo hero")
+
+        app.buttons["AI Video"].tap()
+        for featureID in ["oneTapRestore", "enhancePhoto", "photoToVideo", "aiImage"] {
+            let mode = app.buttons["video-mode-\(featureID)"]
+            XCTAssertTrue(mode.waitForExistence(timeout: 3), "Missing video mode \(featureID)")
+            XCTAssertHorizontallyContained(mode, in: windowFrame, named: "Video mode \(featureID)")
+        }
+
+        let videoHero = app.buttons["video-mode-hero-oneTapRestore"]
+        XCTAssertTrue(videoHero.waitForExistence(timeout: 3))
+        XCTAssertHorizontallyContained(videoHero, in: windowFrame, named: "AI Video hero")
+        attachScreenshot(named: "AI Video Responsive Layout", app: app)
+
+        app.buttons["Me"].tap()
+        for label in ["Video", "Photo", "Open settings", "Create now"] {
+            let control = app.buttons[label]
+            XCTAssertTrue(control.waitForExistence(timeout: 3), "Missing Me control \(label)")
+            XCTAssertHorizontallyContained(control, in: windowFrame, named: "Me control \(label)")
+        }
+    }
+
+    @MainActor
     func testHomeFixedFeatureRoutes() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -686,10 +830,48 @@ final class photoreviveaieditUITests: XCTestCase {
             XCTAssertTrue(button.waitForExistence(timeout: 2))
             button.tap()
             XCTAssertTrue(app.staticTexts[route.1].waitForExistence(timeout: 3))
+            assertFixedFeatureUploadFitsOneScreen(app: app, routeID: route.0)
             attachScreenshot(named: "Fixed Feature \(route.0)", app: app)
-            app.buttons["Back"].tap()
+            app.buttons["fixed-feature-back-button"].tap()
+            XCTAssertTrue(
+                app.buttons["fixed-feature-primary-action"].waitForNonExistence(timeout: 3)
+            )
             XCTAssertTrue(strip.waitForExistence(timeout: 3))
         }
+    }
+
+    @MainActor
+    func testAIImageBackReturnsHomeWhileKeyboardIsVisible() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let featureStrip = app.scrollViews["home-fixed-features"]
+        XCTAssertTrue(featureStrip.waitForExistence(timeout: 3))
+
+        let aiImage = app.buttons["fixed-feature-aiImage"]
+        XCTAssertTrue(aiImage.waitForExistence(timeout: 3))
+        aiImage.tap()
+
+        XCTAssertTrue(app.staticTexts["AI Image"].waitForExistence(timeout: 3))
+        let insertReference = app.buttons["Insert at sign"]
+        XCTAssertTrue(insertReference.waitForExistence(timeout: 3))
+        insertReference.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 2))
+
+        app.buttons["fixed-feature-back-button"].tap()
+
+        XCTAssertTrue(
+            app.buttons["fixed-feature-primary-action"].waitForNonExistence(timeout: 3)
+        )
+        XCTAssertTrue(featureStrip.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["photo-selection-sheet"].exists)
     }
 
     @MainActor
@@ -799,6 +981,10 @@ final class photoreviveaieditUITests: XCTestCase {
         attachScreenshot(named: "Onboarding Pet", app: app)
 
         app.buttons["onboarding-continue"].tap()
+        XCTAssertTrue(app.staticTexts["Bring Your\nFamily Together"].waitForExistence(timeout: 2))
+        attachScreenshot(named: "Onboarding Fusion", app: app)
+
+        app.buttons["onboarding-continue"].tap()
         XCTAssertTrue(app.buttons["Close membership"].waitForExistence(timeout: 3))
         attachScreenshot(named: "Initial Membership", app: app)
         app.buttons["Close membership"].tap()
@@ -812,6 +998,7 @@ final class photoreviveaieditUITests: XCTestCase {
 
         freeUse.tap()
         XCTAssertTrue(app.buttons["sign-in-google"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.descendants(matching: .any)["sign-in-legal-agreement"].exists)
         attachScreenshot(named: "Sign In", app: app)
         app.buttons["Close sign in"].tap()
     }
@@ -885,12 +1072,16 @@ final class photoreviveaieditUITests: XCTestCase {
 
         let familyClose = app.buttons["returning-offer-close"]
         XCTAssertTrue(familyClose.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["returning-offer-privacy"].exists)
+        XCTAssertTrue(app.buttons["returning-offer-terms"].exists)
         XCTAssertTrue(app.staticTexts["$8.99/week"].waitForExistence(timeout: 15))
         attachScreenshot(named: "Family Exclusive Weekly Review", app: app)
         familyClose.tap()
 
         let trialStart = app.buttons["returning-trial-start"]
         XCTAssertTrue(trialStart.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["returning-offer-privacy"].exists)
+        XCTAssertTrue(app.buttons["returning-offer-terms"].exists)
         attachScreenshot(named: "Returning Offer Free Trial", app: app)
         app.buttons["returning-trial-close"].tap()
     }
@@ -910,6 +1101,8 @@ final class photoreviveaieditUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["super-prize-continue"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Close super prize"].exists)
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         XCTAssertTrue(app.staticTexts["Then $9.99/week"].waitForExistence(timeout: 15))
         attachScreenshot(named: "Super Prize Weekly Review", app: app)
     }
@@ -942,7 +1135,27 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Please wait (1-3 min)"].waitForExistence(timeout: 3))
         let removeWatermark = app.buttons["Remove watermark"]
         XCTAssertTrue(removeWatermark.waitForExistence(timeout: 6))
+        XCTAssertTrue(app.descendants(matching: .any)["generated-video-player"].exists)
+        let playVideo = app.buttons["Play generated video"]
+        XCTAssertTrue(playVideo.exists)
+
+        let windowFrame = app.windows.firstMatch.frame
+        for label in ["Delete generation", "WhatsApp", "TikTok"] {
+            let element = app.buttons[label]
+            XCTAssertTrue(element.exists, "Missing \(label)")
+            XCTAssertGreaterThanOrEqual(element.frame.minX, windowFrame.minX - 1)
+            XCTAssertLessThanOrEqual(element.frame.maxX, windowFrame.maxX + 1)
+        }
+        app.buttons["Delete generation"].tap()
+        XCTAssertTrue(app.staticTexts["Permanently delete this creation?"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["This creation will be permanently deleted and cannot be recovered."].exists)
+        XCTAssertTrue(app.buttons["Delete Permanently"].exists)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Delete generation"].waitForExistence(timeout: 2))
         attachScreenshot(named: "Generated Video Result", app: app)
+
+        playVideo.tap()
+        XCTAssertTrue(playVideo.waitForNonExistence(timeout: 2))
 
         removeWatermark.tap()
         XCTAssertTrue(app.buttons["Close membership"].waitForExistence(timeout: 2))
@@ -957,10 +1170,65 @@ final class photoreviveaieditUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [maximizeReady], timeout: 3), .completed)
         maximize.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["generated-video-player-fullscreen"].waitForExistence(timeout: 2))
         let regenerate = app.buttons["Regenerate"]
         XCTAssertTrue(regenerate.waitForExistence(timeout: 2))
         regenerate.tap()
         XCTAssertTrue(app.navigationBars["Revive Old Photos"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testHistoryResultUsesCompactPlayableLayout() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-loggedIn",
+            "-forceUnsubscribed",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showHistoryResultPreview"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Me"].waitForExistence(timeout: 5))
+        app.buttons["Me"].tap()
+
+        let card = app.descendants(matching: .any)["history-result-card-history-result-preview"]
+        XCTAssertTrue(card.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Revive Old Photos"].exists)
+        XCTAssertTrue(app.staticTexts["Memory"].exists)
+        XCTAssertTrue(app.staticTexts["Today"].exists)
+
+        let windowFrame = app.windows.firstMatch.frame
+        for label in ["Save generated video", "Remove watermark", "Messages", "WhatsApp", "Facebook", "Instagram"] {
+            let element = app.buttons[label]
+            XCTAssertTrue(element.exists, "Missing \(label)")
+            XCTAssertGreaterThanOrEqual(element.frame.minX, windowFrame.minX - 1)
+            XCTAssertLessThanOrEqual(element.frame.maxX, windowFrame.maxX + 1)
+        }
+        XCTAssertFalse(app.buttons["Messenger"].exists)
+        XCTAssertFalse(app.buttons["TikTok"].exists)
+
+        app.buttons["Delete generation"].tap()
+        XCTAssertTrue(app.staticTexts["Permanently delete this creation?"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["This creation will be permanently deleted and cannot be recovered."].exists)
+        XCTAssertTrue(app.buttons["Delete Permanently"].exists)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 2))
+        attachScreenshot(named: "Compact History Result", app: app)
+
+        let play = app.buttons["Play generated video"]
+        XCTAssertTrue(play.exists)
+        play.tap()
+        XCTAssertTrue(play.waitForNonExistence(timeout: 2))
+
+        let maximize = app.buttons["Maximize creation"]
+        XCTAssertTrue(maximize.isHittable)
+        maximize.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["history-video-player"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Close preview"].exists)
     }
 
     @MainActor
@@ -969,6 +1237,70 @@ final class photoreviveaieditUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func XCTAssertHorizontallyContained(
+        _ element: XCUIElement,
+        in container: CGRect,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertGreaterThanOrEqual(
+            element.frame.minX,
+            container.minX - 1,
+            "\(name) extends beyond the left screen edge",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            element.frame.maxX,
+            container.maxX + 1,
+            "\(name) extends beyond the right screen edge",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func assertFixedFeatureUploadFitsOneScreen(
+        app: XCUIApplication,
+        routeID: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let primaryAction = app.buttons["fixed-feature-primary-action"]
+        XCTAssertTrue(primaryAction.waitForExistence(timeout: 3), file: file, line: line)
+
+        let windowFrame = app.windows.firstMatch.frame
+        XCTAssertLessThanOrEqual(primaryAction.frame.maxY, windowFrame.maxY + 1, file: file, line: line)
+
+        let tipElements = app.descendants(matching: .any).matching(identifier: "fixed-photo-tip-row")
+        let hasTips = tipElements.count > 0
+        if hasTips {
+            let tipMaxY = (0..<tipElements.count)
+                .map { tipElements.element(boundBy: $0).frame.maxY }
+                .max() ?? 0
+            XCTAssertLessThanOrEqual(
+                tipMaxY,
+                primaryAction.frame.minY - 1,
+                "\(routeID) tip icons overlap the primary action",
+                file: file,
+                line: line
+            )
+        }
+
+        let settings = app.buttons["Edit output settings"].firstMatch
+        if settings.exists {
+            XCTAssertLessThanOrEqual(
+                settings.frame.maxY,
+                primaryAction.frame.minY - 1,
+                "\(routeID) settings overlap the primary action",
+                file: file,
+                line: line
+            )
+        }
+
     }
 
     @MainActor

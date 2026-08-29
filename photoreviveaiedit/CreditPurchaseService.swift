@@ -106,7 +106,9 @@ enum CreditPurchaseService {
                         currency: currency,
                         promotion: promotion
                     )
-                    return .failed(error.localizedDescription)
+                    return .failed(error.userFacingEnglishMessage(
+                        fallback: "The App Store could not verify this purchase. Please try again."
+                    ))
                 }
 
             case .userCancelled:
@@ -141,7 +143,9 @@ enum CreditPurchaseService {
                 failureStage: "store_purchase",
                 promotion: promotion
             )
-            return .failed(error.localizedDescription)
+            return .failed(error.userFacingEnglishMessage(
+                fallback: "The purchase could not be completed. Please try again."
+            ))
         }
     }
 
@@ -175,7 +179,9 @@ enum CreditPurchaseService {
                     currency: currency,
                     promotion: promotion
                 )
-                return .failed(error.localizedDescription)
+                return .failed(error.userFacingEnglishMessage(
+                    fallback: "The App Store could not verify this purchase. Please try again."
+                ))
             default:
                 continue
             }
@@ -206,7 +212,10 @@ enum CreditPurchaseService {
                     currency: currency,
                     promotion: promotion
                 )
-                return .failed(serverResult.message ?? "Apple confirmed the payment, but the credits are still being verified.")
+                return .failed(EnglishDisplayText.userFacingMessage(
+                    serverResult.message,
+                    fallback: "Apple confirmed the payment, but the credits are still being verified."
+                ))
             }
 
             await transaction.finish()

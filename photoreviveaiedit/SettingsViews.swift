@@ -723,7 +723,7 @@ private struct AccountView: View {
                 try await authClient.updateProfile(displayName: normalized)
                 displayName = String(normalized.prefix(50))
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.userFacingEnglishMessage()
             }
         }
     }
@@ -752,7 +752,7 @@ private struct AccountView: View {
                 avatarURLString = uploadedURL
             } catch {
                 localAvatar = nil
-                errorMessage = error.localizedDescription
+                errorMessage = error.userFacingEnglishMessage()
             }
         }
     }
@@ -794,7 +794,7 @@ private struct AccountView: View {
             } catch {
                 isDeleting = false
                 showDeleteConfirmation = false
-                errorMessage = error.localizedDescription
+                errorMessage = error.userFacingEnglishMessage()
             }
         }
     }
@@ -1332,9 +1332,7 @@ struct FeedbackView: View {
         PhotosPicker(selection: $screenshotItem, matching: .images) {
             Group {
                 if let screenshot {
-                    Image(uiImage: screenshot)
-                        .resizable()
-                        .scaledToFill()
+                    FrostedUploadedPhoto(image: screenshot)
                 } else {
                     Image(systemName: "photo.badge.plus")
                         .font(.system(size: 28, weight: .regular))
@@ -1344,7 +1342,7 @@ struct FeedbackView: View {
             .frame(width: 80, height: 80)
             .background(SettingsPalette.card.opacity(0.76), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(SettingsPalette.fieldBorder, lineWidth: 1))
-            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Add screenshot")
@@ -1390,7 +1388,9 @@ struct FeedbackView: View {
                 )
                 showSent = true
             } catch {
-                submissionError = error.localizedDescription
+                submissionError = error.userFacingEnglishMessage(
+                    fallback: "Your feedback could not be sent. Please try again."
+                )
             }
         }
     }

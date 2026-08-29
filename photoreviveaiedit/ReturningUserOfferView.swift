@@ -307,12 +307,21 @@ struct ReturningUserOfferFlowView: View {
                 ),
                 in: Capsule()
             )
-            .position(x: 215, y: 828)
+            .position(x: 215, y: 806)
 
             Text("\(period.capitalized) free, then \(renewalPrice)/year (\(weeklyPrice))")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Color.black.opacity(0.52))
-                .position(x: 215, y: 878)
+                .position(x: 215, y: 854)
+
+            HStack(spacing: 13) {
+                Text("Privacy Policy").underline()
+                Text("|")
+                Text("Terms of Service").underline()
+            }
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(Color.black.opacity(0.58))
+            .position(x: 215, y: 891)
         }
     }
 
@@ -379,9 +388,9 @@ struct ReturningUserOfferFlowView: View {
             .position(x: 215, y: 839)
 
             HStack(spacing: 13) {
-                Text("Privacy Policy")
+                Text("Privacy Policy").underline()
                 Text("|")
-                Text("Terms of Service")
+                Text("Terms of Service").underline()
             }
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(.white.opacity(0.82))
@@ -404,7 +413,7 @@ struct ReturningUserOfferFlowView: View {
                 )
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("One-Time Offer")
+                Text("Exclusive Weekly Offer")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 9)
@@ -433,9 +442,9 @@ struct ReturningUserOfferFlowView: View {
 
                 VStack(alignment: .leading, spacing: 11) {
                     familyFeatureRow(highlight: "400", suffix: " Credits Per week")
-                    familyFeatureRow(highlight: "800+", suffix: " Style", prefix: "Priority & ")
+                    familyFeatureRow(highlight: nil, suffix: "Priority & Customizable Styles")
                     familyFeatureRow(highlight: nil, suffix: "Ad-free & No Watermark")
-                    familyFeatureRow(highlight: "30%", suffix: " OFF Lifetime Credits")
+                    familyFeatureRow(highlight: nil, suffix: "Create More Every Week")
                 }
                 .padding(.top, 14)
             }
@@ -551,12 +560,15 @@ struct ReturningUserOfferFlowView: View {
             hotspot(
                 label: "Start My 3-Day Free Trial",
                 identifier: "returning-trial-start",
-                center: CGPoint(x: 215, y: 839),
+                center: CGPoint(x: 215, y: 806),
                 size: CGSize(width: 382, height: 70),
                 layout: layout
             ) {
                 beginPurchase(.annual, origin: .trial)
             }
+
+            privacyHotspot(using: layout)
+            termsHotspot(using: layout)
 
         }
     }

@@ -91,6 +91,7 @@ struct SignInView: View {
                 agreementText
                     .font(.system(size: 13.5, weight: .regular))
                     .foregroundStyle(.white)
+                    .tint(.white)
                     .multilineTextAlignment(.leading)
                     .padding(.horizontal, 19)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -124,22 +125,11 @@ struct SignInView: View {
     }
 
     private var agreementText: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                Text("Continue to indicate your agreement to the ")
-                Button("Privacy Policy") {
-                    legalDocument = .privacyPolicy
-                }
-                .buttonStyle(.plain)
-                .underline()
-                .accessibilityIdentifier("sign-in-privacy-policy")
-            }
-
-            HStack(spacing: 0) {
-                Text("and ")
-                Text("Terms of Service").underline()
-            }
-        }
+        FlowingLegalAgreementText(
+            leadingText: "By continuing, you agree to the ",
+            onOpen: { legalDocument = $0 }
+        )
+        .accessibilityIdentifier("sign-in-legal-agreement")
     }
 }
 

@@ -1,7 +1,155 @@
 import AVFoundation
+import AVKit
 import CryptoKit
 import SwiftUI
 import UIKit
+
+/// Generated output is user content, so it must never wait behind the decoder
+/// budget used by the auto-playing template catalog. AVPlayerViewController also
+/// gives the result a familiar play/pause scrubber and audio playback controls.
+struct GeneratedVideoPlayerView: UIViewControllerRepresentable {
+    let url: URL
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
+    var autoplay = false
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.showsPlaybackControls = true
+        controller.videoGravity = videoGravity
+        controller.view.backgroundColor = .black
+        context.coordinator.configure(
+            controller: controller,
+            url: url,
+            autoplay: autoplay
+        )
+        return controller
+    }
+
+    func updateUIViewController(
+        _ controller: AVPlayerViewController,
+        context: Context
+    ) {
+        controller.videoGravity = videoGravity
+        guard context.coordinator.currentURL != url else { return }
+        context.coordinator.configure(
+            controller: controller,
+            url: url,
+            autoplay: autoplay
+        )
+    }
+
+    static func dismantleUIViewController(
+        _ controller: AVPlayerViewController,
+        coordinator: Coordinator
+    ) {
+        coordinator.stop(controller: controller)
+    }
+
+    final class Coordinator {
+        private(set) var currentURL: URL?
+        private var playbackEndedObserver: NSObjectProtocol?
+        private var timeControlObservation: NSKeyValueObservation?
+        private weak var player: AVPlayer?
+        private weak var playButton: UIButton?
+
+        func configure(
+            controller: AVPlayerViewController,
+            url: URL,
+            autoplay: Bool
+        ) {
+            stop(controller: controller)
+
+            let item = AVPlayerItem(url: url)
+            let player = AVPlayer(playerItem: item)
+            player.actionAtItemEnd = .none
+            player.preventsDisplaySleepDuringVideoPlayback = false
+            controller.player = player
+            self.player = player
+            currentURL = url
+            installPlayButtonIfNeeded(in: controller)
+
+            timeControlObservation = player.observe(
+                \.timeControlStatus,
+                options: [.initial, .new]
+            ) { [weak self] player, _ in
+                DispatchQueue.main.async {
+                    self?.playButton?.isHidden = player.timeControlStatus == .playing
+                }
+            }
+
+            playbackEndedObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak player] _ in
+                player?.seek(to: .zero)
+                player?.play()
+            }
+
+            if autoplay {
+                player.play()
+            }
+        }
+
+        private func installPlayButtonIfNeeded(in controller: AVPlayerViewController) {
+            guard playButton == nil, let overlay = controller.contentOverlayView else { return }
+
+            let button = UIButton(type: .system)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.setImage(UIImage(systemName: "play.fill"), for: .normal)
+            button.tintColor = .white
+            button.backgroundColor = UIColor.black.withAlphaComponent(0.58)
+            button.layer.cornerRadius = 29
+            button.layer.borderWidth = 1
+            button.layer.borderColor = UIColor.white.withAlphaComponent(0.72).cgColor
+            button.accessibilityLabel = "Play generated video"
+            button.addTarget(self, action: #selector(togglePlayback), for: .touchUpInside)
+            overlay.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                button.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+                button.widthAnchor.constraint(equalToConstant: 58),
+                button.heightAnchor.constraint(equalToConstant: 58),
+            ])
+            playButton = button
+        }
+
+        @objc private func togglePlayback() {
+            guard let player else { return }
+            if player.timeControlStatus == .playing {
+                player.pause()
+            } else {
+                player.play()
+            }
+        }
+
+        func stop(controller: AVPlayerViewController) {
+            if let playbackEndedObserver {
+                NotificationCenter.default.removeObserver(playbackEndedObserver)
+                self.playbackEndedObserver = nil
+            }
+            timeControlObservation?.invalidate()
+            timeControlObservation = nil
+            controller.player?.pause()
+            controller.player?.replaceCurrentItem(with: nil)
+            controller.player = nil
+            player = nil
+            playButton?.isHidden = false
+            currentURL = nil
+        }
+
+        deinit {
+            timeControlObservation?.invalidate()
+            if let playbackEndedObserver {
+                NotificationCenter.default.removeObserver(playbackEndedObserver)
+            }
+        }
+    }
+}
 
 struct LoopingVideoView: UIViewRepresentable {
     let resourceName: String
@@ -22,7 +170,7 @@ struct LoopingVideoView: UIViewRepresentable {
         uiView.videoGravity = videoGravity
         uiView.aspectFitBackgroundColor = aspectFitBackgroundColor
         uiView.videoAspectRatio = videoAspectRatio
-        uiView.play()
+        uiView.refreshPlaybackState()
     }
 
     static func dismantleUIView(_ uiView: LoopingPlayerUIView, coordinator: Void) {
@@ -59,10 +207,12 @@ final class LoopingPlayerUIView: UIView {
     private var playerLooper: AVPlayerLooper?
     private var readyForDisplayObservation: NSKeyValueObservation?
     private var remoteVideoTask: Task<Void, Never>?
-    private var remotePlaybackTask: Task<Void, Never>?
-    private var hasRemotePlaybackPermit = false
+    private var playbackRequestTask: Task<Void, Never>?
+    private var playbackPermitID: UUID?
+    private var hasPlaybackPermit = false
     private var currentResourceName: String?
     private var currentURL: URL?
+    private var playbackURL: URL?
 
     private let playerLayer = AVPlayerLayer()
 
@@ -82,6 +232,25 @@ final class LoopingPlayerUIView: UIView {
         clipsToBounds = true
         playerLayer.backgroundColor = UIColor.clear.cgColor
         layer.addSublayer(playerLayer)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationWillStopBeingActive),
+            name: UIApplication.willResignActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationWillStopBeingActive),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
     }
 
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill {
@@ -123,12 +292,13 @@ final class LoopingPlayerUIView: UIView {
         ) ?? Bundle.main.url(forResource: resourceName, withExtension: "mp4")
 
         guard let url = bundledURL else { return }
-        configurePlayer(url: url)
+        playbackURL = url
+        refreshPlaybackState()
     }
 
     func configure(url: URL) {
         guard currentURL != url else {
-            play()
+            refreshPlaybackState()
             return
         }
 
@@ -136,43 +306,62 @@ final class LoopingPlayerUIView: UIView {
         currentURL = url
         if let cachedURL = TemplateVideoCache.cachedURL(for: url) {
             TemplateMediaMetrics.shared.record(.disk, media: .video)
-            configurePlayer(url: cachedURL)
+            playbackURL = cachedURL
+            refreshPlaybackState()
             return
         }
 
-        // Cached videos can all use hardware decode concurrently. Only remote
-        // streams are admitted through this visible-screen gate; the separate cache
-        // downloader remains capped at two transfers.
+        // Start visible playback from the remote asset. A cache copy is considered
+        // only after the first frame has remained visible; starting a second full
+        // transfer here would make every briefly-created scroll card compete with
+        // the video the user is actually watching.
         TemplateMediaMetrics.shared.record(.network, media: .video)
-        remotePlaybackTask = Task { [weak self] in
-            await TemplateRemotePlaybackGate.shared.acquire()
-            guard !Task.isCancelled,
-                  let self,
-                  self.currentURL == url else {
-                await TemplateRemotePlaybackGate.shared.release()
-                return
-            }
-            self.hasRemotePlaybackPermit = true
-            self.configurePlayer(url: url)
-            self.remotePlaybackTask = nil
+        playbackURL = url
+        refreshPlaybackState()
+    }
+
+    func refreshPlaybackState() {
+        guard isEligibleForPlayback else {
+            suspendPlayback()
+            return
         }
 
-        // Keep a complete, app-owned copy for later appearances and restarts.
-        remoteVideoTask = Task { [weak self] in
-            do {
-                _ = try await TemplateVideoCache.shared.localURL(for: url)
-            } catch {
-                // Streaming remains available if persistence is unavailable.
+        if let queuePlayer {
+            queuePlayer.play()
+            return
+        }
+
+        guard playbackRequestTask == nil, let playbackURL else { return }
+        let permitID = UUID()
+        playbackPermitID = permitID
+        playbackRequestTask = Task { [weak self] in
+            let acquired = await TemplatePlaybackGate.shared.acquire(id: permitID)
+            guard acquired else { return }
+            guard !Task.isCancelled,
+                  let self,
+                  self.playbackPermitID == permitID,
+                  self.playbackURL == playbackURL,
+                  self.isEligibleForPlayback else {
+                await TemplatePlaybackGate.shared.release()
+                return
             }
-            self?.remoteVideoTask = nil
+
+            self.hasPlaybackPermit = true
+            self.playbackRequestTask = nil
+            self.configurePlayer(url: playbackURL)
         }
     }
 
     private func configurePlayer(url: URL) {
         let item = AVPlayerItem(url: url)
+        // These are muted, looping previews rather than long-form playback.
+        // Prefer a quick first frame over building a large startup buffer while
+        // several cards share the same screen.
+        item.preferredForwardBufferDuration = 0.5
         let player = AVQueuePlayer()
         player.isMuted = true
         player.actionAtItemEnd = .none
+        player.preventsDisplaySleepDuringVideoPlayback = false
         queuePlayer = player
         playerLooper = AVPlayerLooper(player: player, templateItem: item)
         playerLayer.player = player
@@ -182,35 +371,155 @@ final class LoopingPlayerUIView: UIView {
             self?.playerLayer.isHidden = !layer.isReadyForDisplay
             // Bundled launch/onboarding videos use the same player view but are
             // not part of Home media performance.
-            if layer.isReadyForDisplay, self?.currentURL != nil {
+            if layer.isReadyForDisplay, let remoteURL = self?.currentURL {
                 TemplateMediaMetrics.shared.markVideoFrameDisplayed()
+                self?.scheduleVideoPersistence(for: remoteURL)
             }
         }
-        player.play()
+        if isEligibleForPlayback {
+            player.play()
+        }
     }
 
     func play() {
-        queuePlayer?.play()
+        refreshPlaybackState()
     }
 
     func stop() {
-        remotePlaybackTask?.cancel()
-        remotePlaybackTask = nil
         remoteVideoTask?.cancel()
         remoteVideoTask = nil
-        if hasRemotePlaybackPermit {
-            hasRemotePlaybackPermit = false
-            Task { await TemplateRemotePlaybackGate.shared.release() }
-        }
+        suspendPlayback()
+        currentResourceName = nil
+        currentURL = nil
+        playbackURL = nil
+    }
+
+    private func suspendPlayback() {
+        remoteVideoTask?.cancel()
+        remoteVideoTask = nil
+        playbackRequestTask?.cancel()
+        playbackRequestTask = nil
+        playbackPermitID = nil
+        releasePlaybackPermit()
+
         queuePlayer?.pause()
         readyForDisplayObservation?.invalidate()
         readyForDisplayObservation = nil
         playerLayer.isHidden = true
         playerLayer.player = nil
         playerLooper = nil
+        queuePlayer?.removeAllItems()
         queuePlayer = nil
-        currentResourceName = nil
-        currentURL = nil
+    }
+
+    /// Only optimized preview files are small enough to duplicate into the
+    /// app-owned cache while the same asset is already streaming through
+    /// AVPlayer. CMS source uploads can exceed 10 MB for a five-second card and
+    /// must first be processed by the preview pipeline instead.
+    static func shouldPersistRemoteVideo(at url: URL) -> Bool {
+        url.path.contains("/optimized-previews/")
+    }
+
+    private func scheduleVideoPersistence(for remoteURL: URL) {
+        guard currentURL == remoteURL,
+              remoteVideoTask == nil,
+              Self.shouldPersistRemoteVideo(at: remoteURL),
+              TemplateVideoCache.cachedURL(for: remoteURL) == nil else {
+            return
+        }
+
+        remoteVideoTask = Task { [weak self] in
+            defer {
+                if self?.currentURL == remoteURL {
+                    self?.remoteVideoTask = nil
+                }
+            }
+            do {
+                // Fast scrolling should never start a complete duplicate
+                // download. Cache only a preview the user actually watches.
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled,
+                      let self,
+                      self.currentURL == remoteURL,
+                      self.isEligibleForPlayback else {
+                    return
+                }
+                _ = try await TemplateVideoCache.shared.localURL(for: remoteURL)
+            } catch {
+                // Streaming remains available if persistence is cancelled or
+                // the optional cache write fails.
+            }
+        }
+    }
+
+    private func releasePlaybackPermit() {
+        guard hasPlaybackPermit else { return }
+        hasPlaybackPermit = false
+        Task { await TemplatePlaybackGate.shared.release() }
+    }
+
+    private var isEligibleForPlayback: Bool {
+        guard let window,
+              bounds.width > 0,
+              bounds.height > 0,
+              visibleFraction(in: window) >= 0.15,
+              isInsideFrontmostPresentation(in: window) else {
+            return false
+        }
+        if let windowScene = window.windowScene {
+            return windowScene.activationState == .foregroundActive
+        }
+        return UIApplication.shared.applicationState == .active
+    }
+
+    /// A full-screen SwiftUI presentation keeps the covered view hierarchy
+    /// attached to the same window. Geometry alone therefore reports Home and
+    /// detail previews as visible even while a newer Try Now screen completely
+    /// covers them. Only the frontmost presentation may retain decoder permits.
+    private func isInsideFrontmostPresentation(in window: UIWindow) -> Bool {
+        guard let rootViewController = window.rootViewController else { return true }
+
+        var frontmostViewController = rootViewController
+        while let presentedViewController = frontmostViewController.presentedViewController,
+              !presentedViewController.isBeingDismissed {
+            frontmostViewController = presentedViewController
+        }
+
+        guard frontmostViewController !== rootViewController else { return true }
+        return isDescendant(of: frontmostViewController.view)
+    }
+
+    /// SwiftUI keeps nearby horizontal and vertical scroll items attached to the
+    /// window after they leave the viewport. `window != nil` therefore is not a
+    /// useful visibility test: an off-screen preview could hold a decoder permit
+    /// forever and leave a visible Home shortcut on its poster.
+    private func visibleFraction(in window: UIWindow) -> CGFloat {
+        var visibleRect = convert(bounds, to: window).intersection(window.bounds)
+        guard !visibleRect.isNull, !visibleRect.isEmpty else { return 0 }
+
+        var ancestor: UIView? = self
+        while let view = ancestor {
+            guard !view.isHidden, view.alpha > 0.01 else { return 0 }
+
+            if view !== self, view.clipsToBounds || view is UIScrollView {
+                let clippingRect = view.convert(view.bounds, to: window)
+                visibleRect = visibleRect.intersection(clippingRect)
+                guard !visibleRect.isNull, !visibleRect.isEmpty else { return 0 }
+            }
+            ancestor = view.superview
+        }
+
+        let totalArea = bounds.width * bounds.height
+        let visibleArea = visibleRect.width * visibleRect.height
+        return totalArea > 0 ? visibleArea / totalArea : 0
+    }
+
+    @objc private func applicationDidBecomeActive() {
+        refreshPlaybackState()
+    }
+
+    @objc private func applicationWillStopBeingActive() {
+        suspendPlayback()
     }
 
     override func layoutSubviews() {
@@ -250,27 +559,118 @@ final class LoopingPlayerUIView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        window == nil ? queuePlayer?.pause() : queuePlayer?.play()
+        if window == nil {
+            TemplatePlaybackVisibilityMonitor.shared.unregister(self)
+            suspendPlayback()
+        } else {
+            TemplatePlaybackVisibilityMonitor.shared.register(self)
+            refreshPlaybackState()
+        }
+    }
+
+    deinit {
+        TemplatePlaybackVisibilityMonitor.shared.unregister(self)
+        NotificationCenter.default.removeObserver(self)
+        playbackRequestTask?.cancel()
+        remoteVideoTask?.cancel()
+        releasePlaybackPermit()
+        queuePlayer?.pause()
+        readyForDisplayObservation?.invalidate()
+        playerLayer.player = nil
+        playerLooper = nil
+        queuePlayer?.removeAllItems()
+        queuePlayer = nil
     }
 }
 
-/// A screen can contain nine visible cards, so all nine uncached previews may
-/// start. Once files are cached this gate is not involved at all. The separate
-/// full-file downloader remains capped at two transfers.
-private actor TemplateRemotePlaybackGate {
-    static let shared = TemplateRemotePlaybackGate()
+/// A single low-frequency display link rechecks every attached preview while a
+/// scroll view moves. UIKit does not call `didMoveToWindow` when an attached
+/// child merely crosses a scroll viewport, so lifecycle callbacks alone cannot
+/// release decoder permits from off-screen cards.
+private final class TemplatePlaybackVisibilityMonitor {
+    static let shared = TemplatePlaybackVisibilityMonitor()
 
-    private let limit = 9
+    private let views = NSHashTable<LoopingPlayerUIView>.weakObjects()
+    private var displayLink: CADisplayLink?
+
+    private init() {}
+
+    func register(_ view: LoopingPlayerUIView) {
+        views.add(view)
+        guard displayLink == nil else { return }
+
+        let displayLink = CADisplayLink(
+            target: self,
+            selector: #selector(refreshPlaybackStates)
+        )
+        displayLink.preferredFrameRateRange = CAFrameRateRange(
+            minimum: 2,
+            maximum: 4,
+            preferred: 4
+        )
+        displayLink.add(to: .main, forMode: .common)
+        self.displayLink = displayLink
+    }
+
+    func unregister(_ view: LoopingPlayerUIView) {
+        views.remove(view)
+        stopIfEmpty()
+    }
+
+    @objc private func refreshPlaybackStates() {
+        let attachedViews = views.allObjects.filter { $0.window != nil }
+        for view in attachedViews {
+            view.refreshPlaybackState()
+        }
+        stopIfEmpty(attachedViews: attachedViews)
+    }
+
+    private func stopIfEmpty(attachedViews: [LoopingPlayerUIView]? = nil) {
+        let hasAttachedView = attachedViews.map { !$0.isEmpty }
+            ?? views.allObjects.contains { $0.window != nil }
+        guard !hasAttachedView else { return }
+
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+}
+
+/// Every AVPlayer consumes decoder and CoreMedia resources. Keep one shared
+/// budget for bundled, cached, and streaming videos so a long scrolling session
+/// cannot accumulate an unbounded number of active decoders.
+private actor TemplatePlaybackGate {
+    static let shared = TemplatePlaybackGate()
+
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    // The Home viewport can legitimately contain one hero, three fixed-feature
+    // previews, and three catalog cards at the same time. A budget of four made
+    // later visible cards wait forever on their posters even though off-screen
+    // players are now suspended by the visibility monitor.
+    private let limit = 8
     private var activePlayers = 0
-    private var waiters = [CheckedContinuation<Void, Never>]()
+    private var waiters = [Waiter]()
 
-    func acquire() async {
+    func acquire(id: UUID) async -> Bool {
+        guard !Task.isCancelled else { return false }
         if activePlayers < limit {
             activePlayers += 1
-            return
+            return true
         }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters.append(Waiter(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancel(id: id) }
         }
     }
 
@@ -278,8 +678,13 @@ private actor TemplateRemotePlaybackGate {
         if waiters.isEmpty {
             activePlayers = max(0, activePlayers - 1)
         } else {
-            waiters.removeFirst().resume()
+            waiters.removeFirst().continuation.resume(returning: true)
         }
+    }
+
+    private func cancel(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(returning: false)
     }
 }
 

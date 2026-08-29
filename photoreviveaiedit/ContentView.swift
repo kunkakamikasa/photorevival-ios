@@ -103,7 +103,7 @@ struct ContentView: View {
                             case .subscriptionCoupon(let offer):
                                 requireLogin { fullScreenDestination = .summerSale(offer) }
                             case .creditPurchase:
-                                requireLogin { fullScreenDestination = .credits }
+                                requireLogin { fullScreenDestination = .creditStore }
                             }
                         },
                         isSubscribed: isSubscribed,
@@ -121,44 +121,50 @@ struct ContentView: View {
             }
             .transition(.opacity)
         }
-        .overlay(alignment: .bottom) {
-            ZStack(alignment: .bottom) {
-                BottomTabBar(selection: $selectedTab) { tab in
-                    guard tab == .me else {
-                        withAnimation(.easeInOut(duration: 0.24)) { selectedTab = tab }
-                        return
-                    }
-                    requireLogin {
-                        withAnimation(.easeInOut(duration: 0.24)) { selectedTab = .me }
-                    }
-                }
+        .overlay {
+            GeometryReader { proxy in
+                let bannerWidth = max(proxy.size.width - 36, 0)
 
-                if selectedTab == .home,
-                   showHomeOfferBanner,
-                   let promotion = CMSHomeHeroPromotion.visible(
-                        isSubscribed: isSubscribed,
-                        coupon: featureConfigStore.homeBottomOffer,
-                        creditPurchase: featureConfigStore.homeBottomCreditPurchasePromotion
-                   ) {
-                    HomeDiscountBannerView(
-                        imageURL: promotion.coverImageURL,
-                        onOpen: {
-                            switch promotion {
-                            case .subscriptionCoupon(let offer):
-                                requireLogin { fullScreenDestination = .summerSale(offer) }
-                            case .creditPurchase:
-                                requireLogin { fullScreenDestination = .credits }
-                            }
-                        },
-                        onClose: {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                showHomeOfferBanner = false
-                            }
+                ZStack(alignment: .bottom) {
+                    BottomTabBar(selection: $selectedTab) { tab in
+                        guard tab == .me else {
+                            withAnimation(.easeInOut(duration: 0.24)) { selectedTab = tab }
+                            return
                         }
-                    )
-                    .padding(.bottom, 56)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                        requireLogin {
+                            withAnimation(.easeInOut(duration: 0.24)) { selectedTab = .me }
+                        }
+                    }
+
+                    if selectedTab == .home,
+                       showHomeOfferBanner,
+                       let promotion = CMSHomeHeroPromotion.visible(
+                            isSubscribed: isSubscribed,
+                            coupon: featureConfigStore.homeBottomOffer,
+                            creditPurchase: featureConfigStore.homeBottomCreditPurchasePromotion
+                       ) {
+                        HomeDiscountBannerView(
+                            imageURL: promotion.coverImageURL,
+                            onOpen: {
+                                switch promotion {
+                                case .subscriptionCoupon(let offer):
+                                    requireLogin { fullScreenDestination = .summerSale(offer) }
+                                case .creditPurchase:
+                                    requireLogin { fullScreenDestination = .creditStore }
+                                }
+                            },
+                            onClose: {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    showHomeOfferBanner = false
+                                }
+                            }
+                        )
+                        .frame(width: bannerWidth, height: bannerWidth / 3.0)
+                        .padding(.bottom, 56)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
             }
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
@@ -191,6 +197,19 @@ struct ContentView: View {
                 SummerSalePaywallView(offer: offer)
             case .credits:
                 CreditCenterView(credits: creditsBinding, accountStore: accountStore)
+            case .creditStore:
+                CreditStoreView(
+                    onClose: {
+                        fullScreenDestination = nil
+                    },
+                    onPurchased: { _ in
+                        fullScreenDestination = nil
+                        Task {
+                            await accountStore.refreshCredits()
+                            await accountStore.refreshCreditTransactions()
+                        }
+                    }
+                )
             case .suggestion:
                 SuggestionView()
             case .login:
@@ -412,6 +431,7 @@ private enum AppDestination: Identifiable {
     case membership
     case summerSale(CMSCouponOffer)
     case credits
+    case creditStore
     case suggestion
     case login
     case fixedFeature(FixedFeature)
@@ -421,6 +441,7 @@ private enum AppDestination: Identifiable {
         case .membership: "membership"
         case .summerSale(let offer): "summerSale-\(offer.id)"
         case .credits: "credits"
+        case .creditStore: "creditStore"
         case .suggestion: "suggestion"
         case .login: "login"
         case .fixedFeature(let feature): "fixedFeature-\(feature.id)"

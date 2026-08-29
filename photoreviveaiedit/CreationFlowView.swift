@@ -1,10 +1,6 @@
 import AVFoundation
-import CoreTransferable
-import Photos
-import PhotosUI
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 private enum CreateFlowCropTarget: Identifiable {
     case source
@@ -15,6 +11,46 @@ private enum CreateFlowCropTarget: Identifiable {
         case .source: "source"
         case let .videoSlot(index): "video-slot-\(index)"
         }
+    }
+}
+
+private enum CreateFlowPhotoSelectionTarget: Identifiable {
+    case source
+    case videoSlots
+
+    var id: String {
+        switch self {
+        case .source: "source"
+        case .videoSlots: "video-slots"
+        }
+    }
+}
+
+private struct PendingVideoGenerationRequest {
+    let itemID: String
+    let images: [UIImage]
+    let prompt: String?
+    let appVersion: String?
+    let options: PhotoReviveVideoGenerationOptions
+
+    @MainActor
+    func submit() async throws -> PhotoReviveVideoGenerationSubmission {
+        var imageURLs: [String] = []
+        for image in images {
+            guard let imageData = image.jpegData(compressionQuality: 0.90) else {
+                throw PhotoReviveAPIError.invalidResponse
+            }
+            let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(imageData)
+            imageURLs.append(imageURL)
+        }
+
+        return try await PhotoReviveAPIClient.shared.createImageToVideo(
+            itemID: itemID,
+            imageURLs: imageURLs,
+            prompt: prompt,
+            appVersion: appVersion,
+            options: options
+        )
     }
 }
 
@@ -85,6 +121,180 @@ private struct GuidedVideoEditorLayout {
     }
 }
 
+/// Distributes a limited vertical budget across the flexible regions on an
+/// upload page. Preferred sizes are retained on taller phones; on shorter
+/// phones every region contracts together so no single card pushes another
+/// control below the fixed primary action.
+struct UploadPageFlexibleLayout {
+    static func fittedSizes(
+        availableHeight: CGFloat,
+        preferred: [CGFloat],
+        minimum: [CGFloat]
+    ) -> [CGFloat] {
+        guard preferred.count == minimum.count, !preferred.isEmpty else { return [] }
+
+        let availableHeight = max(0, availableHeight)
+        let preferredTotal = preferred.reduce(0, +)
+        let minimumTotal = minimum.reduce(0, +)
+
+        if availableHeight >= preferredTotal {
+            return preferred
+        }
+
+        if availableHeight >= minimumTotal,
+           preferredTotal > minimumTotal {
+            let progress = (availableHeight - minimumTotal)
+                / (preferredTotal - minimumTotal)
+            return zip(minimum, preferred).map { minimumSize, preferredSize in
+                minimumSize + (preferredSize - minimumSize) * progress
+            }
+        }
+
+        guard minimumTotal > 0 else {
+            return Array(repeating: 0, count: preferred.count)
+        }
+        let scale = availableHeight / minimumTotal
+        return minimum.map { $0 * scale }
+    }
+}
+
+struct FixedPhotoUploadLayout {
+    let spacing: CGFloat
+    let titleHeight: CGFloat
+    let titleFontSize: CGFloat
+    let previewHeight: CGFloat
+    let tipImageHeight: CGFloat
+    let tipSpacing: CGFloat
+    let tipIconSize: CGFloat
+
+    init(viewportSize: CGSize) {
+        let height = max(0, viewportSize.height)
+        let compact = height < 600
+        spacing = compact ? 10 : 14
+        titleHeight = compact ? 25 : 28
+        titleFontSize = compact ? 20 : 22
+        tipSpacing = compact ? 6 : 8
+        tipIconSize = compact ? 21 : 25
+        tipImageHeight = min(compact ? 64 : 76, max(38, height * 0.11))
+
+        let fixedHeight = spacing * 2
+            + titleHeight
+            + tipImageHeight
+            + tipSpacing
+            + tipIconSize
+        let idealPreviewHeight = max(0, viewportSize.width) / (1168.0 / 1560.0)
+        previewHeight = min(idealPreviewHeight, max(0, height - fixedHeight))
+    }
+
+    var occupiedHeight: CGFloat {
+        previewHeight
+            + spacing * 2
+            + titleHeight
+            + tipImageHeight
+            + tipSpacing
+            + tipIconSize
+    }
+}
+
+struct FixedVideoUploadLayout {
+    let spacing: CGFloat
+    let tabsHeight: CGFloat = 46
+    let previewHeight: CGFloat
+    let promptHeight: CGFloat
+    let settingsHeight: CGFloat = 48
+
+    init(viewportSize: CGSize) {
+        spacing = viewportSize.height < 600 ? 8 : 12
+        let fixedHeight = tabsHeight + settingsHeight + spacing * 3
+        let previewPreferred = min(270, max(0, viewportSize.width) / UploadPreviewLayout.aspectRatio)
+        let fitted = UploadPageFlexibleLayout.fittedSizes(
+            availableHeight: viewportSize.height - fixedHeight,
+            preferred: [previewPreferred, 220],
+            minimum: [120, 90]
+        )
+        previewHeight = fitted[0]
+        promptHeight = fitted[1]
+    }
+
+    var occupiedHeight: CGFloat {
+        tabsHeight + previewHeight + promptHeight + settingsHeight + spacing * 3
+    }
+}
+
+struct ImageTemplateUploadLayout {
+    let spacing: CGFloat
+    let previewHeight: CGFloat
+    let titleHeight: CGFloat
+    let uploadHeight: CGFloat
+    let settingsHeight: CGFloat = 48
+
+    init(viewportSize: CGSize) {
+        spacing = viewportSize.height < 600 ? 8 : 12
+        titleHeight = viewportSize.height < 600 ? 26 : 29
+        let fixedHeight = titleHeight + settingsHeight + spacing * 3
+        let fitted = UploadPageFlexibleLayout.fittedSizes(
+            availableHeight: viewportSize.height - fixedHeight,
+            preferred: [302, 188],
+            minimum: [140, 100]
+        )
+        previewHeight = fitted[0]
+        uploadHeight = fitted[1]
+    }
+
+    var occupiedHeight: CGFloat {
+        previewHeight + titleHeight + uploadHeight + settingsHeight + spacing * 3
+    }
+}
+
+struct FixedAIImageUploadLayout {
+    let spacing: CGFloat
+    let tabsHeight: CGFloat
+    let titleHeight: CGFloat
+    let uploadHeight: CGFloat
+    let promptHeight: CGFloat
+    let settingsHeight: CGFloat = 48
+
+    init(viewportSize: CGSize, showsTabs: Bool, includesUploads: Bool) {
+        spacing = viewportSize.height < 600 ? 8 : 12
+        tabsHeight = showsTabs ? 46 : 0
+        titleHeight = includesUploads ? (viewportSize.height < 600 ? 24 : 27) : 0
+
+        let visibleSections = 2
+            + (showsTabs ? 1 : 0)
+            + (includesUploads ? 2 : 0)
+        let spacingCount = max(0, visibleSections - 1)
+        let fixedHeight = tabsHeight
+            + titleHeight
+            + settingsHeight
+            + spacing * CGFloat(spacingCount)
+
+        if includesUploads {
+            let fitted = UploadPageFlexibleLayout.fittedSizes(
+                availableHeight: viewportSize.height - fixedHeight,
+                preferred: [218, 220],
+                minimum: [110, 100]
+            )
+            uploadHeight = fitted[0]
+            promptHeight = fitted[1]
+        } else {
+            uploadHeight = 0
+            promptHeight = min(280, max(0, viewportSize.height - fixedHeight))
+        }
+    }
+
+    var occupiedHeight: CGFloat {
+        let sectionCount = 2
+            + (tabsHeight > 0 ? 1 : 0)
+            + (uploadHeight > 0 ? 2 : 0)
+        return tabsHeight
+            + titleHeight
+            + uploadHeight
+            + promptHeight
+            + settingsHeight
+            + spacing * CGFloat(max(0, sectionCount - 1))
+    }
+}
+
 struct CreateFlowView: View {
     let template: TemplateItem?
     let templates: [TemplateItem]?
@@ -94,9 +304,7 @@ struct CreateFlowView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("isLoggedIn") private var isLoggedIn = false
     @State private var activeTemplate: TemplateItem?
-    @State private var selectedMedia: PhotosPickerItem?
     @State private var selectedImage: UIImage?
-    @State private var selectedVideoItems: [PhotosPickerItem] = []
     @State private var selectedVideoImages: [UIImage?]
     @State private var prompt: String
     @State private var showOptions = false
@@ -106,13 +314,14 @@ struct CreateFlowView: View {
     @State private var soundEnabled = false
     @State private var multiShotEnabled = false
     @State private var duration = "5s"
-    @State private var videoResolution = "540p"
-    @State private var imageResolution = "1k"
+    @State private var videoResolution = "480p"
+    @State private var imageResolution = PhotoReviveImageGenerationOptions.providerDefaultResolution
     @State private var ratio = "9:16"
     @State private var outputCount = "1"
     @State private var showGenerationFlow = false
     @State private var cropTarget: CreateFlowCropTarget?
-    @State private var generationTaskID: String?
+    @State private var photoSelectionTarget: CreateFlowPhotoSelectionTarget?
+    @State private var pendingVideoGeneration: PendingVideoGenerationRequest?
     @State private var generationError: String?
     @State private var showLogin = false
     @State private var pendingLoginAction: (() -> Void)?
@@ -153,15 +362,13 @@ struct CreateFlowView: View {
                         guidedVideoEditor(viewportSize: proxy.size)
                     }
                 } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            editorContent
+                    GeometryReader { proxy in
+                        if flow.family == .image {
+                            imageTemplateEditor(viewportSize: proxy.size)
+                        } else {
+                            standardVideoEditor(viewportSize: proxy.size)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 10)
-                        .padding(.bottom, 16)
                     }
-                    .scrollIndicators(.hidden)
                 }
             }
             .navigationTitle(flow.title)
@@ -201,11 +408,15 @@ struct CreateFlowView: View {
             showGenerationFlow = true
         }
 #endif
-        .onChange(of: selectedMedia) { _, item in
-            loadImage(from: item)
-        }
-        .onChange(of: selectedVideoItems) { _, items in
-            loadVideoImages(items)
+        .sheet(item: $photoSelectionTarget) { target in
+            PhotoSelectionSheet(
+                maximumSelectionCount: target == .source ? 1 : flow.imageUploadCount
+            ) { images in
+                applySelectedPhotos(images, to: target)
+            }
+            .presentationDetents([.fraction(0.73), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(30)
         }
         .sheet(isPresented: $showOptions) {
             GenerationOptionsSheet(
@@ -225,15 +436,31 @@ struct CreateFlowView: View {
             CreditCenterView(credits: $credits)
         }
         .fullScreenCover(isPresented: $showGenerationFlow) {
-            VideoGenerationFlowView(
-                title: flow.title,
-                templateTitle: activeTemplate?.title ?? template?.title ?? "Generated Video",
-                videoName: activeTemplate?.videoName ?? template?.videoName,
-                template: activeTemplate ?? template,
-                taskID: generationTaskID,
-                onRegenerate: { showGenerationFlow = false },
-                onClose: { showGenerationFlow = false }
-            )
+            if let pendingVideoGeneration {
+                VideoGenerationFlowView(
+                    title: flow.title,
+                    templateTitle: activeTemplate?.title ?? template?.title ?? "Generated Video",
+                    videoName: activeTemplate?.videoName ?? template?.videoName,
+                    template: activeTemplate ?? template,
+                    submissionAction: {
+                        try await pendingVideoGeneration.submit()
+                    },
+                    onSubmission: { submission in
+                        credits = submission.creditsBalance
+                    },
+                    onRegenerate: closeGenerationFlow,
+                    onClose: closeGenerationFlow
+                )
+            } else {
+                VideoGenerationFlowView(
+                    title: flow.title,
+                    templateTitle: activeTemplate?.title ?? template?.title ?? "Generated Video",
+                    videoName: activeTemplate?.videoName ?? template?.videoName,
+                    template: activeTemplate ?? template,
+                    onRegenerate: closeGenerationFlow,
+                    onClose: closeGenerationFlow
+                )
+            }
         }
         .fullScreenCover(item: $cropTarget) { target in
             switch target {
@@ -282,27 +509,13 @@ struct CreateFlowView: View {
         }
     }
 
-    @ViewBuilder
-    private var editorContent: some View {
-        switch flow.family {
-        case .videoNoPrompt:
-            noPromptVideoEditor(viewportHeight: 720)
-        case .videoPrompt:
-            guidedVideoEditor(viewportSize: CGSize(width: 390, height: 720))
-        case .image:
-            imageTemplateEditor
-        case .standard:
-            standardVideoEditor
-        }
-    }
-
     private func noPromptVideoEditor(viewportHeight: CGFloat) -> some View {
         let usesCompactCards = viewportHeight < 650
         let thumbnailWidth: CGFloat = usesCompactCards ? 88 : 96
         let thumbnailHeight: CGFloat = usesCompactCards ? 94 : 108
         let templateChooserHeight = thumbnailHeight + 40
         let reservedHeight = templateChooserHeight + 55 + 61 + 44
-        let previewHeight = max(180, min(470, viewportHeight - reservedHeight))
+        let previewHeight = max(0, min(470, viewportHeight - reservedHeight))
 
         return VStack(alignment: .leading, spacing: 10) {
             largeSourcePreview(height: previewHeight)
@@ -361,6 +574,7 @@ struct CreateFlowView: View {
         .padding(.bottom, layout.bottomPadding)
         .frame(width: viewportSize.width, height: viewportSize.height, alignment: .top)
         .clipped()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("guided-video-editor")
     }
 
@@ -407,18 +621,48 @@ struct CreateFlowView: View {
         .padding(.vertical, verticalPadding)
         .frame(width: viewportSize.width, height: viewportSize.height, alignment: .top)
         .clipped()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("guided-video-editor")
     }
 
-    /// Retains the existing scrolling composition for the generic editor.
-    /// The single-screen layout above is intentionally scoped to CMS video
-    /// templates whose prompt card is enabled.
-    private var standardVideoEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func standardVideoEditor(viewportSize: CGSize) -> some View {
+        let compact = viewportSize.height < 650
+        let sectionSpacing: CGFloat = compact ? 7 : 10
+        let topPadding: CGFloat = 6
+        let bottomPadding: CGFloat = 8
+        let hasPreview = activeTemplate != nil
+        let sectionCount = hasPreview ? 6 : 5
+        let chooserTitleHeight: CGFloat = compact ? 22 : 27
+        let chooserSpacing: CGFloat = compact ? 6 : 9
+        let fixedHeight = topPadding
+            + bottomPadding
+            + sectionSpacing * CGFloat(sectionCount - 1)
+            + 55
+            + 61
+            + chooserTitleHeight
+            + chooserSpacing
+        let preferred: [CGFloat] = hasPreview
+            ? [220, 160, 120, 150]
+            : [190, 140, 190]
+        let minimum: [CGFloat] = hasPreview
+            ? [90, 80, 70, 80]
+            : [90, 75, 90]
+        let flexible = UploadPageFlexibleLayout.fittedSizes(
+            availableHeight: viewportSize.height - fixedHeight,
+            preferred: preferred,
+            minimum: minimum
+        )
+        let flexibleOffset = hasPreview ? 1 : 0
+        let previewHeight = hasPreview ? flexible[0] : 0
+        let uploadHeight = flexible[flexibleOffset]
+        let promptHeight = flexible[flexibleOffset + 1]
+        let thumbnailHeight = flexible[flexibleOffset + 2]
+
+        return VStack(alignment: .leading, spacing: sectionSpacing) {
             if let activeTemplate {
                 FrostedTemplatePreview(item: activeTemplate)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 302)
+                    .frame(height: previewHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -426,29 +670,73 @@ struct CreateFlowView: View {
                     )
             }
 
-            videoUploadSlots()
-            promptCard()
-            settingsSummary()
+            videoUploadSlots(
+                height: uploadHeight,
+                maximumSingleSlotWidth: min(166, uploadHeight * 0.76)
+            )
+            promptCard(height: promptHeight)
+            settingsSummary(compact: compact)
             creationButton
-            templateChooser()
+            templateChooser(
+                thumbnailHeight: thumbnailHeight,
+                verticalSpacing: chooserSpacing,
+                usesCompactTitle: compact
+            )
+            .frame(
+                height: chooserTitleHeight + chooserSpacing + thumbnailHeight,
+                alignment: .top
+            )
         }
+        .padding(.horizontal, viewportSize.width < 375 ? 16 : 20)
+        .padding(.top, topPadding)
+        .padding(.bottom, bottomPadding)
+        .frame(width: viewportSize.width, height: viewportSize.height, alignment: .top)
+        .clipped()
+        .accessibilityIdentifier("standard-video-editor")
     }
 
-    private var imageTemplateEditor: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            outputPreview
+    private func imageTemplateEditor(viewportSize: CGSize) -> some View {
+        let compact = viewportSize.height < 620
+        let spacing: CGFloat = compact ? 8 : 12
+        let topPadding: CGFloat = 6
+        let bottomPadding: CGFloat = 8
+        let titleHeight: CGFloat = compact ? 25 : 29
+        let fixedHeight = topPadding
+            + bottomPadding
+            + spacing * 4
+            + titleHeight
+            + 55
+            + 61
+        let fitted = UploadPageFlexibleLayout.fittedSizes(
+            availableHeight: viewportSize.height - fixedHeight,
+            preferred: [316, 190],
+            minimum: [130, 90]
+        )
+        let previewHeight = fitted[0]
+        let pickerHeight = fitted[1]
+        let pickerWidth = min(142, pickerHeight * 0.75)
+
+        return VStack(alignment: .leading, spacing: spacing) {
+            outputPreview(height: previewHeight)
 
             Text("Upload Image")
                 .font(.title2)
                 .foregroundStyle(AppPalette.brownInk)
+                .frame(height: titleHeight, alignment: .leading)
 
-            sourcePhotoPicker(width: 142, height: 190)
+            sourcePhotoPicker(width: pickerWidth, height: pickerHeight)
                 .frame(maxWidth: .infinity)
 
-            settingsSummary()
+            settingsSummary(compact: compact)
 
             creationButton
         }
+        .padding(.horizontal, viewportSize.width < 375 ? 16 : 20)
+        .padding(.top, topPadding)
+        .padding(.bottom, bottomPadding)
+        .frame(width: viewportSize.width, height: viewportSize.height, alignment: .top)
+        .clipped()
+        .accessibilityIdentifier("image-template-editor")
     }
 
     private func largeSourcePreview(height: CGFloat) -> some View {
@@ -463,7 +751,9 @@ struct CreateFlowView: View {
                 endPoint: .bottom
             )
 
-            PhotosPicker(selection: $selectedMedia, matching: .images) {
+            Button {
+                photoSelectionTarget = .source
+            } label: {
                 Label(selectedImage == nil ? "Choose Photo" : "Change Photo", systemImage: "photo.badge.plus")
                     .font(.headline)
                     .foregroundStyle(.white)
@@ -494,7 +784,9 @@ struct CreateFlowView: View {
     }
 
     private func sourcePhotoPicker(width: CGFloat, height: CGFloat) -> some View {
-        PhotosPicker(selection: $selectedMedia, matching: .images) {
+        Button {
+            photoSelectionTarget = .source
+        } label: {
             ZStack(alignment: .bottom) {
                 sourceMedia
                     .frame(width: width, height: height)
@@ -535,16 +827,16 @@ struct CreateFlowView: View {
         }
     }
 
-    private var outputPreview: some View {
+    private func outputPreview(height: CGFloat) -> some View {
         ZStack {
             if let activeTemplate {
                 FrostedTemplatePreview(item: activeTemplate)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 316)
+                    .frame(height: height)
             } else {
                 ContentUnavailableView("Choose a template", systemImage: "photo.on.rectangle")
                     .frame(maxWidth: .infinity)
-                    .frame(height: 316)
+                    .frame(height: height)
             }
         }
         .background(Color(.systemGray5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -558,9 +850,7 @@ struct CreateFlowView: View {
     private var sourceMedia: some View {
         Group {
             if let selectedImage {
-                Image(uiImage: selectedImage)
-                    .resizable()
-                    .scaledToFill()
+                FrostedUploadedPhoto(image: selectedImage)
             } else if let activeTemplate {
                 TemplateMediaView(item: activeTemplate, gravity: .resizeAspectFill)
             } else {
@@ -596,12 +886,21 @@ struct CreateFlowView: View {
                 .font(usesCompactTitle ? .headline.bold() : .title2.bold())
                 .foregroundStyle(AppPalette.ink)
 
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 12) {
-                    ForEach(flow.templates) { item in
-                        let resolvedWidth = thumbnailWidth ?? 158
-                        let resolvedHeight = thumbnailHeight ?? 214
+            GeometryReader { proxy in
+                let itemCount = max(1, flow.templates.count)
+                let itemSpacing: CGFloat = itemCount > 4 ? 6 : 12
+                let availableWidth = max(
+                    0,
+                    proxy.size.width - itemSpacing * CGFloat(max(0, itemCount - 1))
+                )
+                let requestedWidth = thumbnailWidth ?? 158
+                let fittedWidth = availableWidth / CGFloat(itemCount)
+                let resolvedWidth = min(requestedWidth, fittedWidth)
+                let requestedHeight = thumbnailHeight ?? 214
+                let resolvedHeight = min(requestedHeight, resolvedWidth / 0.74)
 
+                HStack(spacing: itemSpacing) {
+                    ForEach(flow.templates) { item in
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 selectTemplate(item)
@@ -642,8 +941,8 @@ struct CreateFlowView: View {
                         .accessibilityLabel("Select \(item.title)")
                     }
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
-            .scrollIndicators(.hidden)
         }
     }
 
@@ -739,9 +1038,15 @@ struct CreateFlowView: View {
 
                 HStack {
                     Spacer()
-                    Label("\(currentCost)", systemImage: "diamond.fill")
-                        .font(.headline)
-                        .foregroundStyle(Color.yellow)
+                    HStack(spacing: 5) {
+                        Image("RewardsCreditToken")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 24, height: 24)
+                        Text("\(currentCost)")
+                            .font(.headline)
+                            .foregroundStyle(Color.yellow)
+                    }
                 }
             }
             .foregroundStyle(.white)
@@ -782,7 +1087,7 @@ struct CreateFlowView: View {
     }
 
     private func startVideoGeneration() {
-        guard !isCreating else { return }
+        guard pendingVideoGeneration == nil else { return }
 
         let images: [UIImage]
         if flow.family == .videoNoPrompt {
@@ -850,71 +1155,44 @@ struct CreateFlowView: View {
             multiShotEnabled: multiShotEnabled
         )
 
-        isCreating = true
-        Task {
-            defer { isCreating = false }
-            do {
-                var imageURLs: [String] = []
-                for image in images {
-                    guard let imageData = image.jpegData(compressionQuality: 0.90) else {
-                        throw PhotoReviveAPIError.invalidResponse
-                    }
-                    let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(imageData)
-                    imageURLs.append(imageURL)
-                }
-
-                let appVersion = Bundle.main.object(
-                    forInfoDictionaryKey: "CFBundleShortVersionString"
-                ) as? String
-                let submission = try await PhotoReviveAPIClient.shared.createImageToVideo(
-                    itemID: selectedTemplate.id,
-                    imageURLs: imageURLs,
-                    prompt: editablePrompt,
-                    appVersion: appVersion,
-                    options: options
-                )
-                credits = submission.creditsBalance
-                generationTaskID = submission.taskID
-                AppAnalytics.generationSubmitted(
-                    contentType: "video",
-                    itemID: selectedTemplate.id
-                )
-                showGenerationFlow = true
-            } catch {
-                AppAnalytics.generationFailed(
-                    contentType: "video",
-                    itemID: selectedTemplate.id,
-                    stage: "submission",
-                    failureType: AppAnalytics.apiFailureType(error)
-                )
-                generationError = error.localizedDescription
-            }
-        }
+        generationError = nil
+        pendingVideoGeneration = PendingVideoGenerationRequest(
+            itemID: selectedTemplate.id,
+            images: images,
+            prompt: editablePrompt,
+            appVersion: Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String,
+            options: options
+        )
+        showGenerationFlow = true
     }
 
-    private func loadImage(from item: PhotosPickerItem?) {
-        guard let item else { return }
-
-        Task {
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else { return }
-            await MainActor.run {
-                selectedImage = image
-            }
-        }
+    private func closeGenerationFlow() {
+        showGenerationFlow = false
+        isCreating = false
+        pendingVideoGeneration = nil
     }
 
-    private func loadVideoImages(_ items: [PhotosPickerItem]) {
-        Task {
-            var images = Array(repeating: nil, count: flow.imageUploadCount) as [UIImage?]
-            for (index, item) in items.prefix(flow.imageUploadCount).enumerated() {
-                guard let data = try? await item.loadTransferable(type: Data.self),
-                      let image = UIImage(data: data) else { continue }
-                if images.indices.contains(index) {
-                    images[index] = image
+    private func applySelectedPhotos(
+        _ images: [UIImage],
+        to target: CreateFlowPhotoSelectionTarget
+    ) {
+        guard !images.isEmpty else { return }
+        switch target {
+        case .source:
+            selectedImage = images[0]
+        case .videoSlots:
+            var updatedImages = selectedVideoImages
+            if images.count == 1,
+               let emptyIndex = updatedImages.firstIndex(where: { $0 == nil }) {
+                updatedImages[emptyIndex] = images[0]
+            } else {
+                for (index, image) in images.prefix(updatedImages.count).enumerated() {
+                    updatedImages[index] = image
                 }
             }
-            await MainActor.run { selectedVideoImages = images }
+            selectedVideoImages = updatedImages
         }
     }
 
@@ -925,7 +1203,6 @@ struct CreateFlowView: View {
         if selectedVideoImages.count != count {
             selectedVideoImages = Array((selectedVideoImages + Array(repeating: nil, count: count)).prefix(count))
         }
-        selectedVideoItems = Array(selectedVideoItems.prefix(count))
     }
 
     private func videoUploadSlots(
@@ -940,17 +1217,16 @@ struct CreateFlowView: View {
                 ? min(maximumSingleSlotWidth, proxy.size.width)
                 : availableWidth / CGFloat(uploadCount)
 
-            PhotosPicker(
-                selection: $selectedVideoItems,
-                maxSelectionCount: uploadCount,
-                matching: .images
-            ) {
+            Button {
+                photoSelectionTarget = .videoSlots
+            } label: {
                 HStack(spacing: spacing) {
                     ForEach(0..<uploadCount, id: \.self) { index in
                         ImageGenerationUploadSlot(
                             image: selectedVideoImages.indices.contains(index) ? selectedVideoImages[index] : nil,
                             label: "Image\(index + 1)",
-                            placeholderURL: activeTemplate?.uploadPlaceholderURL(at: index)
+                            placeholderURL: activeTemplate?.uploadPlaceholderURL(at: index),
+                            height: height
                         )
                         .frame(width: slotWidth, height: height)
                         .accessibilityIdentifier("video-image-upload-slot-\(index + 1)")
@@ -1097,18 +1373,7 @@ private struct FrostedUploadPreview: View {
         GeometryReader { proxy in
             ZStack {
                 if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .blur(radius: 22)
-                        .scaleEffect(1.18)
-
-                    Color.black.opacity(0.05)
-
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
+                    FrostedUploadedPhoto(image: image)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 } else if let template {
                     FrostedTemplatePreview(item: template)
@@ -1172,7 +1437,12 @@ private struct GenerationOptionsSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if isImageFlow {
-                        optionSection("Resolution", values: ["1k"], selection: $imageResolution, columns: 3)
+                        optionSection(
+                            "Resolution",
+                            values: [PhotoReviveImageGenerationOptions.providerDefaultResolution],
+                            selection: $imageResolution,
+                            columns: 3
+                        )
                         optionSection("Ratio", values: ratios, selection: $ratio, columns: 3)
                         // The current image endpoints return one canonical
                         // output URL. Do not advertise unsupported batch output.
@@ -1193,7 +1463,7 @@ private struct GenerationOptionsSheet: View {
                         optionSection("Duration", values: ["5s", "8s", "10s"], selection: $duration, columns: 3)
                         optionSection(
                             "Resolution",
-                            values: ["540p", "720p", "1080p"],
+                            values: ["480p", "720p", "1080p"],
                             selection: $videoResolution,
                             columns: 3
                         )
@@ -1343,7 +1613,13 @@ private struct CreationFlowConfiguration {
         case .videoNoPrompt:
             ""
         case .videoPrompt:
-            template?.promptTemplate ?? "Use the uploaded image as the visual reference and preserve the subject's identity throughout the video."
+            if let displayedPrompt = template?.displayedPromptTemplate {
+                displayedPrompt
+            } else if template?.promptTemplate != nil {
+                template?.promptIsEditable == true ? "" : "Prompt configured by the template."
+            } else {
+                "Use the uploaded image as the visual reference and preserve the subject's identity throughout the video."
+            }
         case .image:
             "Use the uploaded image as the visual reference and apply the selected illustrated style while preserving the subject and composition."
         case .standard:
@@ -1370,6 +1646,8 @@ private struct VideoGenerationFlowView: View {
     let videoName: String?
     let template: TemplateItem?
     var taskID: String? = nil
+    var submissionAction: (@MainActor () async throws -> PhotoReviveVideoGenerationSubmission)? = nil
+    var onSubmission: ((PhotoReviveVideoGenerationSubmission) -> Void)? = nil
     let onRegenerate: () -> Void
     let onClose: () -> Void
 
@@ -1387,6 +1665,7 @@ private struct VideoGenerationFlowView: View {
     @State private var showShareSheet = false
     @State private var exportError: String?
     @State private var pollingStartedAt = Date()
+    @State private var submittedTaskID: String?
     @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
@@ -1414,16 +1693,7 @@ private struct VideoGenerationFlowView: View {
         }
         .task(id: stage) {
             guard stage == .loading else { return }
-            if let taskID {
-                await pollGenerationTask(taskID)
-            } else {
-                // Legacy preview-only callers keep their existing handoff.
-                try? await Task.sleep(for: .milliseconds(2_400))
-                guard !Task.isCancelled, stage == .loading else { return }
-                withAnimation(.easeInOut(duration: 0.24)) {
-                    stage = .result
-                }
-            }
+            await runLoadingFlow()
         }
         .fullScreenCover(isPresented: $showPreview) {
             VideoGenerationPreviewView(
@@ -1462,15 +1732,14 @@ private struct VideoGenerationFlowView: View {
                 GeneratedMediaActivityView(activityItems: [shareURL])
             }
         }
-        .confirmationDialog(
-            "Delete this creation?",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
+        .alert(
+            "Permanently delete this creation?",
+            isPresented: $showDeleteConfirmation
         ) {
-            Button("Delete", role: .destructive, action: deleteGeneration)
             Button("Cancel", role: .cancel) {}
+            Button("Delete Permanently", role: .destructive, action: deleteGeneration)
         } message: {
-            Text("This removes the creation from My Creations and cannot be undone.")
+            Text("This creation will be permanently deleted and cannot be recovered.")
         }
         .alert(
             "Export unavailable",
@@ -1489,6 +1758,59 @@ private struct VideoGenerationFlowView: View {
                 "video_generation_progress",
                 className: "VideoGenerationFlowView"
             )
+        }
+    }
+
+    @MainActor
+    private func runLoadingFlow() async {
+        if let submissionAction {
+            do {
+                // Let the full-screen cover finish presenting before JPEG
+                // encoding starts. Encoding large source photos can otherwise
+                // block the first rendered frame and leave the editor visible.
+                try await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled, stage == .loading else { return }
+                let submission = try await submissionAction()
+                guard !Task.isCancelled, stage == .loading else { return }
+                submittedTaskID = submission.taskID
+                onSubmission?(submission)
+                AppAnalytics.generationSubmitted(
+                    contentType: "video",
+                    itemID: template?.id
+                )
+                pollingStartedAt = Date()
+                await pollGenerationTask(submission.taskID)
+            } catch {
+                guard !Task.isCancelled else { return }
+                AppAnalytics.generationFailed(
+                    contentType: "video",
+                    itemID: template?.id,
+                    stage: "submission",
+                    failureType: AppAnalytics.apiFailureType(error)
+                )
+                stage = .failed(error.userFacingEnglishMessage(
+                    fallback: "Video generation failed. Please try again."
+                ))
+            }
+        } else if let taskID {
+            submittedTaskID = taskID
+            pollingStartedAt = Date()
+            await pollGenerationTask(taskID)
+        } else {
+            // Legacy preview-only callers keep their existing handoff.
+#if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-showGeneratedVideoPreview") {
+                generatedVideoURL = Bundle.main.url(
+                    forResource: "OnboardingRestoreVideo",
+                    withExtension: "mp4"
+                )
+            }
+#endif
+            try? await Task.sleep(for: .milliseconds(2_400))
+            guard !Task.isCancelled, stage == .loading else { return }
+            withAnimation(.easeInOut(duration: 0.24)) {
+                stage = .result
+            }
         }
     }
 
@@ -1511,19 +1833,6 @@ private struct VideoGenerationFlowView: View {
             .overlay(Capsule().stroke(.white.opacity(0.68), lineWidth: 1))
 
             Spacer(minLength: 0)
-
-            Button { showDeleteConfirmation = true } label: {
-                Text(isDeleting ? "Deleting…" : "Delete")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(AppPalette.ink)
-                    .padding(.horizontal, 20)
-                    .frame(height: 43)
-                    .background(Color.white.opacity(0.48), in: Capsule())
-                    .overlay(Capsule().stroke(.white.opacity(0.72), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .disabled(isDeleting)
-            .accessibilityLabel("Delete generation")
 
             Button {
                 settingsCredits = AppAccountStore.shared.creditsBalance
@@ -1587,78 +1896,91 @@ private struct VideoGenerationFlowView: View {
 
             Spacer(minLength: 0)
         }
+        .accessibilityIdentifier("video-generation-loading")
     }
 
     private var resultContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                workspaceHeader
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    workspaceHeader
 
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(title)
-                            .font(.system(size: 25, weight: .heavy))
-                            .foregroundStyle(AppPalette.ink)
-                        Text(templateTitle)
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(title)
+                                .font(.system(size: 25, weight: .heavy))
+                                .foregroundStyle(AppPalette.ink)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                            Text(templateTitle)
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(AppPalette.brownInk)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                        }
+                        .layoutPriority(1)
+                        Spacer(minLength: 12)
+                        Text("Today")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundStyle(AppPalette.brownInk)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
-                    Spacer()
-                    Text("Today")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(AppPalette.brownInk)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 53)
-
-                generatedVideoCard
                     .padding(.horizontal, 20)
-                    .padding(.top, 20)
+                    .padding(.top, 53)
 
-                HStack(spacing: 0) {
-                    Button {
-                        saveVideo()
-                    } label: {
-                        Label("Save", systemImage: "arrow.down.to.line")
-                            .font(.system(size: 21, weight: .medium))
-                            .foregroundStyle(AppPalette.ink)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isExporting)
-                    .accessibilityLabel("Save generated video")
+                    generatedVideoCard
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
 
-                    if !isSubscribed {
-                        Divider()
-
+                    HStack(spacing: 0) {
                         Button {
-                            showPaywall = true
+                            saveVideo()
                         } label: {
-                            Label("No Watermark", systemImage: "eraser")
+                            Label("Save", systemImage: "arrow.down.to.line")
                                 .font(.system(size: 21, weight: .medium))
                                 .foregroundStyle(AppPalette.ink)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 48)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Remove watermark")
+                        .disabled(isExporting)
+                        .accessibilityLabel("Save generated video")
+
+                        if !isSubscribed {
+                            Divider()
+
+                            Button {
+                                showPaywall = true
+                            } label: {
+                                Label("No Watermark", systemImage: "eraser")
+                                    .font(.system(size: 21, weight: .medium))
+                                    .foregroundStyle(AppPalette.ink)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove watermark")
+                        }
                     }
-                }
-                .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
-                .padding(.horizontal, 20)
-
-                sharePanel
+                    .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
                     .padding(.horizontal, 20)
-                    .padding(.top, 4)
 
-                legalNotice
-                    .padding(.top, 35)
-                    .padding(.bottom, 103)
+                    sharePanel
+                        .padding(.horizontal, 20)
+                        .padding(.top, 4)
+
+                    legalNotice
+                        .padding(.top, 35)
+                        .padding(.bottom, 103)
+                }
+                // A vertical ScrollView otherwise adopts the six share buttons'
+                // ideal width and recenters the whole screen beyond both edges.
+                .frame(width: proxy.size.width, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("video-generation-result")
     }
 
     private func failedContent(message: String) -> some View {
@@ -1687,10 +2009,10 @@ private struct VideoGenerationFlowView: View {
     }
 
     private var generatedVideoCard: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Color.black
 
-            generationMedia(gravity: .resizeAspect)
+            generationMedia(gravity: .resizeAspect, autoplaysGeneratedVideo: false)
 
             GeneratedContentWatermark()
                 .allowsHitTesting(false)
@@ -1706,8 +2028,25 @@ private struct VideoGenerationFlowView: View {
                     .overlay(Circle().stroke(.white.opacity(0.76), lineWidth: 1))
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .padding(12)
             .accessibilityLabel("Maximize generated video")
+
+            Button {
+                showDeleteConfirmation = true
+            } label: {
+                Image(systemName: isDeleting ? "hourglass" : "trash")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(.black.opacity(0.54), in: Circle())
+                    .overlay(Circle().stroke(AppPalette.accent.opacity(0.9), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(isDeleting)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(12)
+            .accessibilityLabel("Delete generation")
         }
         .frame(maxWidth: .infinity)
         .frame(height: 204)
@@ -1720,13 +2059,9 @@ private struct VideoGenerationFlowView: View {
                 .font(.system(size: 20, weight: .heavy))
                 .foregroundStyle(AppPalette.ink)
 
-            HStack(spacing: 18) {
-                VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareVideo)
-                VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareVideo)
-                VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareVideo)
-                VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareVideo)
-                VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareVideo)
-                VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok", action: shareVideo)
+            ViewThatFits(in: .horizontal) {
+                shareButtonRow(iconSize: 45, spacing: 4)
+                shareButtonRow(iconSize: 36, spacing: 0)
             }
         }
         .padding(17)
@@ -1804,15 +2139,29 @@ private struct VideoGenerationFlowView: View {
 
             Spacer(minLength: 26)
 
-            HStack(spacing: 21) {
-                VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareVideo)
-                VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareVideo)
-                VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareVideo)
-                VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareVideo)
-                VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareVideo)
-                VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok", action: shareVideo)
+            ViewThatFits(in: .horizontal) {
+                shareButtonRow(iconSize: 45, spacing: 4)
+                shareButtonRow(iconSize: 36, spacing: 0)
             }
+            .padding(.horizontal, 20)
             .padding(.bottom, 28)
+        }
+    }
+
+    private func shareButtonRow(iconSize: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", size: iconSize, action: shareVideo)
+                .frame(maxWidth: .infinity)
+            VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", size: iconSize, action: shareVideo)
+                .frame(maxWidth: .infinity)
+            VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", size: iconSize, action: shareVideo)
+                .frame(maxWidth: .infinity)
+            VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", size: iconSize, action: shareVideo)
+                .frame(maxWidth: .infinity)
+            VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", size: iconSize, action: shareVideo)
+                .frame(maxWidth: .infinity)
+            VideoShareIcon(symbol: "music.note", color: .black, label: "TikTok", size: iconSize, action: shareVideo)
+                .frame(maxWidth: .infinity)
         }
     }
 
@@ -1826,9 +2175,17 @@ private struct VideoGenerationFlowView: View {
     }
 
     @ViewBuilder
-    private func generationMedia(gravity: AVLayerVideoGravity) -> some View {
+    private func generationMedia(
+        gravity: AVLayerVideoGravity,
+        autoplaysGeneratedVideo: Bool = true
+    ) -> some View {
         if let generatedVideoURL {
-            RemoteLoopingVideoView(url: generatedVideoURL, videoGravity: gravity)
+            GeneratedVideoPlayerView(
+                url: generatedVideoURL,
+                videoGravity: gravity,
+                autoplay: autoplaysGeneratedVideo
+            )
+            .accessibilityIdentifier("generated-video-player")
         } else if let template {
             TemplateMediaView(item: template, gravity: gravity)
         } else if let videoName {
@@ -1868,7 +2225,9 @@ private struct VideoGenerationFlowView: View {
                         failureType: "server_task",
                         elapsedMilliseconds: pollingElapsedMilliseconds
                     )
-                    stage = .failed(task.errorMessage ?? "The model could not generate this video. Please try again.")
+                    stage = .failed(task.userFacingErrorMessage(
+                        fallback: "The model could not generate this video. Please try again."
+                    ))
                     return
                 }
             } catch {
@@ -1882,7 +2241,9 @@ private struct VideoGenerationFlowView: View {
                         failureType: AppAnalytics.apiFailureType(error),
                         elapsedMilliseconds: pollingElapsedMilliseconds
                     )
-                    stage = .failed(error.localizedDescription)
+                    stage = .failed(error.userFacingEnglishMessage(
+                        fallback: "Unable to check the video status. Please try again."
+                    ))
                     return
                 }
             }
@@ -1931,7 +2292,9 @@ private struct VideoGenerationFlowView: View {
                 AppAnalytics.contentSaved(contentType: "video", itemID: template?.id)
                 stage = .saved
             } catch {
-                exportError = error.localizedDescription
+                exportError = error.userFacingEnglishMessage(
+                    fallback: "The video could not be saved. Please try again."
+                )
             }
         }
     }
@@ -1951,14 +2314,16 @@ private struct VideoGenerationFlowView: View {
                 )
                 showShareSheet = true
             } catch {
-                exportError = error.localizedDescription
+                exportError = error.userFacingEnglishMessage(
+                    fallback: "The video could not be shared. Please try again."
+                )
             }
         }
     }
 
     private func deleteGeneration() {
         guard !isDeleting else { return }
-        guard let taskID else {
+        guard let taskID = submittedTaskID ?? taskID else {
             onClose()
             return
         }
@@ -1969,7 +2334,9 @@ private struct VideoGenerationFlowView: View {
                 try await AppAccountStore.shared.deleteHistoryTask(id: taskID)
                 onClose()
             } catch {
-                exportError = error.localizedDescription
+                exportError = error.userFacingEnglishMessage(
+                    fallback: "The creation could not be deleted. Please try again."
+                )
             }
         }
     }
@@ -2036,7 +2403,12 @@ private struct VideoGenerationPreviewView: View {
     @ViewBuilder
     private var previewMedia: some View {
         if let generatedVideoURL {
-            RemoteLoopingVideoView(url: generatedVideoURL, videoGravity: .resizeAspect)
+            GeneratedVideoPlayerView(
+                url: generatedVideoURL,
+                videoGravity: .resizeAspect,
+                autoplay: true
+            )
+            .accessibilityIdentifier("generated-video-player-fullscreen")
         } else if let template {
             TemplateMediaView(item: template, gravity: .resizeAspect)
         } else if let videoName {
@@ -2097,14 +2469,15 @@ private struct VideoShareIcon: View {
     let symbol: String
     let color: Color
     let label: String
+    var size: CGFloat = 45
     var action: () -> Void = {}
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 21, weight: .bold))
+                .font(.system(size: max(17, size * 0.47), weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 45, height: 45)
+                .frame(width: size, height: size)
                 .background(color, in: Circle())
         }
         .buttonStyle(.plain)
@@ -2120,11 +2493,11 @@ struct FixedFeatureView: View {
     @Binding var credits: Int
 
     private var photoToVideoCover: TemplateItem? {
-        quickActions.first { $0.feature == .photoToVideo }?.item
+        FixedFeatureCoverResolver.item(for: .photoToVideo, in: quickActions)
     }
 
     private var textToVideoCover: TemplateItem? {
-        quickActions.first { $0.feature == .textToVideo }?.item
+        FixedFeatureCoverResolver.item(for: .textToVideo, in: quickActions)
     }
 
     private func generationTarget(for feature: FixedFeature) -> FeatureGenerationTarget? {
@@ -2144,6 +2517,7 @@ struct FixedFeatureView: View {
         case .oneTapRestore:
             FixedPhotoRestoreFeature(
                 kind: .restore,
+                coverItem: FixedFeatureCoverResolver.item(for: .oneTapRestore, in: quickActions),
                 cost: creditPricing.oneTapRestoreCredits,
                 generationTarget: generationTarget(for: .oneTapRestore),
                 recommendationItems: imageRecommendationItems,
@@ -2153,6 +2527,7 @@ struct FixedFeatureView: View {
         case .enhancePhoto:
             FixedPhotoRestoreFeature(
                 kind: .enhance,
+                coverItem: FixedFeatureCoverResolver.item(for: .enhancePhoto, in: quickActions),
                 cost: creditPricing.enhancePhotoCredits,
                 generationTarget: generationTarget(for: .enhancePhoto),
                 recommendationItems: imageRecommendationItems,
@@ -2210,6 +2585,23 @@ struct FixedFeatureView: View {
     }
 }
 
+enum FixedFeatureCoverResolver {
+    static func item(
+        for feature: FixedFeature,
+        in quickActions: [HomeQuickAction]
+    ) -> TemplateItem? {
+        guard let item = quickActions.first(where: { $0.feature == feature })?.item,
+              item.comparisonCover != nil
+                || item.coverImageURL != nil
+                || item.coverVideoURL != nil
+                || !item.imageName.isEmpty
+                || item.videoName != nil else {
+            return nil
+        }
+        return item
+    }
+}
+
 private struct FixedFeatureHeader: View {
     let title: String
     let showsHelp: Bool
@@ -2235,6 +2627,7 @@ private struct FixedFeatureHeader: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back")
+                .accessibilityIdentifier("fixed-feature-back-button")
 
                 Spacer(minLength: 0)
 
@@ -2265,7 +2658,7 @@ private struct FixedFeatureScaffold<Content: View, Footer: View>: View {
     let showsHelp: Bool
     let onBack: () -> Void
     let onHelp: () -> Void
-    let content: Content
+    let content: (CGSize) -> Content
     let footer: Footer
 
     init(
@@ -2273,14 +2666,14 @@ private struct FixedFeatureScaffold<Content: View, Footer: View>: View {
         showsHelp: Bool = false,
         onBack: @escaping () -> Void,
         onHelp: @escaping () -> Void = {},
-        @ViewBuilder content: () -> Content,
+        @ViewBuilder content: @escaping (CGSize) -> Content,
         @ViewBuilder footer: () -> Footer
     ) {
         self.title = title
         self.showsHelp = showsHelp
         self.onBack = onBack
         self.onHelp = onHelp
-        self.content = content()
+        self.content = content
         self.footer = footer()
     }
 
@@ -2297,13 +2690,27 @@ private struct FixedFeatureScaffold<Content: View, Footer: View>: View {
                         onHelp: onHelp
                     )
                     .frame(width: proxy.size.width)
+                    .zIndex(1)
 
-                    ScrollView {
-                        content
-                            .frame(width: max(0, proxy.size.width - 40), alignment: .leading)
-                            .padding(.bottom, 24)
+                    GeometryReader { contentProxy in
+                        let contentSize = CGSize(
+                            width: max(0, contentProxy.size.width - 40),
+                            height: max(0, contentProxy.size.height)
+                        )
+
+                        content(contentSize)
+                            .frame(
+                                width: contentSize.width,
+                                height: contentSize.height,
+                                alignment: .topLeading
+                            )
+                            .frame(
+                                maxWidth: .infinity,
+                                maxHeight: .infinity,
+                                alignment: .top
+                            )
                     }
-                    .scrollIndicators(.hidden)
+                    .clipped()
 
                     footer
                         .padding(.horizontal, 20)
@@ -2362,14 +2769,15 @@ private enum FixedPhotoFeatureKind {
 
 private struct FixedPhotoRestoreFeature: View {
     let kind: FixedPhotoFeatureKind
+    let coverItem: TemplateItem?
     let cost: Int
     let generationTarget: FeatureGenerationTarget?
     let recommendationItems: [TemplateItem]
     let photoToVideoGenerationTarget: FeatureGenerationTarget?
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedItem: PhotosPickerItem?
     @State private var selectedImage: UIImage?
+    @State private var showPhotoSelection = false
     @State private var showTips = false
     @State private var showCredits = false
     @State private var showDraftWarning = false
@@ -2387,17 +2795,31 @@ private struct FixedPhotoRestoreFeature: View {
                 showsHelp: true,
                 onBack: requestDismiss,
                 onHelp: { showTips = true }
-            ) {
-                VStack(alignment: .leading, spacing: 18) {
-                    PhotosPicker(selection: $selectedItem, matching: .images) {
+            ) { contentSize in
+                let layout = FixedPhotoUploadLayout(viewportSize: contentSize)
+
+                VStack(alignment: .leading, spacing: layout.spacing) {
+                    Button {
+                        showPhotoSelection = true
+                    } label: {
                         ZStack(alignment: .bottom) {
                             if selectedImage == nil {
-                                Image(kind.featureCardImageName)
-                                    .resizable()
-                                    .scaledToFill()
+                                if let coverItem {
+                                    // The Home shortcut and its destination use
+                                    // the exact same CMS item and media URLs.
+                                    // This is a separate player instance because
+                                    // the destination is a separate view hierarchy.
+                                    FrostedTemplatePreview(item: coverItem)
+                                } else {
+                                    Image(kind.featureCardImageName)
+                                        .resizable()
+                                        .scaledToFill()
+                                }
                             } else {
                                 restorePreview
+                            }
 
+                            if selectedImage != nil || coverItem != nil {
                                 LinearGradient(
                                     colors: [.clear, .black.opacity(0.42)],
                                     startPoint: .center,
@@ -2407,7 +2829,7 @@ private struct FixedPhotoRestoreFeature: View {
                                 HStack(spacing: 12) {
                                     FeatureAddPhotoIcon()
                                         .frame(width: 31, height: 31)
-                                    Text("Change Photo")
+                                    Text(selectedImage == nil ? "Choose Photo" : "Change Photo")
                                         .font(.system(size: 21, weight: .bold))
                                 }
                                 .foregroundStyle(.white)
@@ -2419,10 +2841,11 @@ private struct FixedPhotoRestoreFeature: View {
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .aspectRatio(1168.0 / 1560.0, contentMode: .fit)
+                        .frame(height: layout.previewHeight)
                         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("fixed-photo-upload-preview")
                     .overlay(alignment: .bottomTrailing) {
                         if selectedImage != nil {
                             Button {
@@ -2441,11 +2864,21 @@ private struct FixedPhotoRestoreFeature: View {
                     }
 
                     Text(kind.tipsTitle)
-                        .font(.system(size: 22, weight: .heavy))
+                        .font(.system(size: layout.titleFontSize, weight: .heavy))
                         .foregroundStyle(AppPalette.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .frame(height: layout.titleHeight, alignment: .leading)
 
-                    FeatureTipRow(kind: kind)
+                    FeatureTipRow(
+                        kind: kind,
+                        imageHeight: layout.tipImageHeight,
+                        iconSize: layout.tipIconSize,
+                        spacing: layout.tipSpacing
+                    )
+                    .accessibilityIdentifier("fixed-photo-tip-row")
                 }
+                .frame(height: contentSize.height, alignment: .top)
             } footer: {
                 FeaturePrimaryButton(
                     title: isGenerating ? "Generating…" : "Generate",
@@ -2474,6 +2907,14 @@ private struct FixedPhotoRestoreFeature: View {
         }
         .fullScreenCover(isPresented: $showCredits) {
             CreditCenterView(credits: $credits)
+        }
+        .sheet(isPresented: $showPhotoSelection) {
+            PhotoSelectionSheet { images in
+                selectedImage = images.first
+            }
+            .presentationDetents([.fraction(0.73), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(30)
         }
         .fullScreenCover(isPresented: $showCrop) {
             if let selectedImage {
@@ -2509,30 +2950,16 @@ private struct FixedPhotoRestoreFeature: View {
         } message: {
             Text(generationError ?? "Please try again.")
         }
-        .onChange(of: selectedItem) { _, item in
-            loadImage(item)
-        }
     }
 
     @ViewBuilder
     private var restorePreview: some View {
         if let selectedImage {
-            Image(uiImage: selectedImage)
-                .resizable()
-                .scaledToFill()
+            FrostedUploadedPhoto(image: selectedImage)
         } else {
             Image(kind.featureCardImageName)
                 .resizable()
                 .scaledToFill()
-        }
-    }
-
-    private func loadImage(_ item: PhotosPickerItem?) {
-        guard let item else { return }
-        Task {
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else { return }
-            await MainActor.run { selectedImage = image }
         }
     }
 
@@ -2583,7 +3010,7 @@ private struct FixedPhotoRestoreFeature: View {
                     imageURLs: [imageURL],
                     prompt: nil,
                     options: PhotoReviveImageGenerationOptions(
-                        resolution: "1K",
+                        resolution: PhotoReviveImageGenerationOptions.providerDefaultResolution,
                         aspectRatio: "9:16",
                         outputCount: 1
                     )
@@ -2596,7 +3023,9 @@ private struct FixedPhotoRestoreFeature: View {
                 generationTaskID = submission.taskID
                 showGenerationFlow = true
             } catch {
-                generationError = error.localizedDescription
+                generationError = error.userFacingEnglishMessage(
+                    fallback: "Image generation failed. Please try again."
+                )
             }
         }
     }
@@ -2604,6 +3033,9 @@ private struct FixedPhotoRestoreFeature: View {
 
 private struct FeatureTipRow: View {
     let kind: FixedPhotoFeatureKind
+    var imageHeight: CGFloat = 76
+    var iconSize: CGFloat = 25
+    var spacing: CGFloat = 8
 
     private var items: [(String, String, Bool)] {
         switch kind {
@@ -2617,16 +3049,16 @@ private struct FeatureTipRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                VStack(spacing: 8) {
+                VStack(spacing: spacing) {
                     Image(item.0)
                         .resizable()
                         .scaledToFill()
                         .frame(maxWidth: .infinity)
-                        .frame(height: 76)
+                        .frame(height: imageHeight)
                         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
 
                     Image(systemName: item.2 ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.system(size: 25, weight: .bold))
+                        .font(.system(size: iconSize, weight: .bold))
                         .foregroundStyle(item.2 ? Color(red: 0.58, green: 0.69, blue: 0.40) : Color(red: 0.84, green: 0.24, blue: 0.20))
                 }
                 .frame(maxWidth: .infinity)
@@ -2770,6 +3202,7 @@ private struct FeaturePrimaryButton: View {
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(AppPalette.ink, lineWidth: 1.2))
         }
         .buttonStyle(TemplatePressStyle())
+        .accessibilityIdentifier("fixed-feature-primary-action")
         .fullScreenCover(isPresented: $showLogin, onDismiss: {
             if !isLoggedIn { pendingLoginAction = nil }
         }) {
@@ -2875,8 +3308,8 @@ private struct FixedVideoGeneratorFeature: View {
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
     @State private var mode: FixedVideoGeneratorMode
-    @State private var selectedItem: PhotosPickerItem?
     @State private var selectedImage: UIImage?
+    @State private var showPhotoSelection = false
     @State private var prompt = ""
     @State private var showSettings = false
     @State private var showCredits = false
@@ -2885,7 +3318,7 @@ private struct FixedVideoGeneratorFeature: View {
     @State private var soundEnabled = false
     @State private var multiShotEnabled = false
     @State private var duration = "5s"
-    @State private var resolution = "540p"
+    @State private var resolution = "480p"
     @State private var ratio = "9:16"
     @State private var showGenerationFlow = false
     @State private var isGenerating = false
@@ -2927,22 +3360,28 @@ private struct FixedVideoGeneratorFeature: View {
                 title: "Video Generator",
                 showsHelp: true,
                 onBack: requestDismiss
-            ) {
-                VStack(alignment: .leading, spacing: 16) {
+            ) { contentSize in
+                let layout = FixedVideoUploadLayout(viewportSize: contentSize)
+
+                VStack(alignment: .leading, spacing: layout.spacing) {
                     FeatureModeTabs(
                         options: [("Image to Video", .image), ("Text To Video", .text)],
                         selection: $mode
                     )
+                    .frame(height: layout.tabsHeight)
 
                     if mode == .image {
-                        PhotosPicker(selection: $selectedItem, matching: .images) {
+                        Button {
+                            showPhotoSelection = true
+                        } label: {
                             FeatureVideoGeneratorPreview(
                                 image: selectedImage,
                                 template: imageCoverItem,
                                 showsChoosePhoto: selectedImage == nil,
                                 prompt: selectedImage == nil
                                     ? ""
-                                    : prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    : prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                                height: layout.previewHeight
                             )
                         }
                         .buttonStyle(.plain)
@@ -2963,21 +3402,24 @@ private struct FixedVideoGeneratorFeature: View {
                             image: nil,
                             template: textCoverItem,
                             showsChoosePhoto: false,
-                            prompt: ""
+                            prompt: "",
+                            height: layout.previewHeight
                         )
                     }
 
                     FeaturePromptBox(
                         text: $prompt,
                         placeholder: mode == .image ? "Describe motion you want to add to your photo" : "Describe your video vision here",
-                        height: 220
+                        height: layout.promptHeight
                     )
 
                     FeatureSettingsSummary(
                         values: [soundEnabled ? "sound" : "mute", multiShotEnabled ? "multi" : "single", duration, resolution, ratio],
                         onTap: { showSettings = true }
                     )
+                    .frame(height: layout.settingsHeight)
                 }
+                .frame(height: contentSize.height, alignment: .top)
             } footer: {
                 FeaturePrimaryButton(
                     title: isGenerating ? "Generating…" : "Generate",
@@ -2994,7 +3436,14 @@ private struct FixedVideoGeneratorFeature: View {
                     .zIndex(2)
             }
         }
-        .onChange(of: selectedItem) { _, item in loadImage(item) }
+        .sheet(isPresented: $showPhotoSelection) {
+            PhotoSelectionSheet { images in
+                selectedImage = images.first
+            }
+            .presentationDetents([.fraction(0.73), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(30)
+        }
         .sheet(isPresented: $showSettings) {
             FeatureSettingsSheet(
                 mode: .video,
@@ -3048,14 +3497,6 @@ private struct FixedVideoGeneratorFeature: View {
             sound: soundEnabled,
             multiShot: multiShotEnabled
         )
-    }
-
-    private func loadImage(_ item: PhotosPickerItem?) {
-        guard let item else { return }
-        Task {
-            guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else { return }
-            await MainActor.run { selectedImage = image }
-        }
     }
 
     private func requestDismiss() {
@@ -3130,7 +3571,9 @@ private struct FixedVideoGeneratorFeature: View {
                 generationTaskID = submission.taskID
                 showGenerationFlow = true
             } catch {
-                generationError = error.localizedDescription
+                generationError = error.userFacingEnglishMessage(
+                    fallback: "Video generation failed. Please try again."
+                )
             }
         }
     }
@@ -3141,23 +3584,13 @@ private struct FeatureVideoGeneratorPreview: View {
     let template: TemplateItem?
     let showsChoosePhoto: Bool
     let prompt: String
-    @State private var loadedTemplateAspectRatio: CGFloat?
-
-    private var mediaAspectRatio: CGFloat {
-        if let image, image.size.height > 0 {
-            return image.size.width / image.size.height
-        }
-        if let loadedTemplateAspectRatio, loadedTemplateAspectRatio > 0 {
-            return loadedTemplateAspectRatio
-        }
-        return template?.orientation == .portrait ? 9.0 / 16.0 : 16.0 / 9.0
-    }
+    let height: CGFloat
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
                 if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
+                    FrostedUploadedPhoto(image: image)
                 } else if let template {
                     TemplateMediaView(
                         item: template,
@@ -3216,62 +3649,9 @@ private struct FeatureVideoGeneratorPreview: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .aspectRatio(mediaAspectRatio, contentMode: .fit)
+        .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.75), lineWidth: 1.2))
-        .animation(.easeInOut(duration: 0.22), value: mediaAspectRatio)
-        .task(id: template?.id) {
-            guard image == nil, let template else {
-                loadedTemplateAspectRatio = nil
-                return
-            }
-            loadedTemplateAspectRatio = await Self.aspectRatio(for: template)
-        }
-    }
-
-    private static func aspectRatio(for template: TemplateItem) async -> CGFloat? {
-        if let videoURL = template.coverVideoURL ?? bundledVideoURL(named: template.videoName),
-           let ratio = await videoAspectRatio(at: videoURL) {
-            return ratio
-        }
-
-        if let imageURL = template.coverImageURL,
-           let (data, _) = try? await URLSession.shared.data(from: imageURL),
-           let image = UIImage(data: data),
-           image.size.height > 0 {
-            return image.size.width / image.size.height
-        }
-
-        if !template.imageName.isEmpty,
-           let image = UIImage(named: template.imageName),
-           image.size.height > 0 {
-            return image.size.width / image.size.height
-        }
-
-        return nil
-    }
-
-    private static func bundledVideoURL(named name: String?) -> URL? {
-        guard let name else { return nil }
-        if let url = Bundle.main.url(forResource: name, withExtension: "mp4") {
-            return url
-        }
-        return Bundle.main.url(forResource: name, withExtension: "mov")
-    }
-
-    private static func videoAspectRatio(at url: URL) async -> CGFloat? {
-        let asset = AVURLAsset(url: url)
-        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-              let naturalSize = try? await track.load(.naturalSize),
-              let transform = try? await track.load(.preferredTransform) else {
-            return nil
-        }
-
-        let displayedSize = naturalSize.applying(transform)
-        let width = abs(displayedSize.width)
-        let height = abs(displayedSize.height)
-        guard width > 0, height > 0 else { return nil }
-        return width / height
     }
 }
 
@@ -3325,13 +3705,6 @@ private struct FeaturePromptBox: View {
                 characterLimit: 2000,
                 insertionRequest: insertionRequest
             )
-
-            Text("\(ImageReferencePromptText.displayCharacterCount(in: text))/2000")
-                .font(.system(size: 14))
-                .foregroundStyle(AppPalette.surfaceEdge)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .padding(16)
-                .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity)
         .frame(height: height)
@@ -3344,16 +3717,6 @@ private struct FeaturePromptBox: View {
 private struct PromptEditorInsertionRequest: Equatable {
     let id = UUID()
     let text: String
-}
-
-private enum ImageReferencePromptText {
-    static func displayCharacterCount(in text: String) -> Int {
-        text.replacingOccurrences(
-            of: #"@Image\d+"#,
-            with: "@",
-            options: [.regularExpression, .caseInsensitive]
-        ).count
-    }
 }
 
 private extension NSAttributedString.Key {
@@ -3606,30 +3969,32 @@ private struct FeatureSettingsSummary: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 ForEach(Array(values.enumerated()), id: \.offset) { _, value in
                     if value == "mute" {
                         Image(systemName: "speaker.slash.fill")
-                            .frame(width: 34, height: 34)
+                            .frame(width: 30, height: 30)
                             .background(Color.white.opacity(0.35), in: Circle())
                     } else if value == "sound" {
                         Image(systemName: "speaker.wave.2.fill")
-                            .frame(width: 34, height: 34)
+                            .frame(width: 30, height: 30)
                             .background(Color.white.opacity(0.35), in: Circle())
                     } else if value == "single" {
                         Image(systemName: "video.slash.fill")
-                            .frame(width: 34, height: 34)
+                            .frame(width: 30, height: 30)
                             .background(Color.white.opacity(0.35), in: Circle())
                     } else if value == "multi" {
                         Image(systemName: "video.badge.waveform.fill")
-                            .frame(width: 34, height: 34)
+                            .frame(width: 30, height: 30)
                             .background(Color.white.opacity(0.35), in: Circle())
                     } else {
                         Text(value)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(AppPalette.surfaceEdge)
-                            .padding(.horizontal, 11)
-                            .frame(height: 36)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .padding(.horizontal, 8)
+                            .frame(height: 34)
                             .background(Color.white.opacity(0.35), in: Capsule())
                     }
                 }
@@ -3638,7 +4003,7 @@ private struct FeatureSettingsSummary: View {
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(AppPalette.surfaceEdge)
             }
-            .padding(.horizontal, 15)
+            .padding(.horizontal, 12)
             .frame(height: 48)
             .background(Color.white.opacity(0.46), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.72), lineWidth: 1.2))
@@ -3658,9 +4023,9 @@ struct ImageGenerationUploadView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("isLoggedIn") private var isLoggedIn = false
     @AppStorage("hasAcceptedImageAIDataNotice") private var hasAcceptedDataNotice = false
-    @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage?]
-    @State private var resolution = "1k"
+    @State private var showPhotoSelection = false
+    @State private var resolution = PhotoReviveImageGenerationOptions.providerDefaultResolution
     @State private var ratio = "9:16"
     @State private var outputCount = "1"
     @State private var showSettings = false
@@ -3698,21 +4063,26 @@ struct ImageGenerationUploadView: View {
                 title: template.title,
                 showsHelp: false,
                 onBack: { dismiss() }
-            ) {
-                VStack(alignment: .leading, spacing: 17) {
-                    templatePreview
+            ) { contentSize in
+                let layout = ImageTemplateUploadLayout(viewportSize: contentSize)
+
+                VStack(alignment: .leading, spacing: layout.spacing) {
+                    templatePreview(height: layout.previewHeight)
 
                     Text("Upload Image")
                         .font(.system(size: 23, weight: .medium))
                         .foregroundStyle(AppPalette.ink)
+                        .frame(height: layout.titleHeight, alignment: .leading)
 
-                    uploadSlots
+                    uploadSlots(height: layout.uploadHeight)
 
                     FeatureSettingsSummary(
                         values: ["\(outputCount) Img", resolution, ratio],
                         onTap: { showSettings = true }
                     )
+                    .frame(height: layout.settingsHeight)
                 }
+                .frame(height: contentSize.height, alignment: .top)
                 .accessibilityIdentifier("image-generation-upload")
             } footer: {
                 ImageGenerationPrimaryButton(
@@ -3732,8 +4102,13 @@ struct ImageGenerationUploadView: View {
                 .zIndex(5)
             }
         }
-        .onChange(of: selectedItems) { _, items in
-            loadImages(items)
+        .sheet(isPresented: $showPhotoSelection) {
+            PhotoSelectionSheet(maximumSelectionCount: template.imageUploadCount) { images in
+                applySelectedImages(images)
+            }
+            .presentationDetents([.fraction(0.73), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(30)
         }
         .sheet(isPresented: $showSettings) {
             FeatureSettingsSheet(
@@ -3808,18 +4183,22 @@ struct ImageGenerationUploadView: View {
                 className: "ImageGenerationUploadView"
             )
         }
+#if DEBUG
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showImageDataNoticePreview") else { return }
+            showDataNotice = true
+        }
+#endif
     }
 
-    private var templatePreview: some View {
+    private func templatePreview(height: CGFloat) -> some View {
         ZStack(alignment: .bottom) {
             FrostedTemplatePreview(item: template)
 
             HStack(spacing: 10) {
                 ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
                     if let image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFill()
+                        FrostedUploadedPhoto(image: image)
                             .frame(width: 49, height: 58)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.82), lineWidth: 1))
@@ -3835,7 +4214,7 @@ struct ImageGenerationUploadView: View {
             .padding(.bottom, 18)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 302)
+        .frame(height: height)
         .background(Color(.systemGray4))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
@@ -3845,54 +4224,48 @@ struct ImageGenerationUploadView: View {
         .clipped()
     }
 
-    private var uploadSlots: some View {
+    private func uploadSlots(height: CGFloat) -> some View {
         GeometryReader { proxy in
             let spacing: CGFloat = 14
             let uploadCount = template.imageUploadCount
             let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
             let slotWidth = uploadCount == 1
                 ? min(151, proxy.size.width)
-                : uploadCount == 2
-                    ? availableWidth / 2
-                    : 146
+                : max(0, availableWidth / CGFloat(uploadCount))
 
-            ScrollView(.horizontal) {
-                PhotosPicker(
-                    selection: $selectedItems,
-                    maxSelectionCount: uploadCount,
-                    matching: .images
-                ) {
-                    HStack(spacing: spacing) {
-                        ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                            ImageGenerationUploadSlot(
-                                image: image,
-                                label: "Image\(index + 1)",
-                                placeholderURL: template.uploadPlaceholderURL(at: index)
-                            )
-                            .frame(width: slotWidth)
-                            .accessibilityIdentifier("image-upload-slot-\(index + 1)")
-                        }
+            Button {
+                showPhotoSelection = true
+            } label: {
+                HStack(spacing: spacing) {
+                    ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                        ImageGenerationUploadSlot(
+                            image: image,
+                            label: "Image\(index + 1)",
+                            placeholderURL: template.uploadPlaceholderURL(at: index),
+                            height: height
+                        )
+                        .frame(width: slotWidth)
+                        .accessibilityIdentifier("image-upload-slot-\(index + 1)")
                     }
-                    .frame(minWidth: proxy.size.width, alignment: .center)
                 }
-                .buttonStyle(.plain)
-                .overlay(alignment: .bottomLeading) {
-                    HStack(spacing: spacing) {
-                        ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                            UploadPhotoEditOverlay(
-                                hasImage: image != nil,
-                                width: slotWidth,
-                                height: 188,
-                                action: { showCropIndex = index }
-                            )
-                        }
-                    }
-                    .frame(minWidth: proxy.size.width, alignment: .center)
-                }
+                .frame(width: proxy.size.width, alignment: .center)
             }
-            .scrollIndicators(.hidden)
+            .buttonStyle(.plain)
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: spacing) {
+                    ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                        UploadPhotoEditOverlay(
+                            hasImage: image != nil,
+                            width: slotWidth,
+                            height: height,
+                            action: { showCropIndex = index }
+                        )
+                    }
+                }
+                .frame(width: proxy.size.width, alignment: .center)
+            }
         }
-        .frame(height: 188)
+        .frame(height: height)
     }
 
     private func beginGeneration() {
@@ -4005,7 +4378,9 @@ struct ImageGenerationUploadView: View {
                     stage: "submission",
                     failureType: AppAnalytics.apiFailureType(error)
                 )
-                generationError = error.localizedDescription
+                generationError = error.userFacingEnglishMessage(
+                    fallback: "Image generation failed. Please try again."
+                )
             }
         }
     }
@@ -4024,18 +4399,18 @@ struct ImageGenerationUploadView: View {
         }
     }
 
-    private func loadImages(_ items: [PhotosPickerItem]) {
-        Task {
-            var images = selectedImages
-            for (index, item) in items.prefix(template.imageUploadCount).enumerated() {
-                guard let data = try? await item.loadTransferable(type: Data.self),
-                      let image = UIImage(data: data) else { continue }
-                if images.indices.contains(index) {
-                    images[index] = image
-                }
+    private func applySelectedImages(_ images: [UIImage]) {
+        guard !images.isEmpty else { return }
+        var updatedImages = selectedImages
+        if images.count == 1,
+           let emptyIndex = updatedImages.firstIndex(where: { $0 == nil }) {
+            updatedImages[emptyIndex] = images[0]
+        } else {
+            for (index, image) in images.prefix(updatedImages.count).enumerated() {
+                updatedImages[index] = image
             }
-            await MainActor.run { selectedImages = images }
         }
+        selectedImages = updatedImages
     }
 }
 
@@ -4083,23 +4458,24 @@ private struct ImageGenerationUploadSlot: View {
     let image: UIImage?
     let label: String
     let placeholderURL: URL?
+    let height: CGFloat
 
     init(
         image: UIImage?,
         label: String,
-        placeholderURL: URL? = nil
+        placeholderURL: URL? = nil,
+        height: CGFloat = 188
     ) {
         self.image = image
         self.label = label
         self.placeholderURL = placeholderURL
+        self.height = height
     }
 
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
+                FrostedUploadedPhoto(image: image)
             } else if let placeholderURL {
                 CachedRemoteImage(url: placeholderURL) { image in
                     Image(uiImage: image).resizable().scaledToFill()
@@ -4134,25 +4510,55 @@ private struct ImageGenerationUploadSlot: View {
                 .padding(7)
             }
         }
-        .frame(height: 188)
-        .background(Color(.systemGray5))
+        .frame(height: height)
+        .background(
+            Color(red: 1.00, green: 0.96, blue: 0.88),
+            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(AppPalette.surfaceEdge.opacity(0.90), lineWidth: 1.1)
+                .stroke(AppPalette.surfaceEdge.opacity(0.52), lineWidth: 1)
         )
+        .shadow(color: AppPalette.brownInk.opacity(0.09), radius: 9, y: 4)
     }
 
     private var uploadPlaceholder: some View {
         ZStack {
-            Color(.systemGray4)
-            VStack(spacing: 8) {
-                Image(systemName: "photo.badge.plus")
-                    .font(.system(size: 33, weight: .medium))
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.92),
+                    AppPalette.backgroundTop.opacity(0.94),
+                    AppPalette.surfaceCenter.opacity(0.58)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            RadialGradient(
+                colors: [Color.white.opacity(0.68), Color.clear],
+                center: .topLeading,
+                startRadius: 6,
+                endRadius: 150
+            )
+
+            VStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.72))
+                    Circle()
+                        .stroke(Color.white.opacity(0.90), lineWidth: 1)
+                    Image(systemName: "photo.badge.plus")
+                        .font(.system(size: 29, weight: .medium))
+                        .foregroundStyle(AppPalette.orange.opacity(0.86))
+                }
+                .frame(width: 56, height: 56)
+                .shadow(color: AppPalette.brownInk.opacity(0.08), radius: 7, y: 3)
+
                 Text("Upload Image")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppPalette.brownInk.opacity(0.86))
             }
-            .foregroundStyle(AppPalette.surfaceEdge)
         }
     }
 }
@@ -4236,68 +4642,144 @@ private struct ImageAIDataProcessingNotice: View {
     let onCancel: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.68)
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            let cardHeight = min(max(proxy.size.height - 44, 420), 700)
 
-            VStack(spacing: 0) {
-                Image("RewardsBellIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 96, height: 96)
-                    .offset(y: -48)
-                    .padding(.bottom, -34)
+            ZStack {
+                Color.black.opacity(0.68)
+                    .ignoresSafeArea()
 
-                Text("AI Data Processing\nNotice")
-                    .font(.system(size: 25, weight: .heavy))
-                    .foregroundStyle(AppPalette.brownInk)
-                    .multilineTextAlignment(.center)
+                VStack(spacing: 0) {
+                    noticeHeader
 
-                Text("""
-                To generate images, your selected photos and input data will be sent to our servers and may be processed by third-party AI service providers.
+                    ScrollView {
+                        noticeCopy
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 18)
+                    }
+                    .scrollIndicators(.hidden)
+                    .scrollBounceBehavior(.basedOnSize)
 
-                Data shared includes:
-                • Selected photos
-                • Generation parameters (e.g. prompts, styles)
+                    Divider()
+                        .overlay(AppPalette.surfaceEdge.opacity(0.22))
 
-                Purpose:
-                Your data is used only to generate the requested content and is not used for training or unrelated purposes.
-
-                By tapping “Agree and Continue”, you agree to this data processing and sharing.
-                """)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(AppPalette.brownInk)
-                .padding(.top, 18)
-
-                Button(action: onAgree) {
-                    Text("Agree and Continue")
-                        .font(.system(size: 21, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 56)
-                        .background(AppPalette.orange, in: Capsule())
+                    noticeActions
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 20)
-
-                Button(action: onCancel) {
-                    Text("Cancel")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(AppPalette.surfaceEdge)
-                        .frame(height: 48)
-                }
-                .buttonStyle(.plain)
+                .frame(maxWidth: 380)
+                .frame(height: cardHeight)
+                .background(
+                    Color(red: 1.0, green: 0.97, blue: 0.89),
+                    in: RoundedRectangle(cornerRadius: 30, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(AppPalette.surfaceEdge.opacity(0.88), lineWidth: 1.4)
+                )
+                .shadow(color: .black.opacity(0.24), radius: 24, y: 12)
+                .padding(.horizontal, 24)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("image-ai-data-notice")
             }
-            .padding(.horizontal, 21)
-            .padding(.bottom, 11)
-            .background(Color(red: 1.0, green: 0.97, blue: 0.89), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(AppPalette.surfaceEdge.opacity(0.92), lineWidth: 1.4)
-            )
-            .padding(.horizontal, 43)
-            .accessibilityIdentifier("image-ai-data-notice")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var noticeHeader: some View {
+        VStack(spacing: 11) {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 1.0, green: 0.88, blue: 0.62))
+
+                Circle()
+                    .stroke(.white.opacity(0.92), lineWidth: 2)
+
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 29, weight: .semibold))
+                    .foregroundStyle(AppPalette.orange)
+            }
+            .frame(width: 64, height: 64)
+            .shadow(color: AppPalette.brownInk.opacity(0.13), radius: 6, y: 3)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Data privacy")
+            .accessibilityIdentifier("image-ai-data-notice-icon")
+
+            Text("AI Data Processing Notice")
+                .font(.system(size: 24, weight: .heavy))
+                .foregroundStyle(AppPalette.brownInk)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+    }
+
+    private var noticeCopy: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("To generate images, your selected photos and input data will be sent to our servers and may be processed by third-party AI service providers.")
+
+            VStack(alignment: .leading, spacing: 9) {
+                noticeSectionTitle("Data shared includes")
+                noticeBullet("Selected photos")
+                noticeBullet("Generation parameters, such as prompts and styles")
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                noticeSectionTitle("Purpose")
+                Text("Your data is used only to generate the requested content and is not used for training or unrelated purposes.")
+            }
+
+            Text("By tapping “Agree and Continue”, you agree to this data processing and sharing.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(AppPalette.brownInk.opacity(0.74))
+        }
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(AppPalette.brownInk)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func noticeSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(AppPalette.brownInk)
+    }
+
+    private func noticeBullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Circle()
+                .fill(AppPalette.orange)
+                .frame(width: 6, height: 6)
+                .padding(.top, 7)
+
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var noticeActions: some View {
+        VStack(spacing: 4) {
+            Button(action: onAgree) {
+                Text("Agree and Continue")
+                    .font(.system(size: 19, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(AppPalette.orange, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("image-ai-data-notice-agree")
+
+            Button(action: onCancel) {
+                Text("Cancel")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(AppPalette.surfaceEdge)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("image-ai-data-notice-cancel")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 13)
+        .padding(.bottom, 10)
     }
 }
 
@@ -4742,7 +5224,9 @@ private struct ImageGenerationFlowView: View {
                 AppAnalytics.contentSaved(contentType: "image", itemID: template.id)
                 stage = .saved
             } catch {
-                exportError = error.localizedDescription
+                exportError = error.userFacingEnglishMessage(
+                    fallback: "The image could not be saved. Please try again."
+                )
             }
         }
     }
@@ -4760,7 +5244,9 @@ private struct ImageGenerationFlowView: View {
                 )
                 showShareSheet = true
             } catch {
-                exportError = error.localizedDescription
+                exportError = error.userFacingEnglishMessage(
+                    fallback: "The image could not be shared. Please try again."
+                )
             }
         }
     }
@@ -4813,15 +5299,14 @@ private struct FixedAIImageFeature: View {
     @Binding var credits: Int
     @Environment(\.dismiss) private var dismiss
     @State private var mode: AIImageMode
-    @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
+    @State private var showPhotoSelection = false
     @State private var prompt = ""
     @State private var promptInsertionRequest: PromptEditorInsertionRequest?
     @State private var showSettings = false
     @State private var showCredits = false
-    @State private var showDraftWarning = false
     @State private var showCropIndex: Int?
-    @State private var resolution = "1k"
+    @State private var resolution = PhotoReviveImageGenerationOptions.providerDefaultResolution
     @State private var ratio = "9:16"
     @State private var outputCount = "1"
     @State private var isGenerating = false
@@ -4865,56 +5350,74 @@ private struct FixedAIImageFeature: View {
             FixedFeatureScaffold(
                 title: "AI Image",
                 showsHelp: false,
-                onBack: requestDismiss
-            ) {
-                VStack(alignment: .leading, spacing: 22) {
-                    if imageGenerationTarget != nil, textGenerationTarget != nil {
+                onBack: { dismiss() }
+            ) { contentSize in
+                let showsTabs = imageGenerationTarget != nil && textGenerationTarget != nil
+                let layout = FixedAIImageUploadLayout(
+                    viewportSize: contentSize,
+                    showsTabs: showsTabs,
+                    includesUploads: mode == .image
+                )
+
+                VStack(alignment: .leading, spacing: layout.spacing) {
+                    if showsTabs {
                         FeatureModeTabs(
                             options: [("Image to Image", .image), ("Text to Image", .text)],
                             selection: $mode
                         )
+                        .frame(height: layout.tabsHeight)
                     }
 
                     if mode == .image {
                         Text("Image(\(selectedImages.count)/3)")
                             .font(.system(size: 21, weight: .medium))
                             .foregroundStyle(AppPalette.brownInk)
+                            .frame(height: layout.titleHeight, alignment: .leading)
 
-                        ScrollView(.horizontal) {
-                            PhotosPicker(selection: $selectedItems, maxSelectionCount: 3, matching: .images) {
-                                HStack(spacing: 14) {
+                        GeometryReader { slotProxy in
+                            let slotSpacing: CGFloat = 14
+                            let slotWidth = max(0, (slotProxy.size.width - slotSpacing * 2) / 3)
+
+                            Button {
+                                showPhotoSelection = true
+                            } label: {
+                                HStack(spacing: slotSpacing) {
                                     ForEach(0..<3, id: \.self) { index in
                                         FeatureImageSlot(
                                             image: selectedImages.indices.contains(index) ? selectedImages[index] : nil,
-                                            title: index == 0 ? nil : "Optional"
+                                            title: index == 0 ? nil : "Optional",
+                                            width: slotWidth,
+                                            height: layout.uploadHeight
                                         )
                                     }
                                 }
+                                .frame(width: slotProxy.size.width)
                             }
                             .buttonStyle(.plain)
                             .overlay(alignment: .bottomLeading) {
-                                HStack(spacing: 14) {
+                                HStack(spacing: slotSpacing) {
                                     ForEach(0..<3, id: \.self) { index in
                                         UploadPhotoEditOverlay(
                                             hasImage: selectedImages.indices.contains(index),
-                                            width: 158,
-                                            height: 218,
+                                            width: slotWidth,
+                                            height: layout.uploadHeight,
                                             buttonSize: 34,
                                             padding: 8,
                                             action: { showCropIndex = index }
                                         )
                                     }
                                 }
+                                .frame(width: slotProxy.size.width)
                             }
                         }
-                        .scrollIndicators(.hidden)
+                        .frame(height: layout.uploadHeight)
                     }
 
                     ZStack(alignment: .bottom) {
                         FeaturePromptBox(
                             text: $prompt,
                             placeholder: mode == .image ? "Describe the content you want to create." : "Describe the image you want to create.Example: A puppy running on the grass.",
-                            height: mode == .image ? 220 : 280,
+                            height: layout.promptHeight,
                             insertionRequest: promptInsertionRequest
                         )
 
@@ -4928,10 +5431,11 @@ private struct FixedAIImageFeature: View {
                             .zIndex(2)
                         }
                     }
-                    .padding(.top, mode == .text ? 12 : 0)
 
                     FeatureSettingsSummary(values: ["\(outputCount) Img", resolution, ratio], onTap: { showSettings = true })
+                        .frame(height: layout.settingsHeight)
                 }
+                .frame(height: contentSize.height, alignment: .top)
             } footer: {
                 FeaturePrimaryButton(
                     title: isGenerating ? "Generating…" : "Generate",
@@ -4945,12 +5449,15 @@ private struct FixedAIImageFeature: View {
                 .disabled(isGenerating)
             }
 
-            if showDraftWarning {
-                FeatureDraftWarningOverlay(onConfirm: { dismiss() }, onCancel: { showDraftWarning = false })
-                    .zIndex(2)
-            }
         }
-        .onChange(of: selectedItems) { _, items in loadImages(items) }
+        .sheet(isPresented: $showPhotoSelection) {
+            PhotoSelectionSheet(maximumSelectionCount: 3) { images in
+                applySelectedImages(images)
+            }
+            .presentationDetents([.fraction(0.73), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(30)
+        }
         .sheet(isPresented: $showSettings) {
             AIImageOutputSettingsSheet(
                 resolution: $resolution,
@@ -5041,20 +5548,13 @@ private struct FixedAIImageFeature: View {
         promptInsertionRequest = PromptEditorInsertionRequest(text: text)
     }
 
-    private func loadImages(_ items: [PhotosPickerItem]) {
-        Task {
-            var images: [UIImage] = []
-            for item in items {
-                if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-                    images.append(image)
-                }
-            }
-            await MainActor.run { selectedImages = images }
+    private func applySelectedImages(_ images: [UIImage]) {
+        guard !images.isEmpty else { return }
+        if images.count == 1, selectedImages.count < 3 {
+            selectedImages.append(images[0])
+        } else {
+            selectedImages = Array(images.prefix(3))
         }
-    }
-
-    private func requestDismiss() {
-        if !selectedImages.isEmpty || !prompt.isEmpty { showDraftWarning = true } else { dismiss() }
     }
 
     private var activeGenerationTarget: FeatureGenerationTarget? {
@@ -5137,7 +5637,9 @@ private struct FixedAIImageFeature: View {
                 generationTaskID = submission.taskID
                 showGenerationFlow = true
             } catch {
-                generationError = error.localizedDescription
+                generationError = error.userFacingEnglishMessage(
+                    fallback: "Image generation failed. Please try again."
+                )
             }
         }
     }
@@ -5171,13 +5673,13 @@ private struct FeatureAddPhotoIcon: View {
 private struct FeatureImageSlot: View {
     let image: UIImage?
     let title: String?
+    var width: CGFloat = 158
+    var height: CGFloat = 218
 
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
+                FrostedUploadedPhoto(image: image)
             } else {
                 VStack(spacing: 10) {
                     FeatureAddPhotoIcon()
@@ -5185,12 +5687,14 @@ private struct FeatureImageSlot: View {
                     if let title {
                         Text(title)
                             .font(.system(size: 18, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
                 }
                 .foregroundStyle(AppPalette.surfaceEdge)
             }
         }
-        .frame(width: 158, height: 218)
+        .frame(width: width, height: height)
         .background(Color.white.opacity(0.40), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppPalette.surfaceEdge.opacity(0.75), lineWidth: 1.2))
@@ -5210,7 +5714,10 @@ private struct AIImageOutputSettingsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             settingSection("Resolution") {
-                singleChoiceGrid("1k", selection: $resolution)
+                singleChoiceGrid(
+                    PhotoReviveImageGenerationOptions.providerDefaultResolution,
+                    selection: $resolution
+                )
             }
 
             settingSection("Ratio") {
@@ -5299,10 +5806,14 @@ private struct FeatureSettingsSheet: View {
                         settingToggle("Sounds", off: "speaker.slash.fill", on: "speaker.wave.2.fill", value: $soundEnabled)
                         settingToggle("Multi-Shot Video", off: "video.slash.fill", on: "video.badge.waveform.fill", value: $multiShotEnabled)
                         settingGrid("Duration", values: ["5s", "8s", "10s"], selection: $duration)
-                        settingGrid("Resolution", values: ["540p", "720p", "1080p"], selection: $resolution)
+                        settingGrid("Resolution", values: ["480p", "720p", "1080p"], selection: $resolution)
                         settingGrid("Ratio", values: ["16:9", "1:1", "9:16", "4:3", "3:4"], selection: $ratio)
                     } else {
-                        settingGrid("Resolution", values: ["1k"], selection: $resolution)
+                        settingGrid(
+                            "Resolution",
+                            values: [PhotoReviveImageGenerationOptions.providerDefaultResolution],
+                            selection: $resolution
+                        )
                         settingGrid("Ratio", values: ratios, selection: $ratio)
                         settingGrid("Output Image Number", values: ["1", "2", "4"], selection: $outputCount)
                     }
@@ -5617,10 +6128,19 @@ private struct FeaturePhotoCropView: View {
     }
 
     private func freeformResizeGesture(availableSize: CGSize) -> some Gesture {
-        DragGesture()
+        // The handle moves whenever the crop frame changes size. Measuring the
+        // drag in its local coordinates feeds that movement back into the next
+        // translation value and makes the frame oscillate under the finger.
+        DragGesture(coordinateSpace: .global)
             .onChanged { value in
-                let startingAspect = resizeStartAspect ?? freeformAspect
-                if resizeStartAspect == nil { resizeStartAspect = startingAspect }
+                let startingAspect: CGFloat
+                if let resizeStartAspect {
+                    startingAspect = resizeStartAspect
+                } else {
+                    startingAspect = freeformAspect
+                    resizeStartAspect = startingAspect
+                    resetViewport()
+                }
                 let startingSize = PhotoCropRenderer.cropFrameSize(
                     in: availableSize,
                     aspectRatio: startingAspect
@@ -5634,7 +6154,6 @@ private struct FeaturePhotoCropView: View {
                     max(96, startingSize.height + value.translation.height * 2)
                 )
                 freeformAspect = proposedWidth / proposedHeight
-                resetViewport()
             }
             .onEnded { _ in
                 resizeStartAspect = nil

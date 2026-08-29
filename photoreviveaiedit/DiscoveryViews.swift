@@ -26,44 +26,47 @@ struct DiscoveryPage: View {
     let onFixedFeature: (FixedFeature) -> Void
 
     var body: some View {
-        Group {
-            if tab == .home {
-                HomeDiscoveryView(
-                    sections: homeSections,
-                    heroEntries: heroEntries,
-                    quickActions: homeQuickActions,
-                    heroPromotion: homeHeroPromotion,
-                    isLoadingTemplates: isLoadingTemplates,
-                    credits: credits,
-                    onSelectTemplate: onSelectTemplate,
-                    onSelectCarousel: onSelectCarousel,
-                    onMembership: onMembership,
-                    onCredits: onCredits,
-                    onGift: onGift,
-                    onSuggestion: onSuggestion,
-                    onHeroPromotion: onHeroPromotion,
-                    isSubscribed: isSubscribed,
-                    isLoggedIn: isLoggedIn,
-                    onLogin: onLogin,
-                    onFixedFeature: onFixedFeature
-                )
-            } else {
-                StandardDiscoveryView(
-                    tab: tab,
-                    sections: tab == .video ? videoSections : imageSections,
-                    heroEntries: heroEntries,
-                    videoModeActions: videoModeActions,
-                    isLoadingTemplates: isLoadingTemplates,
-                    credits: credits,
-                    onSelectTemplate: onSelectTemplate,
-                    onSelectCarousel: onSelectCarousel,
-                    onMembership: onMembership,
-                    onCredits: onCredits,
-                    onGift: onGift,
-                    onSuggestion: onSuggestion,
-                    onFixedFeature: onFixedFeature
-                )
+        GeometryReader { proxy in
+            Group {
+                if tab == .home {
+                    HomeDiscoveryView(
+                        sections: homeSections,
+                        heroEntries: heroEntries,
+                        quickActions: homeQuickActions,
+                        heroPromotion: homeHeroPromotion,
+                        isLoadingTemplates: isLoadingTemplates,
+                        credits: credits,
+                        onSelectTemplate: onSelectTemplate,
+                        onSelectCarousel: onSelectCarousel,
+                        onMembership: onMembership,
+                        onCredits: onCredits,
+                        onGift: onGift,
+                        onSuggestion: onSuggestion,
+                        onHeroPromotion: onHeroPromotion,
+                        isSubscribed: isSubscribed,
+                        isLoggedIn: isLoggedIn,
+                        onLogin: onLogin,
+                        onFixedFeature: onFixedFeature
+                    )
+                } else {
+                    StandardDiscoveryView(
+                        tab: tab,
+                        sections: tab == .video ? videoSections : imageSections,
+                        heroEntries: heroEntries,
+                        videoModeActions: videoModeActions,
+                        isLoadingTemplates: isLoadingTemplates,
+                        credits: credits,
+                        onSelectTemplate: onSelectTemplate,
+                        onSelectCarousel: onSelectCarousel,
+                        onMembership: onMembership,
+                        onCredits: onCredits,
+                        onGift: onGift,
+                        onSuggestion: onSuggestion,
+                        onFixedFeature: onFixedFeature
+                    )
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }
 }
@@ -699,23 +702,35 @@ private struct HomeHeroCarousel: View {
 struct ConfiguredPromotionImage: View {
     let url: URL
     var showsSkeletonWhileLoading = false
+    var contentMode: UIView.ContentMode = .scaleAspectFill
     @State private var image: UIImage?
     @State private var didFail = false
+    @State private var resolvedURL: URL?
+
+    private var displayedImage: UIImage? {
+        resolvedURL == url ? image : nil
+    }
+
+    private var displaysFailure: Bool {
+        resolvedURL == url && didFail
+    }
 
     var body: some View {
         ZStack {
-            if showsSkeletonWhileLoading {
-                HeroCarouselSkeleton()
-            } else {
-                ZStack {
-                    Color(red: 0.94, green: 0.78, blue: 0.56)
-                    ProgressView().tint(.white)
+            if displayedImage == nil && !displaysFailure {
+                if showsSkeletonWhileLoading {
+                    HeroCarouselSkeleton()
+                } else {
+                    ZStack {
+                        Color(red: 0.94, green: 0.78, blue: 0.56)
+                        ProgressView().tint(.white)
+                    }
                 }
             }
 
-            if let image {
-                AnimatedUIKitImage(image: image)
-            } else if didFail {
+            if let image = displayedImage {
+                AnimatedUIKitImage(image: image, contentMode: contentMode)
+            } else if displaysFailure {
                 TemplateMediaUnavailablePlaceholder()
             }
         }
@@ -726,15 +741,17 @@ struct ConfiguredPromotionImage: View {
     }
 
     private func loadImage() async {
+        let requestedURL = url
+        resolvedURL = requestedURL
         didFail = false
         image = nil
 
         do {
-            let loadedImage = try await TemplateImageRepository.shared.image(for: url)
-            guard !Task.isCancelled else { return }
+            let loadedImage = try await TemplateImageRepository.shared.image(for: requestedURL)
+            guard !Task.isCancelled, url == requestedURL else { return }
             image = loadedImage
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, url == requestedURL else { return }
             didFail = true
         }
     }
@@ -742,15 +759,17 @@ struct ConfiguredPromotionImage: View {
 
 private struct AnimatedUIKitImage: UIViewRepresentable {
     let image: UIImage
+    let contentMode: UIView.ContentMode
 
-    func makeUIView(context: Context) -> UIImageView {
-        let imageView = UIImageView()
-        imageView.contentMode = .scaleAspectFill
-        imageView.clipsToBounds = true
-        return imageView
+    func makeUIView(context: Context) -> AnimatedImageContainerView {
+        let container = AnimatedImageContainerView()
+        container.imageView.contentMode = contentMode
+        return container
     }
 
-    func updateUIView(_ imageView: UIImageView, context: Context) {
+    func updateUIView(_ container: AnimatedImageContainerView, context: Context) {
+        let imageView = container.imageView
+        imageView.contentMode = contentMode
         guard imageView.image !== image else { return }
         imageView.stopAnimating()
         imageView.image = image
@@ -759,8 +778,25 @@ private struct AnimatedUIKitImage: UIViewRepresentable {
         }
     }
 
-    static func dismantleUIView(_ imageView: UIImageView, coordinator: Void) {
-        imageView.stopAnimating()
+    static func dismantleUIView(_ container: AnimatedImageContainerView, coordinator: Void) {
+        container.imageView.stopAnimating()
+    }
+}
+
+private final class AnimatedImageContainerView: UIView {
+    let imageView = UIImageView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        imageView.frame = bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        imageView.clipsToBounds = true
+        addSubview(imageView)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
 
@@ -1436,10 +1472,13 @@ struct TemplateMediaView: View {
     var playsVideo = true
     var showsLoadingPlaceholder = true
 
-    @State private var remotePosterIsResolved = false
+    @State private var resolvedPosterIdentity: String?
 
-    private var waitsForRemotePoster: Bool {
-        item.coverImageURL != nil || item.comparisonCover != nil
+    private var posterIdentity: String? {
+        if let comparison = item.comparisonCover {
+            return "comparison|\(comparison.beforeURL.absoluteString)|\(comparison.afterURL.absoluteString)"
+        }
+        return item.coverImageURL.map { "image|\($0.absoluteString)" }
     }
 
     private var effectiveGravity: AVLayerVideoGravity {
@@ -1467,7 +1506,7 @@ struct TemplateMediaView: View {
                     cover: comparisonCover,
                     imageContentMode: imageContentMode,
                     maxPixelSize: imageMaxPixelSize,
-                    onMediaResolved: { _ in remotePosterIsResolved = true }
+                    onMediaResolved: { _ in resolvedPosterIdentity = posterIdentity }
                 )
             } else if let coverImageURL = item.coverImageURL {
                 RemoteTemplateImage(
@@ -1475,7 +1514,7 @@ struct TemplateMediaView: View {
                     imageContentMode: imageContentMode,
                     fillsFitBackground: fillsFitImageBackground,
                     maxPixelSize: imageMaxPixelSize,
-                    onResolution: { _ in remotePosterIsResolved = true }
+                    onResolution: { _ in resolvedPosterIdentity = posterIdentity }
                 )
             } else if !item.imageName.isEmpty {
                 if imageContentMode == .fit {
@@ -1511,7 +1550,7 @@ struct TemplateMediaView: View {
             // video preview name. Their cover must remain a still image.
             if playsVideo,
                item.generationKind == .video,
-               !waitsForRemotePoster || remotePosterIsResolved {
+               posterIdentity == nil || resolvedPosterIdentity == posterIdentity {
                 if let coverVideoURL = item.coverVideoURL {
                     RemoteLoopingVideoView(
                         url: coverVideoURL,
@@ -1530,9 +1569,6 @@ struct TemplateMediaView: View {
             }
         }
         .clipped()
-        .onChange(of: item.id) { _, _ in
-            remotePosterIsResolved = false
-        }
     }
 }
 
@@ -1708,9 +1744,26 @@ struct RemoteTemplateImage: View {
 
     @State private var image: UIImage?
     @State private var didFail = false
+    @State private var resolvedRequestID: RequestID?
+
+    private struct RequestID: Hashable {
+        let url: URL
+        let maxPixelSize: Int
+    }
+
+    private var requestID: RequestID {
+        RequestID(url: url, maxPixelSize: maxPixelSize)
+    }
 
     private var displayedImage: UIImage? {
-        image ?? TemplateImageMemoryCache.shared.image(for: url, maxPixelSize: maxPixelSize)
+        if resolvedRequestID == requestID, let image {
+            return image
+        }
+        return TemplateImageMemoryCache.shared.image(for: url, maxPixelSize: maxPixelSize)
+    }
+
+    private var displaysFailure: Bool {
+        resolvedRequestID == requestID && didFail
     }
 
     var body: some View {
@@ -1739,46 +1792,56 @@ struct RemoteTemplateImage: View {
                         .clipped()
                     }
                 } else {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
+                    ZStack {
+                        // A CMS cover can legitimately contain alpha (for
+                        // example a product-box cutout). Once the image is
+                        // resolved, do not let the gold loading skeleton show
+                        // through those pixels or change between card/detail.
+                        Color.black
+
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
                 }
-            } else if didFail {
+            } else if displaysFailure {
                 TemplateMediaUnavailablePlaceholder()
             } else {
                 Color.clear
             }
         }
-        .task(id: url) {
-            await loadImage()
+        .task(id: requestID) {
+            await loadImage(for: requestID)
         }
     }
 
-    private func loadImage() async {
+    private func loadImage(for request: RequestID) async {
+        resolvedRequestID = request
         didFail = false
+        image = nil
 
         if let cachedImage = TemplateImageMemoryCache.shared.image(
-            for: url,
-            maxPixelSize: maxPixelSize
+            for: request.url,
+            maxPixelSize: request.maxPixelSize
         ) {
             TemplateMediaMetrics.shared.record(.memory, media: .image)
             image = cachedImage
-            TemplateMediaMetrics.shared.markPosterDisplayed(for: url)
+            TemplateMediaMetrics.shared.markPosterDisplayed(for: request.url)
             onResolution(true)
             return
         }
 
         do {
             let loadedImage = try await TemplateImageRepository.shared.image(
-                for: url,
-                maxPixelSize: maxPixelSize
+                for: request.url,
+                maxPixelSize: request.maxPixelSize
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, requestID == request else { return }
             image = loadedImage
-            TemplateMediaMetrics.shared.markPosterDisplayed(for: url)
+            TemplateMediaMetrics.shared.markPosterDisplayed(for: request.url)
             onResolution(true)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, requestID == request else { return }
             didFail = true
             onResolution(false)
         }
@@ -1796,6 +1859,18 @@ struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View 
 
     @State private var image: UIImage?
     @State private var didFail = false
+    @State private var resolvedURL: URL?
+
+    private var displayedImage: UIImage? {
+        if resolvedURL == url, let image {
+            return image
+        }
+        return TemplateImageMemoryCache.shared.image(for: url)
+    }
+
+    private var displaysFailure: Bool {
+        resolvedURL == url && didFail
+    }
 
     init(
         url: URL,
@@ -1811,27 +1886,30 @@ struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View 
 
     var body: some View {
         Group {
-            if let image = image ?? TemplateImageMemoryCache.shared.image(for: url) {
+            if let image = displayedImage {
                 content(image)
-            } else if didFail {
+            } else if displaysFailure {
                 failure()
             } else {
                 placeholder()
             }
         }
         .task(id: url) {
+            let requestedURL = url
+            resolvedURL = requestedURL
             didFail = false
-            if let cachedImage = TemplateImageMemoryCache.shared.image(for: url) {
+            image = nil
+            if let cachedImage = TemplateImageMemoryCache.shared.image(for: requestedURL) {
                 TemplateMediaMetrics.shared.record(.memory, media: .image)
                 image = cachedImage
                 return
             }
             do {
-                let loadedImage = try await TemplateImageRepository.shared.image(for: url)
-                guard !Task.isCancelled else { return }
+                let loadedImage = try await TemplateImageRepository.shared.image(for: requestedURL)
+                guard !Task.isCancelled, url == requestedURL else { return }
                 image = loadedImage
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, url == requestedURL else { return }
                 didFail = true
             }
         }
@@ -1959,8 +2037,14 @@ private struct VideoModeStrip: View {
     let actions: [HomeQuickAction]
     @Binding var selection: FixedFeature?
 
+    private var columns: [GridItem] {
+        actions.map { _ in
+            GridItem(.flexible(minimum: 0), spacing: 0)
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
+        LazyVGrid(columns: columns, spacing: 0) {
             ForEach(actions) { action in
                 Button {
                     withAnimation(.easeInOut(duration: 0.22)) { selection = action.feature }
@@ -1970,7 +2054,9 @@ private struct VideoModeStrip: View {
                         .multilineTextAlignment(.center)
                         .foregroundStyle(selection == action.feature ? .white : AppPalette.ink)
                         .lineLimit(2)
-                        .minimumScaleFactor(0.72)
+                        .minimumScaleFactor(0.66)
+                        .allowsTightening(true)
+                        .padding(.horizontal, 2)
                         .frame(maxWidth: .infinity)
                         .frame(height: 48)
                         .background {
@@ -1991,8 +2077,10 @@ private struct VideoModeStrip: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selection == action.feature ? .isSelected : [])
+                .accessibilityIdentifier("video-mode-\(action.feature.id)")
             }
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)
         .padding(.top, -6)
         .onChange(of: actions.map(\.feature), initial: true) { _, features in
@@ -2027,6 +2115,7 @@ private struct VideoModeHero: View {
                 .clipped()
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("video-mode-hero-\(action.feature.id)")
 
             Button { onSelect(action.feature) } label: {
                 Text("Try Now")
