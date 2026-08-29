@@ -10,7 +10,10 @@ enum PhotoReviveAPIError: LocalizedError {
         case .invalidResponse:
             "The server returned an invalid response."
         case .requestFailed(_, let message):
-            message.isEmpty ? "The request failed. Please try again." : message
+            EnglishDisplayText.userFacingMessage(
+                message,
+                fallback: "The request failed. Please try again."
+            )
         }
     }
 }
@@ -109,6 +112,9 @@ struct RewardCenterGroup: Identifiable, Decodable {
     let isActive: Bool?
 
     var id: String { key.rawValue }
+    var displayTitle: String {
+        EnglishDisplayText.title(title, fallback: key.defaultTitle)
+    }
 
     enum CodingKeys: String, CodingKey {
         case key = "group_key"
@@ -122,6 +128,16 @@ struct RewardCenterGroup: Identifiable, Decodable {
         RewardCenterGroup(key: .specialOffer, title: "Special Offer", sortOrder: 2, isActive: true),
         RewardCenterGroup(key: .oneTimeRewards, title: "One-Time Rewards", sortOrder: 3, isActive: true)
     ]
+}
+
+private extension RewardCenterGroupKey {
+    var defaultTitle: String {
+        switch self {
+        case .dailyFreeCredits: "Daily Free Credits"
+        case .specialOffer: "Special Offer"
+        case .oneTimeRewards: "One-Time Rewards"
+        }
+    }
 }
 
 struct RewardCenterSpecialOfferConfig: Decodable {
@@ -172,6 +188,7 @@ struct RewardTask: Identifiable, Decodable {
     let claim: RewardTaskClaim?
 
     var id: String { taskCode }
+    var displayTitle: String { EnglishDisplayText.title(title, fallback: "Reward") }
     var isClaimed: Bool { claim != nil }
     var requiresServerVerification: Bool { verificationMode == "server_verified" }
 
@@ -362,6 +379,13 @@ struct GenerationHistoryTask: Identifiable, Decodable {
         contentType == "video" || sectionMenu == "video" || resultURL?.pathExtension.lowercased() == "mp4"
     }
 
+    var userFacingErrorMessage: String {
+        EnglishDisplayText.userFacingMessage(
+            errorMessage,
+            fallback: "Generation failed. Please try again."
+        )
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, scene, status
         case outputURL = "output_url"
@@ -414,6 +438,8 @@ struct PhotoReviveVideoGenerationSubmission: Decodable {
 }
 
 struct PhotoReviveImageGenerationOptions: Encodable {
+    static let providerDefaultResolution = "2K"
+
     let resolution: String
     let aspectRatio: String
     let outputCount: Int
@@ -450,6 +476,10 @@ struct PhotoReviveGenerationTask: Decodable {
 
     var resultURL: URL? {
         (convertedURL ?? outputURL).flatMap(URL.init(string:))
+    }
+
+    func userFacingErrorMessage(fallback: String) -> String {
+        EnglishDisplayText.userFacingMessage(errorMessage, fallback: fallback)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -499,6 +529,7 @@ struct AccountDeletionResult: Decodable {
 @MainActor
 final class PhotoReviveAPIClient {
     static let shared = PhotoReviveAPIClient()
+    static let longRunningGenerationTimeout: TimeInterval = 300
 
     private let authClient: PhotoReviveAuthClient
     private let session: URLSession
@@ -513,9 +544,10 @@ final class PhotoReviveAPIClient {
             let configuration = URLSessionConfiguration.default
             configuration.waitsForConnectivity = false
             configuration.timeoutIntervalForRequest = 20
-            // Image generation endpoints return the completed image in the
-            // submission response and can legitimately take over a minute.
-            configuration.timeoutIntervalForResource = 300
+            // Some CMS video templates synchronously preprocess or merge the
+            // uploaded images before returning a task ID. Image generation
+            // endpoints can likewise take over a minute before responding.
+            configuration.timeoutIntervalForResource = Self.longRunningGenerationTimeout
             self.session = URLSession(configuration: configuration)
         }
     }
@@ -662,7 +694,8 @@ final class PhotoReviveAPIClient {
                 duration: options.duration,
                 sound: options.sound,
                 multiShot: options.multiShot
-            )
+            ),
+            timeoutInterval: Self.longRunningGenerationTimeout
         )
     }
 
@@ -685,7 +718,7 @@ final class PhotoReviveAPIClient {
                 aspectRatio: options.aspectRatio,
                 outputCount: options.outputCount
             ),
-            timeoutInterval: 300
+            timeoutInterval: Self.longRunningGenerationTimeout
         )
     }
 
@@ -703,7 +736,7 @@ final class PhotoReviveAPIClient {
                 aspectRatio: options.aspectRatio,
                 outputCount: options.outputCount
             ),
-            timeoutInterval: 300
+            timeoutInterval: Self.longRunningGenerationTimeout
         )
     }
 
@@ -1125,7 +1158,7 @@ final class AppAccountStore: ObservableObject {
         do {
             _ = try await PhotoReviveAuthClient.shared.feedbackAccessToken()
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = error.userFacingEnglishMessage()
         }
 #endif
     }
@@ -1159,7 +1192,7 @@ final class AppAccountStore: ObservableObject {
             hasLoadedCredits = true
             reconcileSubscriptionStatus(status.subscriptionStatus)
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = error.userFacingEnglishMessage()
         }
     }
 
@@ -1199,7 +1232,7 @@ final class AppAccountStore: ObservableObject {
         let rewardsTask = Task { try await api.rewardTasksStatus() }
         let referralTask = Task { try await api.referralStatus() }
 
-        do { checkInStatus = try await checkInTask.value } catch { lastErrorMessage = error.localizedDescription }
+        do { checkInStatus = try await checkInTask.value } catch { lastErrorMessage = error.userFacingEnglishMessage() }
         do {
             let response = try await rewardsTask.value
             rewardTasks = response.tasks
@@ -1210,9 +1243,9 @@ final class AppAccountStore: ObservableObject {
             }
             specialOfferConfig = response.specialOffer ?? .defaultValue
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = error.userFacingEnglishMessage()
         }
-        do { referralStatus = try await referralTask.value } catch { lastErrorMessage = error.localizedDescription }
+        do { referralStatus = try await referralTask.value } catch { lastErrorMessage = error.userFacingEnglishMessage() }
     }
 
     func refreshCreditTransactions() async {
@@ -1224,7 +1257,7 @@ final class AppAccountStore: ObservableObject {
             creditsBalance = response.wallet.total
             hasLoadedCredits = true
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = error.userFacingEnglishMessage()
         }
     }
 
@@ -1243,7 +1276,7 @@ final class AppAccountStore: ObservableObject {
             nextHistoryCursor = response.nextCursor
             hasMoreHistory = response.nextCursor != nil
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = error.userFacingEnglishMessage()
         }
     }
 
@@ -1262,7 +1295,7 @@ final class AppAccountStore: ObservableObject {
             nextHistoryCursor = response.nextCursor
             hasMoreHistory = response.nextCursor != nil
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = error.userFacingEnglishMessage()
         }
     }
 

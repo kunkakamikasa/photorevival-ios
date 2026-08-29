@@ -2,7 +2,7 @@
 //  photoreviveaieditTests.swift
 //  photoreviveaieditTests
 //
-//  Created by 马颖昆 on 2026/8/15.
+//  Created by Mayingkun on 2026/8/15.
 //
 
 import Foundation
@@ -12,10 +12,58 @@ import UIKit
 
 struct photoreviveaieditTests {
 
+    @Test func selectingShareActivityIsEnoughToClaimReward() {
+        #expect(
+            RewardShareSelectionPolicy.shouldClaim(
+                activityType: .message,
+                completed: false
+            )
+        )
+        #expect(
+            RewardShareSelectionPolicy.shouldClaim(
+                activityType: .copyToPasteboard,
+                completed: false
+            )
+        )
+        #expect(
+            RewardShareSelectionPolicy.shouldClaim(
+                activityType: nil,
+                completed: true
+            )
+        )
+        #expect(
+            !RewardShareSelectionPolicy.shouldClaim(
+                activityType: nil,
+                completed: false
+            )
+        )
+    }
+
+    @MainActor
+    @Test func socialShareRoutesTargetTheSelectedPlatform() throws {
+        let resultURL = try #require(URL(string: "https://cdn.example.com/generated/result.mp4"))
+
+        let whatsAppURL = try #require(GeneratedSocialShareRouter.whatsAppURL(for: resultURL))
+        let whatsAppComponents = try #require(URLComponents(url: whatsAppURL, resolvingAgainstBaseURL: false))
+        #expect(whatsAppComponents.scheme == "whatsapp")
+        #expect(whatsAppComponents.host == "send")
+        #expect(whatsAppComponents.queryItems?.first(where: { $0.name == "text" })?.value?.contains(resultURL.absoluteString) == true)
+
+        let facebookURL = try #require(GeneratedSocialShareRouter.facebookURL(for: resultURL))
+        let facebookComponents = try #require(URLComponents(url: facebookURL, resolvingAgainstBaseURL: false))
+        #expect(facebookComponents.host == "www.facebook.com")
+        #expect(facebookComponents.path == "/sharer/sharer.php")
+        #expect(facebookComponents.queryItems?.first(where: { $0.name == "u" })?.value == resultURL.absoluteString)
+
+        let localURL = URL(fileURLWithPath: "/tmp/result.mp4")
+        #expect(GeneratedSocialShareRouter.whatsAppURL(for: localURL) == nil)
+        #expect(GeneratedSocialShareRouter.facebookURL(for: localURL) == nil)
+    }
+
     @MainActor
     @Test func videoGenerationOptionsEncodeEveryUploadSetting() throws {
         let options = PhotoReviveVideoGenerationOptions(
-            resolution: "540p",
+            resolution: "480p",
             aspectRatio: "9:16",
             duration: 8,
             sound: true,
@@ -25,11 +73,16 @@ struct photoreviveaieditTests {
         let data = try JSONEncoder().encode(options)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        #expect(object["resolution"] as? String == "540p")
+        #expect(object["resolution"] as? String == "480p")
         #expect(object["aspect_ratio"] as? String == "9:16")
         #expect(object["duration"] as? Int == 8)
         #expect(object["sound"] as? Bool == true)
         #expect(object["multi_shot"] as? Bool == true)
+    }
+
+    @MainActor
+    @Test func longRunningGenerationRequestsAllowServerSidePreprocessing() {
+        #expect(PhotoReviveAPIClient.longRunningGenerationTimeout == 300)
     }
 
     @MainActor
@@ -49,16 +102,16 @@ struct photoreviveaieditTests {
           "image_to_image_credits": 30,
           "text_to_image_credits": 30,
           "other_image_credits": 30,
-          "default_video_resolution": "540p",
+          "default_video_resolution": "480p",
           "default_video_sound": false,
           "default_video_multi_shot": false
         }
         """
         let pricing = try JSONDecoder().decode(AppCreditPricing.self, from: Data(json.utf8))
 
-        #expect(pricing.videoGenerationCredits(duration: 5, resolution: "540p", sound: false, multiShot: false) == 40)
-        #expect(pricing.videoGenerationCredits(duration: 8, resolution: "540p", sound: false, multiShot: false) == 64)
-        #expect(pricing.videoGenerationCredits(duration: 10, resolution: "540p", sound: false, multiShot: false) == 80)
+        #expect(pricing.videoGenerationCredits(duration: 5, resolution: "480p", sound: false, multiShot: false) == 40)
+        #expect(pricing.videoGenerationCredits(duration: 8, resolution: "480p", sound: false, multiShot: false) == 64)
+        #expect(pricing.videoGenerationCredits(duration: 10, resolution: "480p", sound: false, multiShot: false) == 80)
         #expect(pricing.videoGenerationCredits(duration: 5, resolution: "720p", sound: false, multiShot: false) == 60)
         #expect(pricing.videoGenerationCredits(duration: 5, resolution: "1080p", sound: true, multiShot: true) == 140)
         #expect(pricing.videoGenerationCredits(duration: 8, resolution: "720p", sound: false, multiShot: false) == 96)
@@ -66,6 +119,13 @@ struct photoreviveaieditTests {
         #expect(pricing.otherVideoCredits == 60)
         #expect(pricing.imageToImageCredits == 30)
         #expect(pricing.textToImageCredits == 30)
+    }
+
+    @MainActor
+    @Test func legacyCMSVideoResolutionNormalizesTo480p() {
+        let pricing = AppCreditPricing(defaultVideoResolution: "540p")
+
+        #expect(pricing.defaultVideoResolution == "480p")
     }
 
     @Test func cmsFixedFeatureRegistryMapsAllSevenDestinationsExactly() throws {
@@ -783,6 +843,37 @@ struct photoreviveaieditTests {
         #expect(status.specialOffer?.isActive == false)
         #expect(status.tasks.first?.rewardCenterGroup == .dailyFreeCredits)
         #expect(status.tasks.first?.sortOrder == 2)
+    }
+
+    @Test func rewardCenterSpecialOfferAlwaysRoutesSubscribersToCreditPacks() {
+        #expect(
+            RewardCenterSpecialOfferDestination.resolve(
+                isSubscribed: true,
+                isActive: true,
+                hasMembershipOffer: false
+            ) == .creditStore
+        )
+        #expect(
+            RewardCenterSpecialOfferDestination.resolve(
+                isSubscribed: false,
+                isActive: true,
+                hasMembershipOffer: true
+            ) == .membership
+        )
+        #expect(
+            RewardCenterSpecialOfferDestination.resolve(
+                isSubscribed: false,
+                isActive: true,
+                hasMembershipOffer: false
+            ) == .hidden
+        )
+        #expect(
+            RewardCenterSpecialOfferDestination.resolve(
+                isSubscribed: true,
+                isActive: false,
+                hasMembershipOffer: true
+            ) == .hidden
+        )
     }
 
     @MainActor

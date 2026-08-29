@@ -150,7 +150,10 @@ enum PhotoReviveAuthError: LocalizedError {
         case .invalidResponse:
             return "The sign-in service returned an invalid response."
         case let .requestFailed(_, message):
-            return message.isEmpty ? "Sign-in failed. Please try again." : message
+            return EnglishDisplayText.userFacingMessage(
+                message,
+                fallback: "Sign-in failed. Please try again."
+            )
         case .signInCancelled:
             return nil
         case .missingGoogleConfiguration:
@@ -222,7 +225,9 @@ final class PhotoReviveAuthStore: ObservableObject {
                         failureType: "user_cancelled"
                     )
                 } else {
-                    errorMessage = error.localizedDescription
+                    errorMessage = error.userFacingEnglishMessage(
+                        fallback: "Sign-in failed. Please try again."
+                    )
                     AppAnalytics.authResult(
                         method: provider.rawValue,
                         result: "failed",
@@ -230,7 +235,9 @@ final class PhotoReviveAuthStore: ObservableObject {
                     )
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = error.userFacingEnglishMessage(
+                    fallback: "Sign-in failed. Please try again."
+                )
                 AppAnalytics.authResult(
                     method: provider.rawValue,
                     result: "failed",

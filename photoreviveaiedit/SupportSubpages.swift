@@ -181,20 +181,20 @@ struct MembershipPaywallView: View {
             benefitSection
                 .frame(width: designWidth, height: 184, alignment: .top)
 
-            Color.clear.frame(height: 38)
+            Color.clear.frame(height: 32)
 
             membershipPlanRow(.annual)
                 .frame(width: 390, height: 64)
 
-            Color.clear.frame(height: 14)
+            Color.clear.frame(height: 10)
 
             membershipPlanRow(.weekly)
                 .frame(width: 390, height: 70)
 
-            Color.clear.frame(height: 33)
+            Color.clear.frame(height: 26)
 
             continueButton
-                .frame(width: 390, height: 47)
+                .frame(width: 390, height: 64)
 
             Color.clear.frame(height: 20)
 
@@ -372,7 +372,7 @@ struct MembershipPaywallView: View {
 
             loggedInBenefitRow("Evolving & Customizable Styles", tier: option)
             loggedInBenefitRow("Ad-free & No Watermark", tier: option)
-            loggedInBenefitRow("", emphasis: "\(option.creditDiscount)%", suffix: " OFF Lifetime Credits", tier: option)
+            loggedInBenefitRow("Create More Every Week", tier: option)
             loggedInBenefitRow("Parallel Generations", tier: option)
         }
         .padding(.horizontal, 17)
@@ -711,7 +711,7 @@ struct MembershipPaywallView: View {
     }
 
     private var discountBenefitText: Text {
-        Text("\(Text("\(tier.creditDiscount)% OFF ").foregroundColor(tier.detailAccent).bold())Lifetime Credits")
+        Text("Create More Every Week")
     }
 
     private func benefitRow(_ title: Text) -> some View {
@@ -843,8 +843,11 @@ struct MembershipPaywallView: View {
                 .font(.system(size: 11, weight: .black))
 
             Text("BEST VALUE")
-                .font(.system(size: 13.5, weight: .heavy))
-                .tracking(0.25)
+                .font(.system(size: 11.5, weight: .heavy))
+                .tracking(0.15)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .allowsTightening(true)
         }
         .foregroundStyle(Color(red: 0.29, green: 0.16, blue: 0.035))
         .frame(width: 104, height: 30)
@@ -872,11 +875,7 @@ struct MembershipPaywallView: View {
                     endPoint: .trailing
                 )
 
-                Rectangle()
-                    .fill(Color.white.opacity(0.24))
-                    .frame(width: 9, height: 72)
-                    .rotationEffect(.degrees(31))
-                    .offset(x: tier == .pro ? -150 : 88)
+                continueButtonShimmer
 
                 Text(isPurchasing ? "Connecting..." : "Continue with \(tier.title)")
                     .font(.system(size: 18.5, weight: .bold))
@@ -903,11 +902,46 @@ struct MembershipPaywallView: View {
         .accessibilityValue(billing.productIdentifier(for: tier, isLoggedIn: usesLoggedInPaywall).rawValue)
     }
 
+    private var continueButtonShimmer: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            GeometryReader { proxy in
+                let cycleDuration = 2.2
+                let elapsed = timeline.date.timeIntervalSinceReferenceDate
+                let progress = elapsed.truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+                let travelDistance = proxy.size.width + 180
+                let xPosition = -90 + (travelDistance * CGFloat(progress))
+
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: Color.white.opacity(0.06), location: 0.24),
+                        .init(color: Color.white.opacity(0.48), location: 0.44),
+                        .init(color: Color.white.opacity(0.82), location: 0.50),
+                        .init(color: Color.white.opacity(0.48), location: 0.56),
+                        .init(color: Color.white.opacity(0.06), location: 0.76),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 82, height: proxy.size.height * 2.2)
+                .rotationEffect(.degrees(24))
+                .position(x: xPosition, y: proxy.size.height / 2)
+                .blur(radius: 0.8)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private var footerLinks: some View {
         HStack(spacing: 12) {
-            Button("Privacy") { legalDocument = .privacyPolicy }
-            Text("|")
-            Button("Terms") { legalDocument = .termsOfService }
+            LegalLinksView(
+                privacyLabel: "Privacy",
+                termsLabel: "Terms",
+                spacing: 12,
+                onOpen: { legalDocument = $0 }
+            )
 
             Spacer()
 
@@ -919,6 +953,9 @@ struct MembershipPaywallView: View {
         }
         .font(.system(size: 14.5, weight: .regular))
         .foregroundStyle(Color(red: 0.47, green: 0.47, blue: 0.47))
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+        .allowsTightening(true)
     }
 
     private func beginPurchase() {
@@ -1018,6 +1055,22 @@ private enum DailyFreeCreditEntry: Identifiable {
     }
 }
 
+enum RewardCenterSpecialOfferDestination: Equatable {
+    case membership
+    case creditStore
+    case hidden
+
+    static func resolve(
+        isSubscribed: Bool,
+        isActive: Bool,
+        hasMembershipOffer: Bool
+    ) -> Self {
+        guard isActive else { return .hidden }
+        if isSubscribed { return .creditStore }
+        return hasMembershipOffer ? .membership : .hidden
+    }
+}
+
 private extension RewardTask {
     var isShareCreation: Bool {
         taskCode == "share_creation"
@@ -1033,6 +1086,7 @@ struct CreditCenterView: View {
     @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var showCheckInSuccess = false
     @State private var showMembership = false
+    @State private var showCreditStore = false
     @State private var presentedSubscriptionOffer: CMSCouponOffer?
     @State private var isCheckingIn = false
     @State private var claimingTaskID: String?
@@ -1088,6 +1142,17 @@ struct CreditCenterView: View {
         .fullScreenCover(isPresented: $showMembership) {
             PaywallOfferFlowView()
         }
+        .fullScreenCover(isPresented: $showCreditStore) {
+            CreditStoreView(
+                onClose: { showCreditStore = false },
+                onPurchased: { _ in
+                    Task {
+                        await accountStore.refreshCredits()
+                        credits = accountStore.creditsBalance
+                    }
+                }
+            )
+        }
         .fullScreenCover(item: $presentedSubscriptionOffer) { offer in
             SummerSalePaywallView(offer: offer)
         }
@@ -1097,8 +1162,11 @@ struct CreditCenterView: View {
                     rewardShareRequest = nil
 
                     if let error {
-                        rewardError = error.localizedDescription
-                    } else if completed {
+                        rewardError = error.userFacingEnglishMessage()
+                    } else if RewardShareSelectionPolicy.shouldClaim(
+                        activityType: activityType,
+                        completed: completed
+                    ) {
                         claimSharedCreation(
                             task: request.rewardTask,
                             creationTaskID: request.creationTaskID,
@@ -1187,10 +1255,26 @@ struct CreditCenterView: View {
 
     private var orderedRewardGroups: [RewardCenterGroup] {
         let groups = accountStore.rewardGroups.isEmpty ? RewardCenterGroup.defaults : accountStore.rewardGroups
-        return groups.filter { $0.isActive ?? true }.sorted {
+        return groups.filter { group in
+            guard group.isActive ?? true else { return false }
+            return group.key != .specialOffer || specialOfferDestination != .hidden
+        }.sorted {
             if $0.sortOrder == $1.sortOrder { return $0.key.rawValue < $1.key.rawValue }
             return $0.sortOrder < $1.sortOrder
         }
+    }
+
+    private var specialOfferDestination: RewardCenterSpecialOfferDestination {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-forceSubscriberRewardsOffer") {
+            return .creditStore
+        }
+#endif
+        return .resolve(
+            isSubscribed: isSubscribed,
+            isActive: accountStore.specialOfferConfig.isActive,
+            hasMembershipOffer: homeSubscriptionCouponOffer != nil
+        )
     }
 
     private var dailyFreeCreditEntries: [DailyFreeCreditEntry] {
@@ -1226,7 +1310,7 @@ struct CreditCenterView: View {
 
     @ViewBuilder
     private func rewardGroup(_ group: RewardCenterGroup, isFirst: Bool) -> some View {
-        sectionTitle(group.title)
+        sectionTitle(group.displayTitle)
             .padding(.top, isFirst ? 0 : 30)
 
         switch group.key {
@@ -1243,20 +1327,28 @@ struct CreditCenterView: View {
             }
 
         case .specialOffer:
-            if !isSubscribed,
-               accountStore.specialOfferConfig.isActive,
-               let offer = homeSubscriptionCouponOffer {
-                RewardsActionRow(
-                    title: "Special Membership Offer",
-                    creditAmount: 400,
-                    icon: .asset("RewardsGiftIcon", size: 42),
-                    actionTitle: "Get",
-                    enabled: true,
-                    highlightOffer: true
-                ) {
-                    presentedSubscriptionOffer = offer
+            switch specialOfferDestination {
+            case .membership:
+                if let offer = homeSubscriptionCouponOffer {
+                    RewardsActionRow(
+                        title: "Special Membership Offer",
+                        creditAmount: 400,
+                        icon: .asset("RewardsGiftIcon", size: 42),
+                        actionTitle: "Get",
+                        enabled: true,
+                        highlightOffer: true
+                    ) {
+                        presentedSubscriptionOffer = offer
+                    }
+                    .padding(.top, 10)
+                }
+            case .creditStore:
+                RewardsCreditStoreBanner {
+                    showCreditStore = true
                 }
                 .padding(.top, 10)
+            case .hidden:
+                EmptyView()
             }
 
         case .oneTimeRewards:
@@ -1289,7 +1381,7 @@ struct CreditCenterView: View {
 
     private func rewardTaskRow(_ task: RewardTask) -> some View {
         RewardsActionRow(
-            title: task.title,
+            title: task.displayTitle,
             creditAmount: task.rewardCredits,
             icon: rewardIcon(for: task.taskCode),
             actionTitle: rewardActionTitle(for: task),
@@ -1382,7 +1474,7 @@ struct CreditCenterView: View {
                             showCheckInSuccess = true
                         }
                     } catch {
-                        rewardError = error.localizedDescription
+                        rewardError = error.userFacingEnglishMessage()
                     }
                 }
             } label: {
@@ -1522,7 +1614,7 @@ struct CreditCenterView: View {
                 _ = try await accountStore.claimRewardTask(task)
                 credits = accountStore.creditsBalance
             } catch {
-                rewardError = error.localizedDescription
+                rewardError = error.userFacingEnglishMessage()
             }
         }
     }
@@ -1554,7 +1646,7 @@ struct CreditCenterView: View {
                     fileURL: fileURL
                 )
             } catch {
-                rewardError = error.localizedDescription
+                rewardError = error.userFacingEnglishMessage()
             }
         }
     }
@@ -1581,7 +1673,7 @@ struct CreditCenterView: View {
                 )
                 credits = accountStore.creditsBalance
             } catch {
-                rewardError = error.localizedDescription
+                rewardError = error.userFacingEnglishMessage()
             }
         }
     }
@@ -1626,7 +1718,7 @@ struct CreditCenterView: View {
                 )
                 credits = accountStore.creditsBalance
             } catch {
-                rewardError = error.localizedDescription
+                rewardError = error.userFacingEnglishMessage()
             }
         }
     }
@@ -1654,6 +1746,17 @@ private struct RewardShareRequest: Identifiable {
     let rewardTask: RewardTask
     let creationTaskID: String
     let fileURL: URL
+}
+
+enum RewardShareSelectionPolicy {
+    /// This reward is intentionally low-friction: choosing any activity is
+    /// sufficient, even if that activity later reports that it was cancelled.
+    static func shouldClaim(
+        activityType: UIActivity.ActivityType?,
+        completed: Bool
+    ) -> Bool {
+        completed || activityType != nil
+    }
 }
 
 private struct RewardActivityView: UIViewControllerRepresentable {
@@ -1939,6 +2042,97 @@ private struct RewardsActionRow: View {
     }
 }
 
+private struct RewardsCreditStoreBanner: View {
+    let action: () -> Void
+
+    private var creditPackSummary: String {
+        CreditProductCatalog.packs.map(\.creditsLabel).joined(separator: " · ") + " credits"
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 13) {
+                ZStack {
+                    Circle()
+                        .fill(.white.opacity(0.92))
+                        .frame(width: 54, height: 54)
+                        .shadow(color: RewardsPalette.orange.opacity(0.18), radius: 8, y: 3)
+
+                    Image("RewardsCreditToken")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 40, height: 40)
+
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .offset(x: 22, y: -21)
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Text("Top Up Credits")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(RewardsPalette.ink)
+
+                        Text("MEMBER")
+                            .font(.system(size: 8, weight: .black))
+                            .tracking(0.5)
+                            .foregroundStyle(Color(red: 0.55, green: 0.27, blue: 0.04))
+                            .padding(.horizontal, 7)
+                            .frame(height: 19)
+                            .background(.white.opacity(0.78), in: Capsule())
+                    }
+
+                    Text(creditPackSummary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(RewardsPalette.brown)
+
+                    Text("One-time packs · Never expire")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(RewardsPalette.muted)
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+
+                Spacer(minLength: 2)
+
+                HStack(spacing: 3) {
+                    Text("Shop")
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 13)
+                .frame(height: 38)
+                .background(RewardsPalette.red, in: Capsule())
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 86)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.94),
+                        Color(red: 1.00, green: 0.91, blue: 0.70).opacity(0.90),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(RewardsPalette.orange.opacity(0.28), lineWidth: 1)
+            }
+        }
+        .buttonStyle(TemplatePressStyle())
+        .accessibilityLabel("Buy credit packs")
+        .accessibilityHint("Opens one-time credit packs")
+        .accessibilityIdentifier("rewards-credit-store-entry")
+    }
+}
+
 private struct RewardsInviteBanner: View {
     let creditAmount: Int
 
@@ -2197,7 +2391,7 @@ struct InviteFriendsView: View {
                     ? "Invitation accepted. \(amount) credits were added by the server."
                     : "This invitation was already redeemed. No duplicate credits were issued."
             } catch {
-                redemptionMessage = error.localizedDescription
+                redemptionMessage = error.userFacingEnglishMessage()
             }
             showRedeemed = true
         }
@@ -2275,9 +2469,7 @@ struct SuggestionView: View {
                         PhotosPicker(selection: $selectedScreenshot, matching: .images) {
                             HStack(spacing: 14) {
                                 if let screenshotImage {
-                                    Image(uiImage: screenshotImage)
-                                        .resizable()
-                                        .scaledToFill()
+                                    FrostedUploadedPhoto(image: screenshotImage)
                                         .frame(width: 68, height: 68)
                                         .clipShape(RoundedRectangle(cornerRadius: 8))
                                 } else {
@@ -2394,7 +2586,9 @@ struct SuggestionView: View {
                 )
                 showSubmitted = true
             } catch {
-                submissionError = error.localizedDescription
+                submissionError = error.userFacingEnglishMessage(
+                    fallback: "Your request could not be sent. Please try again."
+                )
             }
         }
     }
@@ -2427,7 +2621,6 @@ private enum MembershipTier: String, CaseIterable, Identifiable {
 
     var weeklyCredits: Int { self == .pro ? 400 : 900 }
     var yearlyVideos: Int { self == .pro ? 572 : 1300 }
-    var creditDiscount: Int { self == .pro ? 30 : 50 }
     var accent: Color { self == .pro ? Color.yellow : AppPalette.accent }
 
     var mediaStripAsset: String {

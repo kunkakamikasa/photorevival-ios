@@ -185,7 +185,7 @@ private struct LaunchExperienceView: View {
             switch page {
             case .welcome:
                 WelcomeVideoContinueHitTarget(onContinue: advance)
-            case .restore, .pet:
+            case .restore, .pet, .fusion:
                 GuideOverlay(page: page, onContinue: advance)
             }
         }
@@ -202,7 +202,7 @@ private struct LaunchExperienceView: View {
     }
 
     private func advance() {
-        if currentPage < LaunchPage.pet.rawValue {
+        if currentPage < LaunchPage.fusion.rawValue {
             withAnimation(.easeInOut(duration: 0.38)) {
                 currentPage += 1
             }
@@ -217,12 +217,14 @@ private enum LaunchPage: Int {
     case welcome
     case restore
     case pet
+    case fusion
 
     var analyticsName: String {
         switch self {
         case .welcome: "welcome"
         case .restore: "restore"
         case .pet: "pet"
+        case .fusion: "fusion"
         }
     }
 
@@ -231,6 +233,7 @@ private enum LaunchPage: Int {
         case .welcome: "OnboardingWelcomeVideo"
         case .restore: "OnboardingRestoreVideo"
         case .pet: "OnboardingPetVideo"
+        case .fusion: "OnboardingFusionVideo"
         }
     }
 
@@ -240,7 +243,7 @@ private enum LaunchPage: Int {
     var mediaAspectRatio: CGFloat? {
         switch self {
         case .welcome: nil
-        case .restore, .pet: 9.0 / 16.0
+        case .restore, .pet, .fusion: 9.0 / 16.0
         }
     }
 
@@ -248,6 +251,7 @@ private enum LaunchPage: Int {
         switch self {
         case .restore: "Bring Memories to Life"
         case .pet: "See Your Pet Again"
+        case .fusion: "Bring Your\nFamily Together"
         case .welcome: ""
         }
     }
@@ -256,6 +260,7 @@ private enum LaunchPage: Int {
         switch self {
         case .restore: "With Restore & Photo to Video"
         case .pet: "With Templates"
+        case .fusion: "With Fusion"
         case .welcome: ""
         }
     }
@@ -264,6 +269,7 @@ private enum LaunchPage: Int {
         switch self {
         case .restore: 0
         case .pet: 1
+        case .fusion: 2
         case .welcome: 0
         }
     }
@@ -271,7 +277,7 @@ private enum LaunchPage: Int {
     var colorScheme: ColorScheme {
         switch self {
         case .welcome, .restore: .dark
-        case .pet: .light
+        case .pet, .fusion: .light
         }
     }
 
@@ -287,6 +293,12 @@ private enum LaunchPage: Int {
             [
                 .init(color: .clear, location: 0.54),
                 .init(color: .black.opacity(0.58), location: 0.72),
+                .init(color: .black, location: 0.94)
+            ]
+        case .fusion:
+            [
+                .init(color: .clear, location: 0.47),
+                .init(color: .black.opacity(0.62), location: 0.68),
                 .init(color: .black, location: 0.94)
             ]
         }
@@ -406,13 +418,13 @@ private struct OnboardingPageDots: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ForEach(0..<2, id: \.self) { index in
+            ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .fill(index == selection ? .white : .white.opacity(0.43))
                     .frame(width: 8, height: 8)
             }
         }
-        .accessibilityLabel("Guide page \(selection + 1) of 2")
+        .accessibilityLabel("Guide page \(selection + 1) of 3")
     }
 }
 

@@ -134,7 +134,10 @@ enum SubscriptionPurchaseService {
                             currency: transactionCurrency,
                             promotion: promotion
                         )
-                        return .failed(serverVerification.message ?? "Apple confirmed the purchase, but membership activation is still pending. Please try again.")
+                        return .failed(EnglishDisplayText.userFacingMessage(
+                            serverVerification.message,
+                            fallback: "Apple confirmed the purchase, but membership activation is still pending. Please try again."
+                        ))
                     }
                     await AppAccountStore.shared.applySubscriptionVerification(serverVerification)
                     Task { @MainActor in
@@ -180,7 +183,9 @@ enum SubscriptionPurchaseService {
                         currency: currency,
                         promotion: promotion
                     )
-                    return .failed(error.localizedDescription)
+                    return .failed(error.userFacingEnglishMessage(
+                        fallback: "The App Store could not verify this purchase. Please try again."
+                    ))
                 }
             case .userCancelled:
                 AppAnalytics.subscriptionResult(
@@ -218,7 +223,9 @@ enum SubscriptionPurchaseService {
                 failureStage: "store_purchase",
                 promotion: promotion
             )
-            return .failed(error.localizedDescription)
+            return .failed(error.userFacingEnglishMessage(
+                fallback: "The purchase could not be completed. Please try again."
+            ))
         }
     }
 
@@ -246,12 +253,19 @@ enum SubscriptionPurchaseService {
                             AppAnalytics.restoreResult("purchased")
                             return .purchased
                         }
-                        lastVerificationError = serverVerification.message
+                        lastVerificationError = EnglishDisplayText.userFacingMessage(
+                            serverVerification.message,
+                            fallback: "Membership activation is still pending. Please try again."
+                        )
                     } catch {
-                        lastVerificationError = error.localizedDescription
+                        lastVerificationError = error.userFacingEnglishMessage(
+                            fallback: "Membership could not be restored. Please try again."
+                        )
                     }
                 case .unverified(_, let error):
-                    lastVerificationError = error.localizedDescription
+                    lastVerificationError = error.userFacingEnglishMessage(
+                        fallback: "The App Store could not verify this subscription."
+                    )
                 }
             }
 
@@ -266,7 +280,9 @@ enum SubscriptionPurchaseService {
             return .unavailable
         } catch {
             AppAnalytics.restoreResult("failed", failureStage: "store_sync")
-            return .failed(error.localizedDescription)
+            return .failed(error.userFacingEnglishMessage(
+                fallback: "Membership could not be restored. Please try again."
+            ))
         }
     }
 

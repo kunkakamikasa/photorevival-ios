@@ -2,7 +2,7 @@
 //  photoreviveaieditUITestsLaunchTests.swift
 //  photoreviveaieditUITests
 //
-//  Created by 马颖昆 on 2026/8/15.
+//  Created by Mayingkun on 2026/8/15.
 //
 
 import XCTest

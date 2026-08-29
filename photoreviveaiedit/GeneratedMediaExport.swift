@@ -1,4 +1,5 @@
 import AVFoundation
+import MessageUI
 import Photos
 import SwiftUI
 import UIKit
@@ -20,6 +21,63 @@ enum GeneratedMediaExportError: LocalizedError {
         case .videoExportFailed(let message):
             "The generated video could not be prepared: \(message)"
         }
+    }
+}
+
+enum GeneratedSocialShareDestination {
+    case messages
+    case whatsApp
+    case facebook
+    case instagram
+}
+
+@MainActor
+enum GeneratedSocialShareRouter {
+    static func whatsAppURL(for resultURL: URL) -> URL? {
+        guard isPublicWebURL(resultURL) else { return nil }
+        var components = URLComponents(string: "whatsapp://send")
+        components?.queryItems = [
+            URLQueryItem(
+                name: "text",
+                value: "Made with \(PhotoRevivalBrand.fullName)\n\(resultURL.absoluteString)"
+            )
+        ]
+        return components?.url
+    }
+
+    static func facebookURL(for resultURL: URL) -> URL? {
+        guard isPublicWebURL(resultURL) else { return nil }
+        var components = URLComponents(string: "https://www.facebook.com/sharer/sharer.php")
+        components?.queryItems = [URLQueryItem(name: "u", value: resultURL.absoluteString)]
+        return components?.url
+    }
+
+    static func stageInstagramStory(mediaURL: URL, isVideo: Bool) async throws -> URL {
+        let data = try await Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: mediaURL, options: .mappedIfSafe)
+        }.value
+        let pasteboardKey = isVideo
+            ? "com.instagram.sharedSticker.backgroundVideo"
+            : "com.instagram.sharedSticker.backgroundImage"
+        UIPasteboard.general.setItems(
+            [[pasteboardKey: data]],
+            options: [.expirationDate: Date().addingTimeInterval(5 * 60)]
+        )
+
+        var components = URLComponents(string: "instagram-stories://share")
+        if let appID = Bundle.main.object(forInfoDictionaryKey: "FacebookAppID") as? String,
+           !appID.isEmpty {
+            components?.queryItems = [URLQueryItem(name: "source_application", value: appID)]
+        }
+        guard let url = components?.url else {
+            throw GeneratedMediaExportError.mediaUnavailable
+        }
+        return url
+    }
+
+    private static func isPublicWebURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        return scheme == "https" || scheme == "http"
     }
 }
 
@@ -186,4 +244,49 @@ struct GeneratedMediaActivityView: UIViewControllerRepresentable {
         _ uiViewController: UIActivityViewController,
         context: Context
     ) {}
+}
+
+struct GeneratedMessageComposeView: UIViewControllerRepresentable {
+    let attachmentURL: URL
+    let onFinish: () -> Void
+
+    static var canSendAttachment: Bool {
+        MFMessageComposeViewController.canSendText()
+            && MFMessageComposeViewController.canSendAttachments()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFinish: onFinish)
+    }
+
+    func makeUIViewController(context: Context) -> MFMessageComposeViewController {
+        let controller = MFMessageComposeViewController()
+        controller.messageComposeDelegate = context.coordinator
+        controller.body = "Made with \(PhotoRevivalBrand.fullName)"
+        _ = controller.addAttachmentURL(
+            attachmentURL,
+            withAlternateFilename: attachmentURL.lastPathComponent
+        )
+        return controller
+    }
+
+    func updateUIViewController(
+        _ uiViewController: MFMessageComposeViewController,
+        context: Context
+    ) {}
+
+    final class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
+        private let onFinish: () -> Void
+
+        init(onFinish: @escaping () -> Void) {
+            self.onFinish = onFinish
+        }
+
+        func messageComposeViewController(
+            _ controller: MFMessageComposeViewController,
+            didFinishWith result: MessageComposeResult
+        ) {
+            onFinish()
+        }
+    }
 }

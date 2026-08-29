@@ -122,6 +122,7 @@ struct SuperPrizeOfferView: View {
     @AppStorage("isSubscribed") private var isSubscribed = false
     @State private var isPurchasing = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+    @State private var legalDocument: LegalDocument?
     @StateObject private var priceStore = StoreProductPriceStore.shared
 
     private let promotionContext = AppAnalytics.PromotionContext(
@@ -175,6 +176,10 @@ struct SuperPrizeOfferView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
         }
         .task {
             let productID = SubscriptionProductID.superPrizeWeekly.rawValue
@@ -279,8 +284,8 @@ struct SuperPrizeOfferView: View {
             .accessibilityIdentifier("super-prize-continue")
             .position(x: 215, y: 839)
 
-            Label("Purchase securely processed by Apple", systemImage: "apple.logo")
-                .font(.system(size: 12, weight: .regular))
+            LegalLinksView(onOpen: { legalDocument = $0 })
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(.white.opacity(0.9))
                 .position(x: 215, y: 886)
 
@@ -430,6 +435,7 @@ struct LimitedTimeOfferPopup: View {
     @State private var isPurchasing = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
     @State private var purchaseTask: Task<Void, Never>?
+    @State private var legalDocument: LegalDocument?
     @StateObject private var priceStore = StoreProductPriceStore.shared
 
     init(
@@ -510,6 +516,10 @@ struct LimitedTimeOfferPopup: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
+        }
         .onDisappear {
             purchaseTask?.cancel()
         }
@@ -563,7 +573,7 @@ struct LimitedTimeOfferPopup: View {
                     benefitColumn(["Evolving & Customizable Styles"])
 
                     HStack(alignment: .top, spacing: 18) {
-                        benefitColumn(["Priority", "No Watermark", "30% OFF Credit"])
+                        benefitColumn(["Priority", "No Watermark", "Create More Weekly"])
                         benefitColumn(["Ad-Free", "260 per week"])
                     }
                 }
@@ -637,6 +647,10 @@ struct LimitedTimeOfferPopup: View {
             .buttonStyle(TemplatePressStyle())
             .disabled(isPurchasing)
             .accessibilityIdentifier("limited-offer-try-now")
+
+            LegalLinksView(onOpen: { legalDocument = $0 })
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(LimitedOfferPalette.secondaryText)
         }
         .padding(22)
         .background(
@@ -783,6 +797,7 @@ struct SummerSalePaywallView: View {
     @State private var isPurchasing = false
     @State private var isRestoring = false
     @State private var purchaseAlert: SubscriptionPurchaseAlert?
+    @State private var legalDocument: LegalDocument?
 
     private var promotionContext: AppAnalytics.PromotionContext {
         AppAnalytics.PromotionContext(
@@ -809,34 +824,35 @@ struct SummerSalePaywallView: View {
                 let cardHeight = min(max(proxy.size.height * 0.215, 176), 218)
                 let signCardSpacing: CGFloat = compact ? 34 : 40
 
-                VStack(spacing: 0) {
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 27, weight: .light))
-                                .foregroundStyle(Color.black.opacity(0.88))
-                                .frame(width: 48, height: 48)
-                                .background(.white.opacity(0.82), in: Circle())
-                        }
-                        .buttonStyle(TemplatePressStyle())
-                        .accessibilityLabel("Close summer offer")
+                ScrollView(.vertical) {
+                    VStack(spacing: 0) {
+                        HStack {
+                            Button { dismiss() } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 27, weight: .light))
+                                    .foregroundStyle(Color.black.opacity(0.88))
+                                    .frame(width: 48, height: 48)
+                                    .background(.white.opacity(0.82), in: Circle())
+                            }
+                            .buttonStyle(TemplatePressStyle())
+                            .accessibilityLabel("Close summer offer")
 
-                        Spacer()
+                            Spacer()
 
-                        Button(action: restorePurchases) {
-                            Text(isRestoring ? "Restoring..." : "Restore")
-                                .font(.system(size: 19, weight: .bold))
-                                .foregroundStyle(Color(red: 0.55, green: 0.31, blue: 0.10))
-                                .padding(.horizontal, 22)
-                                .frame(height: 48)
-                                .background(.white.opacity(0.84), in: Capsule())
+                            Button(action: restorePurchases) {
+                                Text(isRestoring ? "Restoring..." : "Restore")
+                                    .font(.system(size: 19, weight: .bold))
+                                    .foregroundStyle(Color(red: 0.55, green: 0.31, blue: 0.10))
+                                    .padding(.horizontal, 22)
+                                    .frame(height: 48)
+                                    .background(.white.opacity(0.84), in: Capsule())
+                            }
+                            .buttonStyle(TemplatePressStyle())
+                            .disabled(isRestoring || isPurchasing)
+                            .accessibilityIdentifier("summer-offer-restore")
                         }
-                        .buttonStyle(TemplatePressStyle())
-                        .disabled(isRestoring || isPurchasing)
-                        .accessibilityIdentifier("summer-offer-restore")
-                    }
-                    .padding(.horizontal, horizontalPadding)
-                    .padding(.top, compact ? 4 : 8)
+                        .padding(.horizontal, horizontalPadding)
+                        .padding(.top, compact ? 4 : 8)
 
                     SummerPromotionHeadline(compact: compact)
                         .padding(.top, compact ? 3 : 7)
@@ -905,13 +921,21 @@ struct SummerSalePaywallView: View {
                     .accessibilityValue(offer.plan(for: selectedPlan).productID)
                     .padding(.horizontal, horizontalPadding + 2)
 
-                    Label("Cancel anytime", systemImage: "checkmark.shield")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(Color.black.opacity(0.68))
-                        .padding(.top, compact ? 7 : 10)
-                        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 8))
+                    VStack(spacing: compact ? 4 : 6) {
+                        Label("Cancel anytime", systemImage: "checkmark.shield")
+                            .font(.system(size: 16, weight: .regular))
+
+                        LegalLinksView(onOpen: { legalDocument = $0 })
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(Color.black.opacity(0.68))
+                    .padding(.top, compact ? 7 : 10)
+                    .padding(.bottom, max(proxy.safeAreaInsets.bottom, 8))
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height)
+                    .frame(width: proxy.size.width)
+                    .frame(minHeight: proxy.size.height)
+                }
+                .scrollIndicators(.hidden)
             }
 
             if isPurchasing || isRestoring {
@@ -942,6 +966,10 @@ struct SummerSalePaywallView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
         }
     }
 

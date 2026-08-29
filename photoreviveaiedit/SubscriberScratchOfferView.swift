@@ -353,7 +353,7 @@ struct SubscriberScratchOfferView: View {
                 stage = .freeRevealed
                 alert = SubscriberScratchAlert(
                     title: "Unable to add credits",
-                    message: error.localizedDescription
+                    message: error.userFacingEnglishMessage()
                 )
             }
         }
@@ -384,7 +384,7 @@ struct SubscriberScratchOfferView: View {
                     isWorking = false
                     alert = SubscriberScratchAlert(
                         title: "Purchase unavailable",
-                        message: error.localizedDescription
+                        message: error.userFacingEnglishMessage()
                     )
                 }
                 return

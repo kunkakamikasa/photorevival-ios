@@ -1,5 +1,106 @@
 import SwiftUI
 
+enum EnglishDisplayText {
+    private static let titleTrimCharacters = CharacterSet.whitespacesAndNewlines.union(
+        CharacterSet(charactersIn: "-–—·|/\\,\u{FF0C}\u{3001}()[]{}")
+    )
+
+    static func hasHanCharacters(_ value: String) -> Bool {
+        value.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x2E80...0x2FDF,
+                 0x3400...0x4DBF,
+                 0x4E00...0x9FFF,
+                 0xF900...0xFAFF,
+                 0x20000...0x2EBEF,
+                 0x2F800...0x2FA1F,
+                 0x30000...0x323AF:
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    static func title(_ value: String?, fallback: String) -> String {
+        guard let value else { return fallback }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return fallback }
+        guard hasHanCharacters(trimmed) else { return trimmed }
+
+        let filteredCharacters = trimmed.unicodeScalars.compactMap { scalar -> Character? in
+            guard !isHan(scalar), !isCJKPunctuation(scalar) else { return nil }
+            return Character(String(scalar))
+        }
+        let filtered = String(filteredCharacters)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: titleTrimCharacters)
+        return filtered.isEmpty ? fallback : filtered
+    }
+
+    static func sectionTitle(
+        _ value: String?,
+        id: String,
+        generationKind: TemplateGenerationKind
+    ) -> String {
+        if let value, hasHanCharacters(value) {
+            switch id {
+            case "cms-section-6561":
+                return "Supermodel Runway"
+            case "cms-section-6567":
+                return "God-Tier Live Suspect"
+            default:
+                break
+            }
+        }
+        return title(
+            value,
+            fallback: generationKind == .video ? "Featured Videos" : "Featured Photos"
+        )
+    }
+
+    static func prompt(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !hasHanCharacters(trimmed) else { return nil }
+        return value
+    }
+
+    /// Server and StoreKit messages can follow the device or provider locale.
+    /// The app is English-only, so never surface a message containing Han
+    /// characters. Keep the original error in logs and show a safe English
+    /// fallback in the UI instead.
+    static func userFacingMessage(_ value: String?, fallback: String) -> String {
+        guard let value else { return fallback }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !hasHanCharacters(trimmed) else { return fallback }
+        return trimmed
+    }
+
+    private static func isHan(_ scalar: Unicode.Scalar) -> Bool {
+        hasHanCharacters(String(scalar))
+    }
+
+    private static func isCJKPunctuation(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3000...0x303F, 0xFF00...0xFFEF:
+            true
+        default:
+            false
+        }
+    }
+}
+
+extension Error {
+    func userFacingEnglishMessage(
+        fallback: String = "Something went wrong. Please try again."
+    ) -> String {
+        EnglishDisplayText.userFacingMessage(localizedDescription, fallback: fallback)
+    }
+}
+
 enum AppTab: String, CaseIterable, Identifiable {
     case home
     case photo
@@ -107,7 +208,7 @@ struct AppCreditPricing: Hashable, Decodable {
         imageToImageCredits: Int = 30,
         textToImageCredits: Int = 30,
         otherImageCredits: Int = 30,
-        defaultVideoResolution: String = "540p",
+        defaultVideoResolution: String = "480p",
         defaultVideoSound: Bool = false,
         defaultVideoMultiShot: Bool = false
     ) {
@@ -124,7 +225,12 @@ struct AppCreditPricing: Hashable, Decodable {
         self.imageToImageCredits = max(0, imageToImageCredits)
         self.textToImageCredits = max(0, textToImageCredits)
         self.otherImageCredits = max(0, otherImageCredits)
-        self.defaultVideoResolution = defaultVideoResolution
+        let normalizedVideoResolution = defaultVideoResolution
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        self.defaultVideoResolution = normalizedVideoResolution == "540p"
+            ? "480p"
+            : normalizedVideoResolution
         self.defaultVideoSound = defaultVideoSound
         self.defaultVideoMultiShot = defaultVideoMultiShot
     }
@@ -245,6 +351,25 @@ struct TemplateItem: Identifiable, Hashable {
         min(max(imageReferenceCount, 1), 3)
     }
 
+    /// Batch-published two-stage videos store the image-composition prompt and
+    /// video-motion prompt in one compatibility field. The upload page should
+    /// only show the second-stage motion prompt to the user.
+    var displayedPromptTemplate: String? {
+        guard let promptTemplate else { return nil }
+        let visiblePrompt: String
+        if let markerRange = promptTemplate.range(
+            of: "VIDEO MOTION:",
+            options: [.caseInsensitive]
+        ) {
+            let videoPrompt = promptTemplate[markerRange.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            visiblePrompt = videoPrompt.isEmpty ? promptTemplate : videoPrompt
+        } else {
+            visiblePrompt = promptTemplate
+        }
+        return EnglishDisplayText.prompt(visiblePrompt)
+    }
+
     func uploadPlaceholderURL(at index: Int) -> URL? {
         guard uploadPlaceholderURLs.indices.contains(index) else { return nil }
         return uploadPlaceholderURLs[index]
@@ -273,7 +398,8 @@ struct TemplateItem: Identifiable, Hashable {
         modelID: String? = nil
     ) {
         self.id = id
-        self.title = title
+        let fallbackTitle = generationKind == .video ? "AI Video" : "AI Photo"
+        self.title = EnglishDisplayText.title(title, fallback: fallbackTitle)
         self.imageName = imageName
         self.videoName = videoName
         self.coverImageURL = coverImageURL
@@ -284,7 +410,9 @@ struct TemplateItem: Identifiable, Hashable {
         self.generationKind = generationKind
         self.imageReferenceCount = imageReferenceCount
         self.detailGroupID = detailGroupID
-        self.detailGroupTitle = detailGroupTitle
+        self.detailGroupTitle = detailGroupTitle.map {
+            EnglishDisplayText.title($0, fallback: fallbackTitle)
+        }
         self.showsPrompt = showsPrompt
         self.promptIsEditable = promptIsEditable
         self.promptTemplate = promptTemplate
@@ -464,7 +592,7 @@ struct HomeQuickAction: Identifiable, Hashable {
         generationTargets: [FeatureGenerationTarget] = []
     ) {
         self.feature = feature
-        self.title = title ?? feature.title
+        self.title = EnglishDisplayText.title(title, fallback: feature.title)
         self.item = item
         self.generationTargets = generationTargets.isEmpty
             ? generationTarget.map { [$0] } ?? []
@@ -596,8 +724,13 @@ struct TemplateSection: Identifiable {
         sortOrder: Int? = nil
     ) {
         let resolvedID = id ?? title
+        let resolvedTitle = EnglishDisplayText.sectionTitle(
+            title,
+            id: resolvedID,
+            generationKind: generationKind
+        )
         self.id = resolvedID
-        self.title = title
+        self.title = resolvedTitle
         self.badge = badge
         self.showsPrompt = showsPrompt
         self.promptIsEditable = promptIsEditable
@@ -616,7 +749,7 @@ struct TemplateSection: Identifiable {
             return configuredItem.inGenerationGroup(
                 generationKind,
                 detailGroupID: resolvedID,
-                detailGroupTitle: title
+                detailGroupTitle: resolvedTitle
             )
         }
     }

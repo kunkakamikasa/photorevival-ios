@@ -47,15 +47,15 @@ private enum DebugUserState: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .live:
-            "真实状态"
+            "Live State"
         case .signedOut:
-            "未登录用户"
+            "Signed-Out User"
         case .signedIn:
-            "已登录用户（未订阅）"
+            "Signed-In User (Not Subscribed)"
         case .returningUnsubscribed:
-            "回访 · 未订阅"
+            "Returning · Not Subscribed"
         case .returningSubscribed:
-            "回访 · 已订阅"
+            "Returning · Subscribed"
         }
     }
 
@@ -292,7 +292,7 @@ private struct DebugTestPanel: View {
         NavigationStack {
             List {
                 Section {
-                    Picker("用户状态", selection: stateBinding) {
+                    Picker("User State", selection: stateBinding) {
                         ForEach(DebugUserState.allCases) { state in
                             Label(state.title, systemImage: state.systemImage)
                                 .tag(state)
@@ -301,107 +301,107 @@ private struct DebugTestPanel: View {
                     .pickerStyle(.navigationLink)
                     .accessibilityIdentifier("debug-user-state-picker")
 
-                    LabeledContent("当前登录态", value: isLoggedIn ? "已登录（模拟）" : "未登录")
+                    LabeledContent("Current Sign-In", value: isLoggedIn ? "Signed In (Simulated)" : "Signed Out")
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("debug-current-login-state")
                         .accessibilityValue(isLoggedIn ? "signed-in" : "signed-out")
-                    LabeledContent("当前订阅态", value: isSubscribed ? "已订阅（模拟）" : "未订阅")
+                    LabeledContent("Current Subscription", value: isSubscribed ? "Subscribed (Simulated)" : "Not Subscribed")
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("debug-current-subscription-state")
                         .accessibilityValue(isSubscribed ? "subscribed" : "unsubscribed")
                 } header: {
-                    Text("界面状态")
+                    Text("UI State")
                 } footer: {
-                    Text("模拟状态只影响本机 Debug 界面和促销资格，不会创建服务器账号，也不会伪造 App Store 购买。切回真实状态会重新读取登录与订阅。")
+                    Text("Simulated states affect only this device's Debug UI and promotion eligibility. They do not create server accounts or App Store purchases. Switch back to Live State to reload sign-in and subscription status.")
                 }
 
-                Section("首启与订阅关闭挽回") {
+                Section("First Launch and Paywall Follow-Up") {
                     promotionButton(
-                        "首次启动订阅页",
+                        "First-Launch Membership",
                         systemImage: "sparkles.rectangle.stack.fill",
                         state: .signedOut,
                         route: .firstLaunchMembership
                     )
                     promotionButton(
-                        "关闭订阅页 · 限时折扣",
+                        "Paywall Close · Limited-Time Offer",
                         systemImage: "timer",
                         state: .signedIn,
                         route: .paywallFollowUp(.limitedTime)
                     )
                     promotionButton(
-                        "关闭订阅页 · 3天免费试用",
+                        "Paywall Close · 3-Day Free Trial",
                         systemImage: "calendar.badge.clock",
                         state: .signedIn,
                         route: .paywallFollowUp(.threeDayTrial)
                     )
                     promotionButton(
-                        "CMS 夏日订阅促销",
+                        "CMS Summer Membership Offer",
                         systemImage: "sun.max.fill",
                         state: .signedIn,
                         route: .summerSale
                     )
                 }
 
-                Section("回访未订阅用户") {
+                Section("Returning Non-Subscribers") {
                     promotionButton(
-                        "家庭专享订阅促销",
+                        "Family-Exclusive Membership Offer",
                         systemImage: "person.3.fill",
                         state: .returningUnsubscribed,
                         route: .returning(.familyExclusive)
                     )
                     promotionButton(
-                        "家庭专享 · 二次挽回",
+                        "Family Exclusive · Second Follow-Up",
                         systemImage: "arrow.uturn.backward.circle.fill",
                         state: .returningUnsubscribed,
                         route: .returningRetention
                     )
                     promotionButton(
-                        "超级奖品订阅促销",
+                        "Super Prize Membership Offer",
                         systemImage: "gift.fill",
                         state: .returningUnsubscribed,
                         route: .returning(.superPrize)
                     )
                     promotionButton(
-                        "限时订阅促销",
+                        "Limited-Time Membership Offer",
                         systemImage: "timer",
                         state: .returningUnsubscribed,
                         route: .returning(.limitedTime)
                     )
                 }
 
-                Section("积分条件弹窗") {
+                Section("Credit-Gated Offers") {
                     promotionButton(
-                        "积分购买退出挽回弹窗",
+                        "Credit Purchase Exit Offer",
                         systemImage: "giftcard.fill",
                         state: .signedIn,
                         route: .creditExitOffer
                     )
                     promotionButton(
-                        "已订阅回访 · 积分刮刮卡",
+                        "Returning Subscriber · Credit Scratch Card",
                         systemImage: "ticket.fill",
                         state: .returningSubscribed,
                         route: .subscriberScratch
                     )
                 }
 
-                Section("促销资格") {
+                Section("Promotion Eligibility") {
                     Button {
                         resetPromotionEligibility()
                     } label: {
-                        Label("重置全部促销资格", systemImage: "arrow.counterclockwise")
+                        Label("Reset All Promotion Eligibility", systemImage: "arrow.counterclockwise")
                     }
 
                     LabeledContent(
-                        "积分刮刮卡",
-                        value: scratchCompletedVersion < SubscriberScratchCampaign.version ? "可触发" : "已完成"
+                        "Credit Scratch Card",
+                        value: scratchCompletedVersion < SubscriberScratchCampaign.version ? "Eligible" : "Completed"
                     )
                 }
             }
-            .navigationTitle("Debug 测试")
+            .navigationTitle("Debug Tests")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成", action: onClose)
+                    Button("Done", action: onClose)
                 }
             }
         }
