@@ -133,6 +133,14 @@ struct MembershipPaywallView: View {
                         )
                 }
                 .scrollIndicators(.hidden)
+
+                if isPurchasing || isRestoring {
+                    StorePurchaseLoadingOverlay(
+                        accessibilityLabel: isRestoring
+                            ? "Restoring App Store purchases"
+                            : "Processing App Store purchase"
+                    )
+                }
             }
         }
         .ignoresSafeArea(edges: usesLoggedInPaywall ? .all : .bottom)
@@ -2257,7 +2265,7 @@ struct InviteFriendsView: View {
                         .background(AppPalette.backgroundTop, in: RoundedRectangle(cornerRadius: 10))
 
                         if let code = accountStore.referralStatus?.invitationCode {
-                            ShareLink(item: "Join me on Photo Revival. Use invitation code \(code) when you sign in.") {
+                            ShareLink(item: "Join me on Photo Revival. After signing in, open Invite Friends and redeem invitation code \(code).") {
                                 Label("Invite Now", systemImage: "arrow.right")
                                     .font(.headline)
                                     .foregroundStyle(.white)
@@ -2335,10 +2343,10 @@ struct InviteFriendsView: View {
     private var invitationSteps: some View {
         VStack(spacing: 18) {
             HStack(spacing: 8) {
-                invitationStep("Share link", systemImage: "person.badge.plus")
+                invitationStep("Share code", systemImage: "person.badge.plus")
                 Image(systemName: "chevron.right.2")
                     .foregroundStyle(AppPalette.orange)
-                invitationStep("Friend joins", systemImage: "person.crop.circle.badge.checkmark")
+                invitationStep("Friend redeems", systemImage: "person.crop.circle.badge.checkmark")
                 Image(systemName: "chevron.right.2")
                     .foregroundStyle(AppPalette.orange)
                 invitationStep("Earn rewards", systemImage: "gift.fill")
@@ -2373,12 +2381,12 @@ struct InviteFriendsView: View {
 
     private var signupRewardText: String {
         let config = accountStore.referralStatus?.rewardConfig
-        return "You earn \(config?.signupReferrerCredits ?? 0) credits and your friend earns \(config?.signupReferredCredits ?? 0) after sign-up"
+        return "You earn \(config?.signupReferrerCredits ?? 0) credits and your friend earns \(config?.signupReferredCredits ?? 0) when they redeem your invitation code"
     }
 
     private var subscriptionRewardText: String {
         let amount = accountStore.referralStatus?.rewardConfig?.subscriptionReferrerCredits ?? 0
-        return "You earn \(amount) credits after a qualifying subscription"
+        return "You earn an additional \(amount) credits when your invited friend starts a qualifying subscription"
     }
 
     private var referralInformationText: String {

@@ -854,7 +854,6 @@ struct CreditDetailView: View {
     @State private var showCreditStore = false
     @State private var showExitOfferAfterStoreDismisses = false
     @State private var showExitOffer = false
-    @State private var showFAQ = false
 
     init(credits: Binding<Int>, accountStore: AppAccountStore? = nil) {
         _credits = credits
@@ -936,11 +935,6 @@ struct CreditDetailView: View {
                 }
             )
         }
-        .alert("FAQ", isPresented: $showFAQ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Credits are consumed when you generate images or videos and added by rewards.")
-        }
         .task {
             await accountStore.refreshCreditTransactions()
             credits = accountStore.creditsBalance
@@ -956,13 +950,6 @@ struct CreditDetailView: View {
             HStack {
                 CircleBackButton(label: "Close credit detail") { dismiss() }
                 Spacer()
-                Button("FAQ") { showFAQ = true }
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(AppPalette.accent)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                .overlay(Capsule().stroke(AppPalette.accent, lineWidth: 1.2))
-                .buttonStyle(.plain)
             }
         }
         .frame(height: 68)

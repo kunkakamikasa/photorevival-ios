@@ -164,6 +164,7 @@ private struct FixedAspectRatioLayout: Layout {
 struct MePage: View {
     @Binding var kind: MeHistoryKind
     @ObservedObject var accountStore: AppAccountStore
+    @ObservedObject private var generationStore = BackgroundGenerationWorkStore.shared
     let onCreate: (FixedFeature) -> Void
     let onSettings: () -> Void
     @State private var showNotice = false
@@ -225,11 +226,33 @@ struct MePage: View {
         return accountStore.historyTasks.filter { kind == .video ? $0.isVideo : !$0.isVideo }
     }
 
+    private var visibleGenerationRecords: [GenerationProgressRecord] {
+        let historyTaskIDs = Set(accountStore.historyTasks.map(\.id))
+        return generationStore.records.filter { record in
+            record.kind.historyKind == kind
+                && record.serverTaskID.map { !historyTaskIDs.contains($0) } != false
+        }
+    }
+
+    private var hasVisibleCreations: Bool {
+        !visibleGenerationRecords.isEmpty || !visibleHistoryTasks.isEmpty
+    }
+
+    private var generationPollingKey: String {
+        let localIDs = generationStore.records
+            .filter { $0.state.needsHistoryRefresh }
+            .map { $0.id.uuidString }
+        let serverIDs = accountStore.historyTasks
+            .filter { !Self.isTerminalStatus($0.status) }
+            .map(\.id)
+        return (localIDs + serverIDs).sorted().joined(separator: ",")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             meHeader
 
-            if !visibleHistoryTasks.isEmpty {
+            if hasVisibleCreations {
                 historyContent
                 legalNotice
                     .padding(.top, 16)
@@ -275,8 +298,13 @@ struct MePage: View {
         } message: {
             Text(noticeMessage)
         }
-        .task {
-            await accountStore.refreshHistory()
+        .task(id: generationPollingKey) {
+            await refreshAndReconcileHistory()
+            while !Task.isCancelled && needsGenerationPolling {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                await refreshAndReconcileHistory()
+            }
         }
     }
 
@@ -294,6 +322,7 @@ struct MePage: View {
                             .background(kind == item ? Color.white.opacity(0.46) : .clear, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("me-history-kind-\(item.rawValue.lowercased())")
                 }
             }
             .padding(3)
@@ -320,6 +349,15 @@ struct MePage: View {
     private var historyContent: some View {
         ScrollView {
             LazyVStack(spacing: 28) {
+                ForEach(visibleGenerationRecords) { record in
+                    MeGenerationProgressCard(
+                        record: record,
+                        onDismiss: {
+                            generationStore.remove(recordID: record.id)
+                        }
+                    )
+                }
+
                 ForEach(visibleHistoryTasks) { task in
                     MeHistoryTaskCard(
                         task: task,
@@ -397,6 +435,20 @@ struct MePage: View {
         noticeTitle = title
         noticeMessage = message
         showNotice = true
+    }
+
+    private var needsGenerationPolling: Bool {
+        generationStore.records.contains { $0.state.needsHistoryRefresh }
+            || accountStore.historyTasks.contains { !Self.isTerminalStatus($0.status) }
+    }
+
+    private func refreshAndReconcileHistory() async {
+        await accountStore.refreshHistory()
+        generationStore.reconcile(with: accountStore.historyTasks)
+    }
+
+    private static func isTerminalStatus(_ status: String) -> Bool {
+        ["completed", "failed", "cancelled", "canceled"].contains(status.lowercased())
     }
 
     private func deleteHistoryTask(_ task: GenerationHistoryTask) {
@@ -502,6 +554,147 @@ struct MePage: View {
     }
 }
 
+private struct MeGenerationProgressCard: View {
+    let record: GenerationProgressRecord
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(record.title)
+                        .font(.system(size: 25, weight: .heavy))
+                        .foregroundStyle(AppPalette.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Text(stateTitle)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(AppPalette.brownInk)
+                        .lineLimit(1)
+                }
+                .layoutPriority(1)
+
+                Spacer(minLength: 10)
+
+                Text(dayText)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(AppPalette.brownInk)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                if case .failed = record.state {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(AppPalette.accent)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss failed generation")
+                }
+            }
+
+            FixedAspectRatioLayout(aspectRatio: 16.0 / 9.0) {
+                ZStack {
+                    Color.black
+                    progressMedia
+
+                    Color.black.opacity(0.44)
+
+                    VStack(spacing: 12) {
+                        switch record.state {
+                        case .failed:
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 30))
+                        default:
+                            ProgressView()
+                                .controlSize(.large)
+                                .tint(.white)
+                        }
+
+                        Text(stateMessage)
+                            .font(.system(size: 16, weight: .semibold))
+                            .multilineTextAlignment(.center)
+                    }
+                    .foregroundStyle(.white)
+                    .padding()
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(.top, 18)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("generation-progress-card-\(record.id.uuidString)")
+    }
+
+    @ViewBuilder
+    private var progressMedia: some View {
+        switch record.state {
+        case .completed(let url):
+            if record.kind == .video {
+                GeneratedVideoPlayerView(
+                    url: url,
+                    videoGravity: .resizeAspect,
+                    autoplay: false
+                )
+            } else {
+                CachedRemoteImage(url: url) { image in
+                    Image(uiImage: image).resizable().scaledToFit()
+                } placeholder: {
+                    previewImage
+                } failure: {
+                    previewImage
+                }
+            }
+        default:
+            previewImage
+        }
+    }
+
+    @ViewBuilder
+    private var previewImage: some View {
+        if let image = record.previewImage {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .blur(radius: 8)
+                .scaleEffect(1.08)
+        }
+    }
+
+    private var stateTitle: String {
+        switch record.state {
+        case .submitting: "Starting…"
+        case .processing: "Generating…"
+        case .completed: "Finalizing…"
+        case .failed: "Generation Failed"
+        }
+    }
+
+    private var stateMessage: String {
+        switch record.state {
+        case .submitting:
+            "Your \(record.kind.rawValue) is being generated."
+        case .processing:
+            "Your \(record.kind.rawValue) is being generated."
+        case .completed:
+            "Finishing your creation…"
+        case .failed(let message):
+            message
+        }
+    }
+
+    private var dayText: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(record.createdAt) { return "Today" }
+        if calendar.isDateInYesterday(record.createdAt) { return "Yesterday" }
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        return formatter.string(from: record.createdAt)
+    }
+}
+
 private struct MeHistoryTaskCard: View {
     let task: GenerationHistoryTask
     let isDeleting: Bool
@@ -560,7 +753,7 @@ private struct MeHistoryTaskCard: View {
                             } else {
                                 ProgressView().tint(.white)
                             }
-                            Text(task.userFacingErrorMessage)
+                            Text(historyStateMessage)
                                 .font(.subheadline)
                         }
                         .foregroundStyle(.white.opacity(0.78))
@@ -634,6 +827,15 @@ private struct MeHistoryTaskCard: View {
 
     private var resultAvailable: Bool {
         task.status.lowercased() == "completed" && task.resultURL != nil
+    }
+
+    private var historyStateMessage: String {
+        if task.status.lowercased() == "failed" {
+            return task.userFacingErrorMessage
+        }
+        return task.isVideo
+            ? "Your video is being generated."
+            : "Your image is being generated."
     }
 
     @ViewBuilder
@@ -719,11 +921,23 @@ private struct MeHistoryPreviewView: View {
                     .ignoresSafeArea(edges: .horizontal)
                 } else {
                     CachedRemoteImage(url: url) { image in
-                        Image(uiImage: image).resizable().scaledToFit()
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .accessibilityIdentifier("history-photo-preview")
+                            .overlay(alignment: .topTrailing) {
+                                closeButton
+                                    .padding(12)
+                            }
                     } placeholder: {
-                        ProgressView().tint(.white)
+                        photoFallback {
+                            ProgressView().tint(.white)
+                        }
                     } failure: {
-                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.white)
+                        photoFallback {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.white)
+                        }
                     }
                     .padding()
                 }
@@ -731,19 +945,38 @@ private struct MeHistoryPreviewView: View {
 
             GeneratedContentWatermark()
 
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
-                    .background(.black.opacity(0.52), in: Circle())
+            if task.isVideo {
+                closeButton
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.trailing, 18)
+                    .padding(.top, 44)
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.trailing, 18)
-            .padding(.top, 44)
-            .accessibilityLabel("Close preview")
         }
         .preferredColorScheme(.dark)
+    }
+
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 46, height: 46)
+                .background(.black.opacity(0.52), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close preview")
+    }
+
+    private func photoFallback<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack(alignment: .topTrailing) {
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            closeButton
+                .padding(12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

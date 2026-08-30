@@ -14,6 +14,17 @@ enum PhotoReviveAPIConfig {
     static let appID = "photorevival"
 }
 
+enum PhotoReviveRequestAuthorization {
+    static func apply(
+        to request: inout URLRequest,
+        needsToken: Bool,
+        accessToken: String?
+    ) {
+        guard needsToken, let accessToken, !accessToken.isEmpty else { return }
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    }
+}
+
 enum PhotoReviveAuthProvider: String {
     case apple
     case google
@@ -342,6 +353,7 @@ final class PhotoReviveAuthClient {
     private var boundTimeZoneIdentifier: String?
     private var boundTrackingAuthorizationStatus: UInt?
     private var appContextBindingTask: Task<Void, Never>?
+    private var userSessionTask: Task<String, Error>?
 
     init(session: URLSession? = nil) {
         if let session {
@@ -491,13 +503,47 @@ final class PhotoReviveAuthClient {
         }
     }
 
-    /// Feedback remains available before OAuth sign-in. The anonymous session
-    /// gives the server a stable user_id while leaving the App's visible login
-    /// state unchanged.
-    func feedbackAccessToken() async throws -> String {
-        if cachedSession != nil {
-            return try await accessToken()
+    func accessTokenIfAvailable() async -> String? {
+        guard cachedSession != nil else { return nil }
+        return try? await accessToken()
+    }
+
+    /// Store purchases and other account-scoped guest actions still need a
+    /// stable Supabase user. Create an anonymous session without changing the
+    /// App's visible signed-in state so the server always receives a JWT with
+    /// a user `sub` claim.
+    func ensureUserAccessToken() async throws -> String {
+        if let cachedSession {
+            if Self.tokenPayload(from: cachedSession.accessToken)?["sub"] as? String != nil {
+                return try await accessToken()
+            }
+
+            // A project-level anon key can authorize the gateway but cannot
+            // identify the purchaser. Discard that unusable cached value and
+            // create a real anonymous user session before starting StoreKit.
+            clearSession()
         }
+
+        if let userSessionTask {
+            return try await userSessionTask.value
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { throw PhotoReviveAuthError.invalidResponse }
+            return try await self.createAnonymousUserAccessToken()
+        }
+        userSessionTask = task
+        do {
+            let accessToken = try await task.value
+            userSessionTask = nil
+            return accessToken
+        } catch {
+            userSessionTask = nil
+            throw error
+        }
+    }
+
+    private func createAnonymousUserAccessToken() async throws -> String {
 
         var request = URLRequest(
             url: PhotoReviveAPIConfig.projectURL.appendingPathComponent(
@@ -523,7 +569,7 @@ final class PhotoReviveAuthClient {
         guard let anonymous = response.session else {
             throw PhotoReviveAuthError.requestFailed(
                 statusCode: 401,
-                message: "Unable to start a feedback session. Please try again."
+                message: "Unable to start a purchase session. Please try again."
             )
         }
         let session = PhotoReviveSession(
@@ -531,10 +577,19 @@ final class PhotoReviveAuthClient {
             refreshToken: anonymous.refreshToken,
             expiresAt: Date().addingTimeInterval(anonymous.expiresIn).timeIntervalSince1970
         )
+        guard Self.tokenPayload(from: session.accessToken)?["sub"] as? String != nil else {
+            throw PhotoReviveAuthError.invalidResponse
+        }
+        try Task.checkCancellation()
         hasBoundAppContext = true
         boundTimeZoneIdentifier = Self.currentTimeZoneIdentifier
         persist(session)
         return session.accessToken
+    }
+
+    /// Feedback uses the same stable guest identity as purchases and credits.
+    func feedbackAccessToken() async throws -> String {
+        try await ensureUserAccessToken()
     }
 
     func updateProfile(displayName: String? = nil, avatarURL: String? = nil) async throws {
@@ -560,7 +615,11 @@ final class PhotoReviveAuthClient {
         )
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        PhotoReviveRequestAuthorization.apply(
+            to: &request,
+            needsToken: true,
+            accessToken: token
+        )
         request.httpBody = try JSONEncoder().encode(
             PhotoReviveProfileUpdateRequest(data: metadata)
         )
@@ -592,7 +651,11 @@ final class PhotoReviveAuthClient {
             )
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            PhotoReviveRequestAuthorization.apply(
+                to: &request,
+                needsToken: true,
+                accessToken: token
+            )
             request.httpBody = try JSONEncoder().encode(
                 PhotoReviveAdjustAttributionRequest(
                     user_id: userID,
@@ -631,7 +694,11 @@ final class PhotoReviveAuthClient {
 
         var request = URLRequest(url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("auth/v1/logout"))
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        PhotoReviveRequestAuthorization.apply(
+            to: &request,
+            needsToken: true,
+            accessToken: accessToken
+        )
         _ = try? await session.data(for: request)
     }
 
@@ -780,7 +847,11 @@ final class PhotoReviveAuthClient {
         )
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        PhotoReviveRequestAuthorization.apply(
+            to: &request,
+            needsToken: true,
+            accessToken: accessToken
+        )
         request.httpBody = try JSONEncoder().encode(
             PhotoReviveAppContextRequest(
                 app_id: PhotoReviveAPIConfig.appID,
@@ -831,6 +902,8 @@ final class PhotoReviveAuthClient {
     private func clearSession() {
         appContextBindingTask?.cancel()
         appContextBindingTask = nil
+        userSessionTask?.cancel()
+        userSessionTask = nil
         cachedSession = nil
         hasBoundAppContext = false
         boundTimeZoneIdentifier = nil

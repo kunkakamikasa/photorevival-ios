@@ -560,12 +560,14 @@ final class PhotoReviveAPIClient {
         transactionID: String,
         signedTransactionInfo: String
     ) async throws -> SubscriptionVerificationResult {
-        try await post(
+        let accessToken = try await authClient.ensureUserAccessToken()
+        return try await post(
             "subscription-verify",
             body: SubscriptionVerificationRequest(
                 transactionID: transactionID,
                 signedTransactionInfo: signedTransactionInfo
-            )
+            ),
+            accessToken: accessToken
         )
     }
 
@@ -859,7 +861,8 @@ final class PhotoReviveAPIClient {
     private func post<Response: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        accessToken: String? = nil
     ) async throws -> Response {
         var request = URLRequest(
             url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("functions/v1/\(path)")
@@ -870,7 +873,7 @@ final class PhotoReviveAPIClient {
         }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request)
+        return try await send(request, accessToken: accessToken)
     }
 
     private func uploadSuggestionScreenshot(
@@ -905,16 +908,19 @@ final class PhotoReviveAPIClient {
 
     private func send<Response: Decodable>(
         _ originalRequest: URLRequest,
+        needsToken: Bool = true,
         accessToken suppliedAccessToken: String? = nil
     ) async throws -> Response {
         var request = originalRequest
-        let token: String
-        if let suppliedAccessToken {
-            token = suppliedAccessToken
-        } else {
-            token = try await authClient.accessToken()
+        var token = suppliedAccessToken
+        if needsToken, token == nil {
+            token = await authClient.accessTokenIfAvailable()
         }
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        PhotoReviveRequestAuthorization.apply(
+            to: &request,
+            needsToken: needsToken,
+            accessToken: token
+        )
 
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else {

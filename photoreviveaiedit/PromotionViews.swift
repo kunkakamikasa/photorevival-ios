@@ -159,6 +159,10 @@ struct SuperPrizeOfferView: View {
                     .scaleEffect(scale)
                     .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
             }
+
+            if isPurchasing {
+                StorePurchaseLoadingOverlay()
+            }
         }
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
@@ -498,6 +502,10 @@ struct LimitedTimeOfferPopup: View {
                     .padding(.vertical, 18)
                 }
                 .scrollIndicators(.hidden)
+            }
+
+            if isPurchasing {
+                StorePurchaseLoadingOverlay()
             }
         }
         .accessibilityIdentifier("limited-time-offer-popup")
@@ -939,14 +947,11 @@ struct SummerSalePaywallView: View {
             }
 
             if isPurchasing || isRestoring {
-                Color.black.opacity(0.16)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-                ProgressView()
-                    .tint(.white)
-                    .controlSize(.large)
-                    .padding(18)
-                    .background(.black.opacity(0.42), in: Circle())
+                StorePurchaseLoadingOverlay(
+                    accessibilityLabel: isRestoring
+                        ? "Restoring App Store purchases"
+                        : "Processing App Store purchase"
+                )
             }
         }
         .preferredColorScheme(.light)

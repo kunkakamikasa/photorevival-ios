@@ -6,6 +6,53 @@ import Testing
 @Suite(.serialized)
 struct CompactCredentialSignInTests {
     @Test
+    func purchaseSessionCreatesOneStableAnonymousUser() async throws {
+        let anonymousLoginCount = LockedCounter()
+        let accessToken = Self.testAccessToken(
+            userID: "purchase-user-id",
+            email: nil,
+            isAnonymous: true
+        )
+
+        CompactCredentialURLProtocol.handler = { request in
+            let url = try #require(request.url)
+
+            if url.path == "/functions/v1/anonymous-login" {
+                anonymousLoginCount.increment()
+                return try Self.response(
+                    for: url,
+                    json: [
+                        "session": [
+                            "access_token": accessToken,
+                            "refresh_token": "purchase-refresh-token",
+                            "expires_in": 3_600,
+                        ],
+                    ]
+                )
+            }
+
+            return try Self.response(for: url, json: [:])
+        }
+        defer { CompactCredentialURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CompactCredentialURLProtocol.self]
+        let client = PhotoReviveAuthClient(session: URLSession(configuration: configuration))
+        await client.signOut()
+
+        async let firstRequest = client.ensureUserAccessToken()
+        async let secondRequest = client.ensureUserAccessToken()
+        let (firstToken, secondToken) = try await (firstRequest, secondRequest)
+
+        #expect(firstToken == accessToken)
+        #expect(secondToken == accessToken)
+        #expect(client.currentUserID == "purchase-user-id")
+        #expect(anonymousLoginCount.value == 1)
+
+        await client.signOut()
+    }
+
+    @Test
     func appContextBindingFailureDoesNotBlockAccessTokenOrFanOutRequests() async throws {
         let bindRequestCount = LockedCounter()
         let releaseBinding = DispatchSemaphore(value: 0)

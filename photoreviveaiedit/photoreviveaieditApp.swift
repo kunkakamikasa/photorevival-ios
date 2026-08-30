@@ -24,6 +24,7 @@ final class PhotoReviveAppDelegate: NSObject, UIApplicationDelegate {
         // the options now, then forward them after the launch video has rendered
         // so a first-network system sheet never lands on the black launch color.
         StartupServiceBootstrap.captureLaunchOptions(launchOptions)
+        SubscriptionTransactionObserver.shared.start()
 
         let shouldPrepareAppOpenAd = AppOpenAdLaunchPolicy().shouldPrepareForLaunch(
             isAdvertisingEnabled: AppOpenAdConfiguration.isAdvertisingEnabled,
