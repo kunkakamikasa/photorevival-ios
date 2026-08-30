@@ -27,6 +27,7 @@ struct ContentView: View {
     @AppStorage("returningOfferLastPresentedDay") private var returningOfferLastPresentedDay = 0.0
     @AppStorage("subscriberScratchCompletedCampaignVersion") private var subscriberScratchCompletedCampaignVersion = 0
     @State private var selectedTab: AppTab = .home
+    @State private var selectedMeHistoryKind = MeHistoryKind.video
     @State private var selectedTemplateRoute: TemplateDetailRoute?
     @State private var showSettings = false
     @State private var fullScreenDestination: AppDestination?
@@ -56,6 +57,7 @@ struct ContentView: View {
             ZStack {
                 if selectedTab == .me {
                     MePage(
+                        kind: $selectedMeHistoryKind,
                         accountStore: accountStore,
                         onCreate: { feature in fullScreenDestination = .fixedFeature(feature) },
                         onSettings: { showSettings = true }
@@ -283,6 +285,14 @@ struct ContentView: View {
                 await featureConfigStore.reloadAfterAttributionChange()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appTabNavigationRequested)) { notification in
+            guard let tab = notification.object as? AppTab else { return }
+            if let rawHistoryKind = notification.userInfo?[Notification.Name.appTabNavigationHistoryKindKey] as? String,
+               let historyKind = MeHistoryKind(rawValue: rawHistoryKind) {
+                selectedMeHistoryKind = historyKind
+            }
+            navigateToMainTab(tab)
+        }
         .task {
             await featureConfigStore.load()
         }
@@ -407,6 +417,22 @@ struct ContentView: View {
                 Task { await accountStore.refreshCredits() }
             }
         )
+    }
+
+    private func navigateToMainTab(_ tab: AppTab) {
+        // A generation screen can be nested below a template detail/editor or
+        // a fixed-feature cover. Clear both possible roots so the real app tab
+        // becomes interactive again in a single tap.
+        selectedTemplateRoute = nil
+        fullScreenDestination = nil
+        showSettings = false
+        withAnimation(.easeInOut(duration: 0.24)) {
+            selectedTab = tab
+        }
+
+        if tab == .me {
+            Task { await accountStore.refreshHistory() }
+        }
     }
 
     private func requireLogin(_ action: @escaping () -> Void) {

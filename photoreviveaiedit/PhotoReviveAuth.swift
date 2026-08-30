@@ -89,7 +89,7 @@ private struct PhotoRevivePasswordRequest: Encodable {
     let password: String
 }
 
-private enum PhotoReviveReviewAccount {
+private enum PhotoReviveCompactAccount {
     static let alias = "review"
     static let email = "review-tester-photorevival@review.local"
 }
@@ -275,7 +275,7 @@ final class PhotoReviveAuthStore: ObservableObject {
 
         Task {
             do {
-                _ = try await client.signInWithPassword(
+                _ = try await client.validatePasswordKeepingCurrentSession(
                     email: normalizedEmail,
                     password: password
                 )
@@ -341,6 +341,7 @@ final class PhotoReviveAuthClient {
     private var hasBoundAppContext = false
     private var boundTimeZoneIdentifier: String?
     private var boundTrackingAuthorizationStatus: UInt?
+    private var appContextBindingTask: Task<Void, Never>?
 
     init(session: URLSession? = nil) {
         if let session {
@@ -418,12 +419,31 @@ final class PhotoReviveAuthClient {
         )
     }
 
-    func signInWithPassword(email: String, password: String) async throws -> PhotoReviveSession {
+    func validatePasswordKeepingCurrentSession(
+        email: String,
+        password: String
+    ) async throws -> PhotoReviveSession {
+        // Compact credentials unlock the signed-in UI only. The session returned
+        // by password validation must never replace the user who owns the current
+        // subscription and credit wallet.
+        _ = try await feedbackAccessToken()
+        guard let preservedSession = cachedSession else {
+            throw PhotoReviveAuthError.invalidResponse
+        }
+
+        _ = try await passwordSessionResponse(email: email, password: password)
+        return preservedSession
+    }
+
+    private func passwordSessionResponse(
+        email: String,
+        password: String
+    ) async throws -> PhotoReviveSessionResponse {
         let normalizedAccount = email
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let serverEmail = normalizedAccount == PhotoReviveReviewAccount.alias
-            ? PhotoReviveReviewAccount.email
+        let serverEmail = normalizedAccount == PhotoReviveCompactAccount.alias
+            ? PhotoReviveCompactAccount.email
             : normalizedAccount
 
         var components = URLComponents(
@@ -443,8 +463,7 @@ final class PhotoReviveAuthClient {
             PhotoRevivePasswordRequest(email: serverEmail, password: password)
         )
 
-        let response: PhotoReviveSessionResponse = try await send(request)
-        return try await persistAuthenticatedSession(response)
+        return try await send(request)
     }
 
     func accessToken() async throws -> String {
@@ -453,7 +472,7 @@ final class PhotoReviveAuthClient {
         }
 
         if cachedSession.isFresh {
-            try await bindAppContextIfNeeded(accessToken: cachedSession.accessToken)
+            scheduleAppContextBindingIfNeeded(accessToken: cachedSession.accessToken)
             return cachedSession.accessToken
         }
 
@@ -464,7 +483,7 @@ final class PhotoReviveAuthClient {
 
         do {
             let refreshed = try await refreshSession(refreshToken: cachedSession.refreshToken)
-            try await bindAppContextIfNeeded(accessToken: refreshed.accessToken)
+            scheduleAppContextBindingIfNeeded(accessToken: refreshed.accessToken)
             return refreshed.accessToken
         } catch {
             clearSession()
@@ -719,16 +738,30 @@ final class PhotoReviveAuthClient {
         }
     }
 
-    private func bindAppContextIfNeeded(accessToken: String) async throws {
+    private func scheduleAppContextBindingIfNeeded(accessToken: String) {
         let currentTimeZoneIdentifier = Self.currentTimeZoneIdentifier
         let trackingStatus = ATTrackingManager.trackingAuthorizationStatus.rawValue
         guard !hasBoundAppContext ||
                 boundTimeZoneIdentifier != currentTimeZoneIdentifier ||
                 boundTrackingAuthorizationStatus != trackingStatus else { return }
-        try await bindAppContext(accessToken: accessToken)
-        hasBoundAppContext = true
-        boundTimeZoneIdentifier = currentTimeZoneIdentifier
-        boundTrackingAuthorizationStatus = trackingStatus
+        guard appContextBindingTask == nil else { return }
+
+        // Context enrichment is useful for analytics and personalization, but
+        // it must never delay or fail the API request that asked for a token.
+        // Coalesce callers so startup refreshes do not fan out identical binds.
+        appContextBindingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.bindAppContext(accessToken: accessToken)
+                guard !Task.isCancelled else { return }
+                self.hasBoundAppContext = true
+            } catch {
+#if DEBUG
+                print("[Auth] App context binding deferred: \(error.localizedDescription)")
+#endif
+            }
+            self.appContextBindingTask = nil
+        }
     }
 
     private func bindAppContext(accessToken: String) async throws {
@@ -796,6 +829,8 @@ final class PhotoReviveAuthClient {
     }
 
     private func clearSession() {
+        appContextBindingTask?.cancel()
+        appContextBindingTask = nil
         cachedSession = nil
         hasBoundAppContext = false
         boundTimeZoneIdentifier = nil

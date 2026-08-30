@@ -156,12 +156,16 @@ struct LoopingVideoView: UIViewRepresentable {
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
     var aspectFitBackgroundColor: UIColor = .black
     var videoAspectRatio: CGFloat? = nil
+    var preservesPlaybackWhenInactive = false
+    var onReadyForDisplay: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> LoopingPlayerUIView {
         let view = LoopingPlayerUIView()
         view.videoGravity = videoGravity
         view.aspectFitBackgroundColor = aspectFitBackgroundColor
         view.videoAspectRatio = videoAspectRatio
+        view.preservesPlaybackWhenInactive = preservesPlaybackWhenInactive
+        view.onReadyForDisplay = onReadyForDisplay
         view.configure(resourceName: resourceName)
         return view
     }
@@ -170,6 +174,8 @@ struct LoopingVideoView: UIViewRepresentable {
         uiView.videoGravity = videoGravity
         uiView.aspectFitBackgroundColor = aspectFitBackgroundColor
         uiView.videoAspectRatio = videoAspectRatio
+        uiView.preservesPlaybackWhenInactive = preservesPlaybackWhenInactive
+        uiView.onReadyForDisplay = onReadyForDisplay
         uiView.refreshPlaybackState()
     }
 
@@ -216,6 +222,9 @@ final class LoopingPlayerUIView: UIView {
 
     private let playerLayer = AVPlayerLayer()
 
+    var preservesPlaybackWhenInactive = false
+    var onReadyForDisplay: (() -> Void)?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         preparePlayerLayer()
@@ -247,7 +256,7 @@ final class LoopingPlayerUIView: UIView {
         )
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(applicationWillStopBeingActive),
+            selector: #selector(applicationDidEnterBackground),
             name: UIApplication.didEnterBackgroundNotification,
             object: nil
         )
@@ -321,12 +330,20 @@ final class LoopingPlayerUIView: UIView {
     }
 
     func refreshPlaybackState() {
+        if preservesPlaybackWhenInactive, isTemporarilyInactiveButVisible {
+            // ATT and first-network system sheets make the scene inactive. Keep
+            // the configured player/layer intact so its current launch-video
+            // frame remains visible (and can keep animating when iOS permits).
+            return
+        }
+
         guard isEligibleForPlayback else {
             suspendPlayback()
             return
         }
 
         if let queuePlayer {
+            playerLayer.isHidden = !playerLayer.isReadyForDisplay
             queuePlayer.play()
             return
         }
@@ -369,6 +386,11 @@ final class LoopingPlayerUIView: UIView {
         playerLayer.isHidden = true
         readyForDisplayObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
             self?.playerLayer.isHidden = !layer.isReadyForDisplay
+            if layer.isReadyForDisplay {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onReadyForDisplay?()
+                }
+            }
             // Bundled launch/onboarding videos use the same player view but are
             // not part of Home media performance.
             if layer.isReadyForDisplay, let remoteURL = self?.currentURL {
@@ -460,16 +482,37 @@ final class LoopingPlayerUIView: UIView {
 
     private var isEligibleForPlayback: Bool {
         guard let window,
-              bounds.width > 0,
-              bounds.height > 0,
-              visibleFraction(in: window) >= 0.15,
-              isInsideFrontmostPresentation(in: window) else {
+              isVisiblyPresented(in: window) else {
             return false
         }
         if let windowScene = window.windowScene {
             return windowScene.activationState == .foregroundActive
         }
         return UIApplication.shared.applicationState == .active
+    }
+
+    private var isTemporarilyInactiveButVisible: Bool {
+        // A system permission sheet can appear as the window's frontmost
+        // presentation, so the launch player is intentionally no longer a
+        // descendant of that frontmost controller. Scene state is the reliable
+        // signal here; requiring frontmost ancestry would tear down the exact
+        // background frame the sheet is meant to cover.
+        guard let window,
+              bounds.width > 0,
+              bounds.height > 0 else {
+            return false
+        }
+        if let windowScene = window.windowScene {
+            return windowScene.activationState == .foregroundInactive
+        }
+        return UIApplication.shared.applicationState == .inactive
+    }
+
+    private func isVisiblyPresented(in window: UIWindow) -> Bool {
+        bounds.width > 0
+            && bounds.height > 0
+            && visibleFraction(in: window) >= 0.15
+            && isInsideFrontmostPresentation(in: window)
     }
 
     /// A full-screen SwiftUI presentation keeps the covered view hierarchy
@@ -519,6 +562,17 @@ final class LoopingPlayerUIView: UIView {
     }
 
     @objc private func applicationWillStopBeingActive() {
+        if preservesPlaybackWhenInactive {
+            // iOS can clear AVPlayerLayer's drawable while a system permission
+            // sheet owns the foreground. Reveal the poster extracted from the
+            // same launch video instead of exposing the black player surface.
+            playerLayer.isHidden = true
+            return
+        }
+        suspendPlayback()
+    }
+
+    @objc private func applicationDidEnterBackground() {
         suspendPlayback()
     }
 

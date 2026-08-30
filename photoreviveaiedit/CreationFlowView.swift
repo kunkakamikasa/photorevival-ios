@@ -54,6 +54,70 @@ private struct PendingVideoGenerationRequest {
     }
 }
 
+private enum PendingImageGenerationEndpoint {
+    case imageToImage
+    case textToImage
+}
+
+/// Captures everything needed to submit an image job before the progress
+/// screen is presented. Keeping the slow JPEG encoding, upload, and API call
+/// out of the upload view lets the app move to My Creations immediately.
+private struct PendingImageGenerationRequest {
+    let endpoint: PendingImageGenerationEndpoint
+    let itemID: String
+    let images: [UIImage]
+    let prompt: String?
+    let options: PhotoReviveImageGenerationOptions
+
+    @MainActor
+    func submit() async throws -> PhotoReviveImageGenerationSubmission {
+        switch endpoint {
+        case .imageToImage:
+            var imageURLs: [String] = []
+            for image in images {
+                guard let imageData = image.jpegData(compressionQuality: 0.90) else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+                imageURLs.append(
+                    try await PhotoReviveAPIClient.shared.uploadGenerationImage(imageData)
+                )
+            }
+
+            return try await PhotoReviveAPIClient.shared.createImageToImage(
+                itemID: itemID,
+                imageURLs: imageURLs,
+                prompt: prompt,
+                options: options
+            )
+        case .textToImage:
+            return try await PhotoReviveAPIClient.shared.createTextToImage(
+                itemID: itemID,
+                prompt: prompt,
+                options: options
+            )
+        }
+    }
+}
+
+/// SwiftUI cancels work started with `.task` when its progress screen is
+/// dismissed. Generation is server-backed and must keep submitting/polling
+/// after the user leaves that screen, so this store owns those unstructured
+/// tasks until they finish. More than one job may be active at the same time.
+@MainActor
+private final class BackgroundGenerationWorkStore {
+    static let shared = BackgroundGenerationWorkStore()
+
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+
+    func start(_ operation: @escaping @MainActor () async -> Void) {
+        let id = UUID()
+        tasks[id] = Task { @MainActor [weak self] in
+            await operation()
+            self?.tasks[id] = nil
+        }
+    }
+}
+
 /// Sizes the prompt-based video editor from the actual space below the
 /// navigation bar. The three flexible regions shrink together on shorter
 /// iPhones, while the settings and primary action retain comfortable tap
@@ -1812,6 +1876,7 @@ private struct VideoGenerationFlowView: View {
     @State private var exportError: String?
     @State private var pollingStartedAt = Date()
     @State private var submittedTaskID: String?
+    @State private var hasStartedBackgroundWork = false
     @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
@@ -1833,13 +1898,11 @@ private struct VideoGenerationFlowView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if stage != .saved {
-                BottomTabBar(selection: $selectedTab)
-                    .allowsHitTesting(false)
+                BottomTabBar(selection: $selectedTab, onSelect: navigateToMainTab)
             }
         }
-        .task(id: stage) {
-            guard stage == .loading else { return }
-            await runLoadingFlow()
+        .onAppear {
+            startBackgroundWorkIfNeeded()
         }
         .fullScreenCover(isPresented: $showPreview) {
             VideoGenerationPreviewView(
@@ -1908,6 +1971,26 @@ private struct VideoGenerationFlowView: View {
     }
 
     @MainActor
+    private func startBackgroundWorkIfNeeded() {
+        guard stage == .loading, !hasStartedBackgroundWork else { return }
+        hasStartedBackgroundWork = true
+        BackgroundGenerationWorkStore.shared.start {
+            await runLoadingFlow()
+        }
+    }
+
+    private func navigateToMainTab(_ tab: AppTab) {
+        selectedTab = tab
+        onClose()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .appTabNavigationRequested,
+                object: tab
+            )
+        }
+    }
+
+    @MainActor
     private func runLoadingFlow() async {
         if let submissionAction {
             do {
@@ -1920,6 +2003,7 @@ private struct VideoGenerationFlowView: View {
                 guard !Task.isCancelled, stage == .loading else { return }
                 submittedTaskID = submission.taskID
                 onSubmission?(submission)
+                await AppAccountStore.shared.refreshHistory()
                 AppAnalytics.generationSubmitted(
                     contentType: "video",
                     itemID: template?.id
@@ -1952,7 +2036,14 @@ private struct VideoGenerationFlowView: View {
                 )
             }
 #endif
-            try? await Task.sleep(for: .milliseconds(2_400))
+#if DEBUG
+            let previewDelay = ProcessInfo.processInfo.arguments.contains("-holdGeneratedVideoLoading")
+                ? 30_000
+                : 2_400
+#else
+            let previewDelay = 2_400
+#endif
+            try? await Task.sleep(for: .milliseconds(previewDelay))
             guard !Task.isCancelled, stage == .loading else { return }
             withAnimation(.easeInOut(duration: 0.24)) {
                 stage = .result
@@ -1963,16 +2054,28 @@ private struct VideoGenerationFlowView: View {
     private var workspaceHeader: some View {
         HStack(spacing: 14) {
             HStack(spacing: 0) {
-                Text("Video")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(AppPalette.accent)
-                    .frame(width: 82, height: 43)
-                    .background(Color.white.opacity(0.42), in: Capsule())
+                Button {
+                    navigateToMainTab(.video)
+                } label: {
+                    Text("Video")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(AppPalette.accent)
+                        .frame(width: 82, height: 43)
+                        .background(Color.white.opacity(0.42), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Browse AI Video")
 
-                Text("Photo")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(AppPalette.ink)
-                    .frame(width: 82, height: 43)
+                Button {
+                    navigateToMainTab(.photo)
+                } label: {
+                    Text("Photo")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(AppPalette.ink)
+                        .frame(width: 82, height: 43)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Browse AI Photo")
             }
             .padding(3)
             .background(Color.white.opacity(0.24), in: Capsule())
@@ -2029,6 +2132,19 @@ private struct VideoGenerationFlowView: View {
                 .frame(height: 204)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .padding(.top, 8)
+
+                Button(action: onRegenerate) {
+                    Label("Continue Creating", systemImage: "plus.circle.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(AppPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Continue Creating")
+                .accessibilityIdentifier("video-generation-continue-creating")
+                .accessibilityHint("Returns to the editor while this video continues generating")
             }
             .padding(.horizontal, 20)
             .padding(.top, 56)
@@ -2349,6 +2465,7 @@ private struct VideoGenerationFlowView: View {
                 let task = try await PhotoReviveAPIClient.shared.generationTask(id: taskID)
                 if task.status == "completed", let resultURL = task.resultURL {
                     generatedVideoURL = resultURL
+                    await AppAccountStore.shared.refreshHistory()
                     AppAnalytics.generationCompleted(
                         contentType: "video",
                         itemID: template?.id,
@@ -2364,6 +2481,7 @@ private struct VideoGenerationFlowView: View {
                     // returning. Refresh the wallet so the UI never keeps the
                     // pre-refund balance after a failed generation.
                     await AppAccountStore.shared.refreshCredits()
+                    await AppAccountStore.shared.refreshHistory()
                     AppAnalytics.generationFailed(
                         contentType: "video",
                         itemID: template?.id,
@@ -2405,6 +2523,7 @@ private struct VideoGenerationFlowView: View {
             failureType: "timeout",
             elapsedMilliseconds: pollingElapsedMilliseconds
         )
+        await AppAccountStore.shared.refreshHistory()
         stage = .failed("Generation is taking longer than expected. You can check it later in My Creations.")
     }
 
@@ -2760,19 +2879,14 @@ private struct FixedFeatureHeader: View {
     var body: some View {
         ZStack {
             Text(title)
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(AppPalette.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             HStack {
                 Button(action: onBack) {
-                    Image(systemName: "arrow.left")
-                        .font(.system(size: 23, weight: .medium))
-                        .foregroundStyle(AppPalette.ink)
-                        .frame(width: 44, height: 44)
-                        .background(Color.white.opacity(0.58), in: Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.75), lineWidth: 1))
+                    FixedFeatureHeaderIcon(systemName: "chevron.left")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back")
@@ -2782,12 +2896,7 @@ private struct FixedFeatureHeader: View {
 
                 if showsHelp {
                     Button(action: onHelp) {
-                        Image(systemName: "questionmark")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(AppPalette.ink)
-                            .frame(width: 44, height: 44)
-                            .background(Color.white.opacity(0.58), in: Circle())
-                            .overlay(Circle().stroke(.white.opacity(0.75), lineWidth: 1))
+                        FixedFeatureHeaderIcon(systemName: "questionmark")
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Help")
@@ -2799,6 +2908,21 @@ private struct FixedFeatureHeader: View {
         .padding(.horizontal, 20)
         .padding(.top, 0)
         .padding(.bottom, 4)
+    }
+}
+
+private struct FixedFeatureHeaderIcon: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(AppPalette.ink.opacity(0.88))
+            .frame(width: 38, height: 38)
+            .background(Color.white.opacity(0.46), in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 0.8))
+            .shadow(color: .black.opacity(0.07), radius: 5, y: 2)
+            .frame(width: 44, height: 44)
     }
 }
 
@@ -2902,15 +3026,15 @@ private enum FixedPhotoFeatureKind {
 
     var recommendedTip: (subtitle: String, names: [String]) {
         switch self {
-        case .restore: ("Damaged, faded, or blurry photo", ["MemoryPortrait", "Gentleman"])
-        case .enhance: ("Blurry or unclear photo", ["MemoryPortrait", "AnimePortrait"])
+        case .restore: ("Damaged, faded, or blurry photo", ["RestoreTip1", "RestoreTip2"])
+        case .enhance: ("Blurry or unclear photo", ["EnhanceTip1", "EnhanceTip2"])
         }
     }
 
     var avoidTip: (subtitle: String, names: [String]) {
         switch self {
-        case .restore: ("Clear Photo", ["Fashion", "Cowboy"])
-        case .enhance: ("Clear or damaged photos will not produce effective results", ["CartoonPortrait", "Cowboy"])
+        case .restore: ("Clear Photo", ["RestoreTip3", "RestoreTip4"])
+        case .enhance: ("Clear or damaged photos will not produce effective results", ["EnhanceTip3", "EnhanceTip4"])
         }
     }
 
@@ -2935,6 +3059,7 @@ private struct FixedPhotoRestoreFeature: View {
     @State private var generationError: String?
     @State private var generatedImageURL: URL?
     @State private var generationTaskID: String?
+    @State private var pendingImageGeneration: PendingImageGenerationRequest?
     @State private var showGenerationFlow = false
 
     var body: some View {
@@ -3073,20 +3198,48 @@ private struct FixedPhotoRestoreFeature: View {
             }
         }
         .fullScreenCover(isPresented: $showGenerationFlow) {
-            ImageGenerationFlowView(
-                title: kind.title,
-                template: resultTemplate,
-                generatedImageURL: generatedImageURL,
-                taskID: generationTaskID,
-                recommendationItems: recommendationItems,
-                photoToVideoGenerationTarget: photoToVideoGenerationTarget,
-                credits: $credits,
-                onRegenerate: { showGenerationFlow = false },
-                onClose: {
-                    showGenerationFlow = false
-                    dismiss()
-                }
-            )
+            if let pendingImageGeneration {
+                ImageGenerationFlowView(
+                    title: kind.title,
+                    template: resultTemplate,
+                    generatedImageURL: generatedImageURL,
+                    taskID: generationTaskID,
+                    loadingPreviewImage: selectedImage,
+                    submissionAction: {
+                        try await pendingImageGeneration.submit()
+                    },
+                    onSubmission: { submission in
+                        credits = submission.creditsBalance
+                        generatedImageURL = submission.resultURL
+                        generationTaskID = submission.taskID
+                        isGenerating = false
+                    },
+                    recommendationItems: recommendationItems,
+                    photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                    credits: $credits,
+                    onRegenerate: closeGenerationFlow,
+                    onClose: {
+                        closeGenerationFlow()
+                        dismiss()
+                    }
+                )
+            } else {
+                ImageGenerationFlowView(
+                    title: kind.title,
+                    template: resultTemplate,
+                    generatedImageURL: generatedImageURL,
+                    taskID: generationTaskID,
+                    loadingPreviewImage: selectedImage,
+                    recommendationItems: recommendationItems,
+                    photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                    credits: $credits,
+                    onRegenerate: closeGenerationFlow,
+                    onClose: {
+                        closeGenerationFlow()
+                        dismiss()
+                    }
+                )
+            }
         }
         .alert(
             "Generation unavailable",
@@ -3146,39 +3299,30 @@ private struct FixedPhotoRestoreFeature: View {
             return
         }
 
+        generationError = nil
+        generatedImageURL = nil
+        generationTaskID = nil
+        pendingImageGeneration = PendingImageGenerationRequest(
+            endpoint: .imageToImage,
+            itemID: generationTarget.itemID,
+            images: [selectedImage],
+            prompt: nil,
+            options: PhotoReviveImageGenerationOptions(
+                resolution: PhotoReviveImageGenerationOptions.providerDefaultResolution,
+                // Restore/enhance should preserve the uploaded photo's
+                // composition instead of forcing a generation ratio.
+                aspectRatio: nil,
+                outputCount: 1
+            )
+        )
         isGenerating = true
-        Task {
-            defer { isGenerating = false }
-            do {
-                guard let data = selectedImage.jpegData(compressionQuality: 0.90) else {
-                    throw PhotoReviveAPIError.invalidResponse
-                }
-                let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
-                let submission = try await PhotoReviveAPIClient.shared.createImageToImage(
-                    itemID: generationTarget.itemID,
-                    imageURLs: [imageURL],
-                    prompt: nil,
-                    options: PhotoReviveImageGenerationOptions(
-                        resolution: PhotoReviveImageGenerationOptions.providerDefaultResolution,
-                        // Restore/enhance should preserve the uploaded photo's
-                        // composition instead of forcing a generation ratio.
-                        aspectRatio: nil,
-                        outputCount: 1
-                    )
-                )
-                guard let resultURL = submission.resultURL else {
-                    throw PhotoReviveAPIError.invalidResponse
-                }
-                credits = submission.creditsBalance
-                generatedImageURL = resultURL
-                generationTaskID = submission.taskID
-                showGenerationFlow = true
-            } catch {
-                generationError = error.userFacingEnglishMessage(
-                    fallback: "Image generation failed. Please try again."
-                )
-            }
-        }
+        showGenerationFlow = true
+    }
+
+    private func closeGenerationFlow() {
+        showGenerationFlow = false
+        isGenerating = false
+        pendingImageGeneration = nil
     }
 }
 
@@ -3223,79 +3367,94 @@ private struct FeatureTipOverlay: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.46)
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            let cardWidth = min(max(proxy.size.width - 34, 0), 360)
+            let imageSize = min(max((cardWidth - 124) / 2, 76), 92)
 
-            VStack(spacing: 16) {
-                HStack {
-                    Spacer()
+            ZStack {
+                Color.black.opacity(0.46)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    Text(kind.tipsTitle)
+                        .font(.system(size: 21, weight: .heavy))
+                        .foregroundStyle(AppPalette.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.88)
+                        .accessibilityIdentifier("feature-tips-title")
+                        .padding(.bottom, 30)
+
+                    tipSection(
+                        title: "Recommended",
+                        subtitle: kind.recommendedTip.subtitle,
+                        names: kind.recommendedTip.names,
+                        color: Color(red: 0.58, green: 0.69, blue: 0.40),
+                        icon: "checkmark.circle.fill",
+                        imageSize: imageSize
+                    )
+
+                    tipSection(
+                        title: "Not Recommended",
+                        subtitle: kind.avoidTip.subtitle,
+                        names: kind.avoidTip.names,
+                        color: Color(red: 0.88, green: 0.26, blue: 0.20),
+                        icon: "xmark.circle.fill",
+                        imageSize: imageSize
+                    )
+                    .padding(.top, 28)
+
                     Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(AppPalette.ink)
-                            .frame(width: 38, height: 38)
+                        Text("Continue")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(Color(red: 1.0, green: 0.88, blue: 0.62))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                            .background(.black.opacity(0.92), in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("feature-tips-continue")
+                    .padding(.top, 24)
                 }
-
-                Text(kind.tipsTitle)
-                    .font(.system(size: 27, weight: .heavy))
-                    .foregroundStyle(AppPalette.ink)
-                    .multilineTextAlignment(.center)
-
-                tipSection(
-                    title: "Recommended",
-                    subtitle: kind.recommendedTip.subtitle,
-                    names: kind.recommendedTip.names,
-                    color: Color(red: 0.58, green: 0.69, blue: 0.40),
-                    icon: "checkmark.circle.fill"
-                )
-
-                tipSection(
-                    title: "Not Recommended",
-                    subtitle: kind.avoidTip.subtitle,
-                    names: kind.avoidTip.names,
-                    color: Color(red: 0.88, green: 0.26, blue: 0.20),
-                    icon: "xmark.circle.fill"
-                )
-
-                Button(action: onDismiss) {
-                    Text("Continue")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(Color(red: 1.0, green: 0.88, blue: 0.62))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 59)
-                        .background(.black.opacity(0.92), in: Capsule())
-                }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 28)
+                .frame(width: cardWidth)
+                .background(.white, in: RoundedRectangle(cornerRadius: 23, style: .continuous))
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 18)
-            .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .padding(.horizontal, 22)
         }
     }
 
-    private func tipSection(title: String, subtitle: String, names: [String], color: Color, icon: String) -> some View {
-        VStack(spacing: 9) {
+    private func tipSection(
+        title: String,
+        subtitle: String,
+        names: [String],
+        color: Color,
+        icon: String,
+        imageSize: CGFloat
+    ) -> some View {
+        VStack(spacing: 0) {
             Label(title, systemImage: icon)
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(color)
+
             Text(subtitle)
-                .font(.system(size: 16))
+                .font(.system(size: 14))
                 .foregroundStyle(.gray)
                 .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.88)
+                .padding(.top, 14)
 
-            HStack(spacing: 24) {
+            HStack(spacing: 32) {
                 ForEach(names, id: \.self) { name in
                     Image(name)
                         .resizable()
                         .scaledToFill()
-                        .frame(width: 104, height: 104)
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .frame(width: imageSize, height: imageSize)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityIdentifier("feature-tip-\(name)")
                 }
             }
+            .padding(.top, 16)
         }
     }
 }
@@ -4257,6 +4416,7 @@ struct ImageGenerationUploadView: View {
     @State private var generationError: String?
     @State private var generatedImageURL: URL?
     @State private var generationTaskID: String?
+    @State private var pendingImageGeneration: PendingImageGenerationRequest?
 
     init(
         template: TemplateItem,
@@ -4343,20 +4503,48 @@ struct ImageGenerationUploadView: View {
             .presentationDetents([.large])
         }
         .fullScreenCover(isPresented: $showGenerationFlow) {
-            ImageGenerationFlowView(
-                title: template.title,
-                template: template,
-                generatedImageURL: generatedImageURL,
-                taskID: generationTaskID,
-                recommendationItems: recommendationItems,
-                photoToVideoGenerationTarget: photoToVideoGenerationTarget,
-                credits: $credits,
-                onRegenerate: { showGenerationFlow = false },
-                onClose: {
-                    showGenerationFlow = false
-                    dismiss()
-                }
-            )
+            if let pendingImageGeneration {
+                ImageGenerationFlowView(
+                    title: template.title,
+                    template: template,
+                    generatedImageURL: generatedImageURL,
+                    taskID: generationTaskID,
+                    loadingPreviewImage: selectedImages.compactMap { $0 }.first,
+                    submissionAction: {
+                        try await pendingImageGeneration.submit()
+                    },
+                    onSubmission: { submission in
+                        credits = submission.creditsBalance
+                        generatedImageURL = submission.resultURL
+                        generationTaskID = submission.taskID
+                        isGenerating = false
+                    },
+                    recommendationItems: recommendationItems,
+                    photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                    credits: $credits,
+                    onRegenerate: closeGenerationFlow,
+                    onClose: {
+                        closeGenerationFlow()
+                        dismiss()
+                    }
+                )
+            } else {
+                ImageGenerationFlowView(
+                    title: template.title,
+                    template: template,
+                    generatedImageURL: generatedImageURL,
+                    taskID: generationTaskID,
+                    loadingPreviewImage: selectedImages.compactMap { $0 }.first,
+                    recommendationItems: recommendationItems,
+                    photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                    credits: $credits,
+                    onRegenerate: closeGenerationFlow,
+                    onClose: {
+                        closeGenerationFlow()
+                        dismiss()
+                    }
+                )
+            }
         }
         .fullScreenCover(isPresented: $showCredits) {
             CreditCenterView(credits: $credits)
@@ -4407,6 +4595,12 @@ struct ImageGenerationUploadView: View {
         .task {
             guard ProcessInfo.processInfo.arguments.contains("-showImageDataNoticePreview") else { return }
             showDataNotice = true
+        }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-showGeneratedImagePreview") else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            showGenerationFlow = true
         }
 #endif
     }
@@ -4580,62 +4774,28 @@ struct ImageGenerationUploadView: View {
             resolution: resolution
         )
 
+        generationError = nil
+        generatedImageURL = nil
+        generationTaskID = nil
+        pendingImageGeneration = PendingImageGenerationRequest(
+            endpoint: .imageToImage,
+            itemID: template.id,
+            images: images,
+            prompt: nil,
+            options: PhotoReviveImageGenerationOptions(
+                resolution: normalizedImageResolution,
+                aspectRatio: imageCapabilities.normalizedAspectRatio(ratio),
+                outputCount: 1
+            )
+        )
         isGenerating = true
-        let generationStartedAt = Date()
-        Task {
-            defer { isGenerating = false }
-            do {
-                var imageURLs: [String] = []
-                for image in images {
-                    guard let data = image.jpegData(compressionQuality: 0.90) else {
-                        throw PhotoReviveAPIError.invalidResponse
-                    }
-                    imageURLs.append(
-                        try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
-                    )
-                }
+        showGenerationFlow = true
+    }
 
-                let submission = try await PhotoReviveAPIClient.shared.createImageToImage(
-                    itemID: template.id,
-                    imageURLs: imageURLs,
-                    prompt: nil,
-                    options: PhotoReviveImageGenerationOptions(
-                        resolution: normalizedImageResolution,
-                        aspectRatio: imageCapabilities.normalizedAspectRatio(ratio),
-                        outputCount: 1
-                    )
-                )
-                guard let resultURL = submission.resultURL else {
-                    throw PhotoReviveAPIError.invalidResponse
-                }
-
-                credits = submission.creditsBalance
-                generatedImageURL = resultURL
-                generationTaskID = submission.taskID
-                AppAnalytics.generationSubmitted(
-                    contentType: "image",
-                    itemID: template.id
-                )
-                AppAnalytics.generationCompleted(
-                    contentType: "image",
-                    itemID: template.id,
-                    elapsedMilliseconds: Int(
-                        Date().timeIntervalSince(generationStartedAt) * 1_000
-                    )
-                )
-                showGenerationFlow = true
-            } catch {
-                AppAnalytics.generationFailed(
-                    contentType: "image",
-                    itemID: template.id,
-                    stage: "submission",
-                    failureType: AppAnalytics.apiFailureType(error)
-                )
-                generationError = error.userFacingEnglishMessage(
-                    fallback: "Image generation failed. Please try again."
-                )
-            }
-        }
+    private func closeGenerationFlow() {
+        showGenerationFlow = false
+        isGenerating = false
+        pendingImageGeneration = nil
     }
 
     private var generationCost: Int {
@@ -5052,6 +5212,7 @@ private enum ImageGenerationStage: Equatable {
     case result
     case detail
     case saved
+    case failed(String)
 }
 
 private struct ImageGenerationFlowView: View {
@@ -5059,13 +5220,16 @@ private struct ImageGenerationFlowView: View {
     let template: TemplateItem
     let generatedImageURL: URL?
     let taskID: String?
+    var loadingPreviewImage: UIImage? = nil
+    var submissionAction: (@MainActor () async throws -> PhotoReviveImageGenerationSubmission)? = nil
+    var onSubmission: ((PhotoReviveImageGenerationSubmission) -> Void)? = nil
     var recommendationItems: [TemplateItem] = []
     var photoToVideoGenerationTarget: FeatureGenerationTarget? = nil
     @Binding var credits: Int
     let onRegenerate: () -> Void
     let onClose: () -> Void
 
-    @State private var stage = ImageGenerationStage.result
+    @State private var stage = ImageGenerationStage.loading
     @State private var selectedTab = AppTab.me
     @State private var showPaywall = false
     @State private var showVideoGenerator = false
@@ -5076,6 +5240,10 @@ private struct ImageGenerationFlowView: View {
     @State private var shareURL: URL?
     @State private var showShareSheet = false
     @State private var exportError: String?
+    @State private var resolvedGeneratedImageURL: URL?
+    @State private var submittedTaskID: String?
+    @State private var hasStartedBackgroundWork = false
+    @State private var permitsAutomaticHistoryNavigation = true
     @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
@@ -5090,20 +5258,24 @@ private struct ImageGenerationFlowView: View {
                     workspaceContent
                 case .saved:
                     savedContent
+                case .failed(let message):
+                    failedContent(message: message)
                 case .detail:
                     EmptyView()
                 }
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if stage == .loading || stage == .result {
-                BottomTabBar(selection: $selectedTab)
-                    .allowsHitTesting(false)
+            if stage != .detail && stage != .saved {
+                BottomTabBar(selection: $selectedTab, onSelect: navigateToMainTab)
             }
         }
-        .task(id: generatedImageURL) {
-            guard let generatedImageURL else { return }
-            if let (data, _) = try? await URLSession.shared.data(from: generatedImageURL) {
+        .onAppear {
+            startBackgroundWorkIfNeeded()
+        }
+        .task(id: resolvedGeneratedImageURL) {
+            guard let resolvedGeneratedImageURL else { return }
+            if let (data, _) = try? await URLSession.shared.data(from: resolvedGeneratedImageURL) {
                 generatedImage = UIImage(data: data)
             }
         }
@@ -5146,6 +5318,116 @@ private struct ImageGenerationFlowView: View {
             Text(exportError ?? "Please try again.")
         }
         .preferredColorScheme(stage == .detail ? .dark : .light)
+        .onAppear {
+            AppAnalytics.screen(
+                "image_generation_progress",
+                className: "ImageGenerationFlowView"
+            )
+        }
+    }
+
+    @MainActor
+    private func startBackgroundWorkIfNeeded() {
+        guard stage == .loading, !hasStartedBackgroundWork else { return }
+        hasStartedBackgroundWork = true
+        BackgroundGenerationWorkStore.shared.start {
+            await runLoadingFlow()
+        }
+    }
+
+    private func navigateToMainTab(_ tab: AppTab) {
+        permitsAutomaticHistoryNavigation = false
+        completeNavigation(to: tab)
+    }
+
+    private func navigateToCompletedImageHistory() {
+        guard permitsAutomaticHistoryNavigation else { return }
+        completeNavigation(to: .me, historyKind: .photo)
+    }
+
+    private func completeNavigation(
+        to tab: AppTab,
+        historyKind: MeHistoryKind? = nil
+    ) {
+        selectedTab = tab
+        onClose()
+        let historyKindRawValue = historyKind?.rawValue
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .appTabNavigationRequested,
+                object: tab,
+                userInfo: historyKindRawValue.map {
+                    [Notification.Name.appTabNavigationHistoryKindKey: $0]
+                }
+            )
+        }
+    }
+
+    @MainActor
+    private func runLoadingFlow() async {
+        if let submissionAction {
+            let generationStartedAt = Date()
+            do {
+                // Give the full-screen loading page a frame to present before
+                // large source images are encoded and uploaded.
+                try await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled, stage == .loading else { return }
+                let submission = try await submissionAction()
+                guard !Task.isCancelled, stage == .loading else { return }
+                guard let resultURL = submission.resultURL else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+
+                resolvedGeneratedImageURL = resultURL
+                submittedTaskID = submission.taskID
+                onSubmission?(submission)
+                AppAnalytics.generationSubmitted(
+                    contentType: "image",
+                    itemID: template.id
+                )
+                AppAnalytics.generationCompleted(
+                    contentType: "image",
+                    itemID: template.id,
+                    elapsedMilliseconds: Int(
+                        Date().timeIntervalSince(generationStartedAt) * 1_000
+                    )
+                )
+                await AppAccountStore.shared.refreshHistory()
+                navigateToCompletedImageHistory()
+            } catch {
+                guard !Task.isCancelled else { return }
+                AppAnalytics.generationFailed(
+                    contentType: "image",
+                    itemID: template.id,
+                    stage: "submission",
+                    failureType: AppAnalytics.apiFailureType(error)
+                )
+                stage = .failed(error.userFacingEnglishMessage(
+                    fallback: "Image generation failed. Please try again."
+                ))
+            }
+            return
+        }
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-showGeneratedImagePreview") {
+            let previewDelay = ProcessInfo.processInfo.arguments.contains("-holdGeneratedImageLoading")
+                ? 30_000
+                : 2_400
+            try? await Task.sleep(for: .milliseconds(previewDelay))
+            guard !Task.isCancelled, stage == .loading else { return }
+            await AppAccountStore.shared.refreshHistory()
+            navigateToCompletedImageHistory()
+            return
+        }
+#endif
+        if let generatedImageURL {
+            resolvedGeneratedImageURL = generatedImageURL
+            submittedTaskID = taskID
+            await AppAccountStore.shared.refreshHistory()
+            navigateToCompletedImageHistory()
+        } else {
+            stage = .failed("The generated image is not available. Please try again.")
+        }
     }
 
     private var workspaceContent: some View {
@@ -5201,16 +5483,66 @@ private struct ImageGenerationFlowView: View {
         .accessibilityIdentifier(stage == .loading ? "image-generation-loading" : "image-generation-result")
     }
 
+    private func failedContent(message: String) -> some View {
+        VStack(spacing: 0) {
+            imageWorkspaceHeader
+
+            VStack(spacing: 18) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 42, weight: .medium))
+                    .foregroundStyle(AppPalette.accent)
+
+                Text("Generation failed")
+                    .font(.system(size: 24, weight: .heavy))
+                    .foregroundStyle(AppPalette.ink)
+
+                Text(message)
+                    .font(.system(size: 16))
+                    .foregroundStyle(AppPalette.brownInk)
+                    .multilineTextAlignment(.center)
+
+                Button(action: onRegenerate) {
+                    Text("Try Again")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(AppPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("image-generation-try-again")
+            }
+            .padding(.horizontal, 30)
+            .padding(.top, 88)
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityIdentifier("image-generation-failed")
+    }
+
     private var imageWorkspaceHeader: some View {
         HStack {
             HStack(spacing: 0) {
-                Text("Video")
-                    .foregroundStyle(AppPalette.ink)
-                    .frame(width: 72, height: 40)
-                Text("Photo")
-                    .foregroundStyle(AppPalette.accent.opacity(0.84))
-                    .frame(width: 72, height: 40)
-                    .background(Color.white.opacity(0.45), in: Capsule())
+                Button {
+                    navigateToMainTab(.video)
+                } label: {
+                    Text("Video")
+                        .foregroundStyle(AppPalette.ink)
+                        .frame(width: 72, height: 40)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Browse AI Video")
+
+                Button {
+                    navigateToMainTab(.photo)
+                } label: {
+                    Text("Photo")
+                        .foregroundStyle(AppPalette.accent.opacity(0.84))
+                        .frame(width: 72, height: 40)
+                        .background(Color.white.opacity(0.45), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Browse AI Photo")
             }
             .font(.system(size: 18, weight: .bold))
             .padding(2)
@@ -5301,23 +5633,6 @@ private struct ImageGenerationFlowView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, 20)
                 .padding(.top, 19)
-
-                Text("Share to:")
-                    .font(.system(size: 20, weight: .heavy))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 18)
-
-                HStack(spacing: 18) {
-                    VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareImage)
-                    VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareImage)
-                    VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareImage)
-                    VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareImage)
-                    VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareImage)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
             }
         }
         .accessibilityIdentifier("generated-image-detail")
@@ -5400,22 +5715,20 @@ private struct ImageGenerationFlowView: View {
                     .accessibilityIdentifier("image-to-video-button")
                 }
 
-                Text("Share to:")
-                    .font(.system(size: 21, weight: .heavy))
-                    .foregroundStyle(AppPalette.ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-
-                HStack(spacing: 18) {
-                    VideoShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", action: shareImage)
-                    VideoShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", action: shareImage)
-                    VideoShareIcon(symbol: "bolt.horizontal.circle.fill", color: Color(red: 0.43, green: 0.36, blue: 0.97), label: "Messenger", action: shareImage)
-                    VideoShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", action: shareImage)
-                    VideoShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", action: shareImage)
+                Button(action: shareImage) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(AppPalette.ink)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
                 }
+                .buttonStyle(.plain)
+                .disabled(isExporting)
+                .accessibilityLabel("Share generated photo")
                 .padding(.horizontal, 20)
-                .padding(.top, 11)
+                .padding(.top, 20)
 
                 Text("What's next? Try these:")
                     .font(.system(size: 22, weight: .heavy))
@@ -5445,8 +5758,8 @@ private struct ImageGenerationFlowView: View {
 
     @ViewBuilder
     private func generatedImageView(contentMode: ContentMode) -> some View {
-        if let generatedImageURL {
-            CachedRemoteImage(url: generatedImageURL) { image in
+        if let resolvedGeneratedImageURL {
+            CachedRemoteImage(url: resolvedGeneratedImageURL) { image in
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
@@ -5463,6 +5776,10 @@ private struct ImageGenerationFlowView: View {
                         .foregroundStyle(AppPalette.surfaceEdge)
                 }
             }
+        } else if let loadingPreviewImage {
+            Image(uiImage: loadingPreviewImage)
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
         } else {
             ZStack {
                 Color.black.opacity(0.08)
@@ -5517,10 +5834,10 @@ private struct ImageGenerationFlowView: View {
 
     private func exportImage() async throws -> UIImage {
         if let generatedImage { return generatedImage }
-        guard let generatedImageURL else {
+        guard let resolvedGeneratedImageURL else {
             throw GeneratedMediaExportError.mediaUnavailable
         }
-        let (data, response) = try await URLSession.shared.data(from: generatedImageURL)
+        let (data, response) = try await URLSession.shared.data(from: resolvedGeneratedImageURL)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
               let image = UIImage(data: data) else {
@@ -5578,6 +5895,7 @@ private struct FixedAIImageFeature: View {
     @State private var generatedImageURL: URL?
     @State private var generationTaskID: String?
     @State private var showGenerationFlow = false
+    @State private var pendingImageGeneration: PendingImageGenerationRequest?
 
     init(
         creditPricing: AppCreditPricing = .defaultValue,
@@ -5725,20 +6043,32 @@ private struct FixedAIImageFeature: View {
         }
         .fullScreenCover(isPresented: $showCredits) { CreditCenterView(credits: $credits) }
         .fullScreenCover(isPresented: $showGenerationFlow) {
-            ImageGenerationFlowView(
-                title: "AI Image",
-                template: resultTemplate,
-                generatedImageURL: generatedImageURL,
-                taskID: generationTaskID,
-                recommendationItems: recommendationItems,
-                photoToVideoGenerationTarget: photoToVideoGenerationTarget,
-                credits: $credits,
-                onRegenerate: { showGenerationFlow = false },
-                onClose: {
-                    showGenerationFlow = false
-                    dismiss()
-                }
-            )
+            if let pendingImageGeneration {
+                ImageGenerationFlowView(
+                    title: "AI Image",
+                    template: resultTemplate,
+                    generatedImageURL: generatedImageURL,
+                    taskID: generationTaskID,
+                    loadingPreviewImage: selectedImages.first,
+                    submissionAction: {
+                        try await pendingImageGeneration.submit()
+                    },
+                    onSubmission: { submission in
+                        credits = submission.creditsBalance
+                        generatedImageURL = submission.resultURL
+                        generationTaskID = submission.taskID
+                        isGenerating = false
+                    },
+                    recommendationItems: recommendationItems,
+                    photoToVideoGenerationTarget: photoToVideoGenerationTarget,
+                    credits: $credits,
+                    onRegenerate: closeGenerationFlow,
+                    onClose: {
+                        closeGenerationFlow()
+                        dismiss()
+                    }
+                )
+            }
         }
         .fullScreenCover(
             isPresented: Binding(
@@ -5887,58 +6217,38 @@ private struct FixedAIImageFeature: View {
             return
         }
 
-        let selectedMode = mode
-        let images = selectedImages
-        isGenerating = true
-        Task {
-            defer { isGenerating = false }
-            do {
-                let options = PhotoReviveImageGenerationOptions(
-                    resolution: normalizedImageResolution,
-                    aspectRatio: imageCapabilities.normalizedAspectRatio(ratio),
-                    outputCount: 1
-                )
-                let submission: PhotoReviveImageGenerationSubmission
-                if selectedMode == .image && target.endpoint == "image-to-image" {
-                    var imageURLs: [String] = []
-                    for image in images {
-                        guard let data = image.jpegData(compressionQuality: 0.90) else {
-                            throw PhotoReviveAPIError.invalidResponse
-                        }
-                        imageURLs.append(
-                            try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
-                        )
-                    }
-                    submission = try await PhotoReviveAPIClient.shared.createImageToImage(
-                        itemID: target.itemID,
-                        imageURLs: imageURLs,
-                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-                        options: options
-                    )
-                } else if selectedMode == .text && target.endpoint == "text-to-image" {
-                    submission = try await PhotoReviveAPIClient.shared.createTextToImage(
-                        itemID: target.itemID,
-                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-                        options: options
-                    )
-                } else {
-                    generationError = "The CMS generation target for this feature is invalid."
-                    return
-                }
-
-                guard let resultURL = submission.resultURL else {
-                    throw PhotoReviveAPIError.invalidResponse
-                }
-                credits = submission.creditsBalance
-                generatedImageURL = resultURL
-                generationTaskID = submission.taskID
-                showGenerationFlow = true
-            } catch {
-                generationError = error.userFacingEnglishMessage(
-                    fallback: "Image generation failed. Please try again."
-                )
-            }
+        let endpoint: PendingImageGenerationEndpoint
+        if mode == .image && target.endpoint == "image-to-image" {
+            endpoint = .imageToImage
+        } else if mode == .text && target.endpoint == "text-to-image" {
+            endpoint = .textToImage
+        } else {
+            generationError = "The CMS generation target for this feature is invalid."
+            return
         }
+
+        generationError = nil
+        generatedImageURL = nil
+        generationTaskID = nil
+        pendingImageGeneration = PendingImageGenerationRequest(
+            endpoint: endpoint,
+            itemID: target.itemID,
+            images: selectedImages,
+            prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+            options: PhotoReviveImageGenerationOptions(
+                resolution: normalizedImageResolution,
+                aspectRatio: imageCapabilities.normalizedAspectRatio(ratio),
+                outputCount: 1
+            )
+        )
+        isGenerating = true
+        showGenerationFlow = true
+    }
+
+    private func closeGenerationFlow() {
+        showGenerationFlow = false
+        isGenerating = false
+        pendingImageGeneration = nil
     }
 
     private var normalizedImageResolution: String {

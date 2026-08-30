@@ -256,6 +256,23 @@ enum AppTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum MeHistoryKind: String, CaseIterable, Identifiable {
+    case video = "Video"
+    case photo = "Photo"
+
+    var id: String { rawValue }
+}
+
+extension Notification.Name {
+    /// Lets a nested generation flow return to the app's real tab container
+    /// without coupling every creation screen to `ContentView`'s routing state.
+    static let appTabNavigationRequested = Notification.Name("AppTabNavigationRequested")
+
+    /// Optional `userInfo` value used when a nested flow needs to open a
+    /// specific media filter in My Creations.
+    static let appTabNavigationHistoryKindKey = "AppTabNavigationHistoryKind"
+}
+
 enum FixedFeature: String, CaseIterable, Identifiable {
     case oneTapRestore
     case photoToVideo

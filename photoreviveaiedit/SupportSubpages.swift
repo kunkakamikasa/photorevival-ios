@@ -6,6 +6,7 @@ import UserNotifications
 
 struct MembershipPaywallView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("isSubscribed") private var isSubscribed = false
     @AppStorage("isLoggedIn") private var storedIsLoggedIn = false
     let onClose: (() -> Void)?
@@ -158,17 +159,25 @@ struct MembershipPaywallView: View {
             InAppBrowserView(url: document.url)
                 .ignoresSafeArea()
         }
-        .task {
-            let productIDs = MembershipTier.allCases.flatMap { tier in
-                MembershipBilling.allCases.flatMap { billing in
-                    [
-                        billing.productIdentifier(for: tier, isLoggedIn: false).rawValue,
-                        billing.productIdentifier(for: tier, isLoggedIn: true).rawValue
-                    ]
-                }
-            }
-            await priceStore.load(productIDs: productIDs)
+        .task(id: paywallPriceLoadID) {
+            guard scenePhase == .active else { return }
+            await priceStore.loadWithRetry(productIDs: paywallProductIDs)
         }
+    }
+
+    private var paywallProductIDs: [String] {
+        MembershipTier.allCases.flatMap { tier in
+            MembershipBilling.allCases.map { billing in
+                billing.productIdentifier(
+                    for: tier,
+                    isLoggedIn: usesLoggedInPaywall
+                ).rawValue
+            }
+        }
+    }
+
+    private var paywallPriceLoadID: String {
+        "\(scenePhase)-\(paywallProductIDs.sorted().joined(separator: ","))"
     }
 
     private var paywallContent: some View {

@@ -279,7 +279,7 @@ struct PhotoSelectionSheet: View {
                                     }
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Use a photo created with PhotoRevive")
+                            .accessibilityLabel("Use a photo created with Photo Revival")
                             .accessibilityIdentifier("photo-selection-created-\(task.id)")
                         }
                     }

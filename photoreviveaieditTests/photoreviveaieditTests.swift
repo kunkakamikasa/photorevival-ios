@@ -5,12 +5,36 @@
 //  Created by Mayingkun on 2026/8/15.
 //
 
+import AppTrackingTransparency
 import Foundation
 import Testing
 import UIKit
 @testable import photoreviveaiedit
 
 struct photoreviveaieditTests {
+
+    @Test func googleConsentFormWaitsForNativeTrackingDecision() {
+        #expect(
+            !AdvertisingConsentPresentationPolicy.canLoadGoogleForm(
+                trackingAuthorizationStatus: .notDetermined
+            )
+        )
+        #expect(
+            AdvertisingConsentPresentationPolicy.canLoadGoogleForm(
+                trackingAuthorizationStatus: .denied
+            )
+        )
+        #expect(
+            AdvertisingConsentPresentationPolicy.canLoadGoogleForm(
+                trackingAuthorizationStatus: .authorized
+            )
+        )
+        #expect(
+            AdvertisingConsentPresentationPolicy.canLoadGoogleForm(
+                trackingAuthorizationStatus: .restricted
+            )
+        )
+    }
 
     @MainActor
     @Test func catalogCanRetryAfterEveryInitialRequestFails() async {
@@ -738,6 +762,52 @@ struct photoreviveaieditTests {
             isFirstInstall: false,
             hasUsableNetworkPath: false
         ))
+        #expect(StartupAnimationPolicy.shouldKeepShowing(
+            minimumDurationElapsed: true,
+            isFirstInstall: true,
+            hasUsableNetworkPath: true,
+            isInitialPermissionFlowPending: true
+        ))
+
+        #expect(!StartupAnimationPolicy.canBeginExternalRequests(
+            sceneIsActive: true,
+            startupVideoIsReady: false,
+            skipsStartupAnimation: false
+        ))
+        #expect(StartupAnimationPolicy.canBeginExternalRequests(
+            sceneIsActive: true,
+            startupVideoIsReady: true,
+            skipsStartupAnimation: false
+        ))
+        #expect(StartupAnimationPolicy.canBeginExternalRequests(
+            sceneIsActive: true,
+            startupVideoIsReady: false,
+            skipsStartupAnimation: true
+        ))
+        #expect(!StartupAnimationPolicy.canBeginExternalRequests(
+            sceneIsActive: false,
+            startupVideoIsReady: true,
+            skipsStartupAnimation: false
+        ))
+    }
+
+    @Test func onboardingGuideSwipeRecognizesOnlyDecisiveHorizontalMovement() {
+        #expect(OnboardingGuideSwipePolicy.direction(
+            translation: CGSize(width: -80, height: 12),
+            predictedEndTranslation: CGSize(width: -110, height: 18)
+        ) == .next)
+        #expect(OnboardingGuideSwipePolicy.direction(
+            translation: CGSize(width: 72, height: -8),
+            predictedEndTranslation: CGSize(width: 96, height: -10)
+        ) == .previous)
+        #expect(OnboardingGuideSwipePolicy.direction(
+            translation: CGSize(width: 15, height: -90),
+            predictedEndTranslation: CGSize(width: 20, height: -130)
+        ) == nil)
+        #expect(OnboardingGuideSwipePolicy.direction(
+            translation: CGSize(width: -18, height: 4),
+            predictedEndTranslation: CGSize(width: -30, height: 6)
+        ) == nil)
     }
 
     @Test func launchPricePreloadIncludesEveryKnownStoreProduct() {

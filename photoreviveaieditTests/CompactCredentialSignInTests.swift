@@ -3,13 +3,80 @@ import Testing
 @testable import photoreviveaiedit
 
 @MainActor
+@Suite(.serialized)
 struct CompactCredentialSignInTests {
     @Test
-    func reviewAliasUsesPasswordGrantAndStoresTheReturnedSession() async throws {
-        let observedPasswordGrant = LockedFlag()
+    func appContextBindingFailureDoesNotBlockAccessTokenOrFanOutRequests() async throws {
+        let bindRequestCount = LockedCounter()
+        let releaseBinding = DispatchSemaphore(value: 0)
         let accessToken = Self.testAccessToken(
+            userID: "existing-user-id",
+            email: nil,
+            isAnonymous: true
+        )
+
+        CompactCredentialURLProtocol.handler = { request in
+            let url = try #require(request.url)
+
+            if url.path == "/functions/v1/anonymous-login" {
+                return try Self.response(
+                    for: url,
+                    json: [
+                        "session": [
+                            "access_token": accessToken,
+                            "refresh_token": "existing-refresh-token",
+                            "expires_in": 3_600,
+                        ],
+                    ]
+                )
+            }
+
+            if url.path == "/functions/v1/bind-app-context" {
+                bindRequestCount.increment()
+                _ = releaseBinding.wait(timeout: .now() + 1)
+                throw URLError(.timedOut)
+            }
+
+            return try Self.response(for: url, json: [:])
+        }
+        defer {
+            releaseBinding.signal()
+            CompactCredentialURLProtocol.handler = nil
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CompactCredentialURLProtocol.self]
+        let client = PhotoReviveAuthClient(session: URLSession(configuration: configuration))
+        await client.signOut()
+        _ = try await client.feedbackAccessToken()
+
+        let firstAccessToken = try await client.accessToken()
+        let secondAccessToken = try await client.accessToken()
+
+        #expect(firstAccessToken == accessToken)
+        #expect(secondAccessToken == accessToken)
+        for _ in 0..<20 where bindRequestCount.value == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(bindRequestCount.value == 1)
+
+        releaseBinding.signal()
+        try await Task.sleep(for: .milliseconds(20))
+        await client.signOut()
+    }
+
+    @Test
+    func reviewAliasIsValidatedWithoutReplacingTheCurrentSession() async throws {
+        let observedPasswordGrant = LockedFlag()
+        let compactAccessToken = Self.testAccessToken(
             userID: "compact-user-id",
-            email: "review-tester-photorevival@review.local"
+            email: "review-tester-photorevival@review.local",
+            isAnonymous: false
+        )
+        let existingAccessToken = Self.testAccessToken(
+            userID: "existing-user-id",
+            email: nil,
+            isAnonymous: true
         )
 
         CompactCredentialURLProtocol.handler = { request in
@@ -29,9 +96,22 @@ struct CompactCredentialSignInTests {
                 return try Self.response(
                     for: url,
                     json: [
-                        "access_token": accessToken,
+                        "access_token": compactAccessToken,
                         "refresh_token": "refresh-token",
                         "expires_in": 3_600,
+                    ]
+                )
+            }
+
+            if url.path == "/functions/v1/anonymous-login" {
+                return try Self.response(
+                    for: url,
+                    json: [
+                        "session": [
+                            "access_token": existingAccessToken,
+                            "refresh_token": "existing-refresh-token",
+                            "expires_in": 3_600,
+                        ],
                     ]
                 )
             }
@@ -47,7 +127,7 @@ struct CompactCredentialSignInTests {
                 return try Self.response(
                     for: url,
                     json: [
-                        "access_token": accessToken,
+                        "access_token": compactAccessToken,
                         "refresh_token": "refresh-token",
                         "expires_in": 3_600,
                     ]
@@ -61,16 +141,17 @@ struct CompactCredentialSignInTests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CompactCredentialURLProtocol.self]
         let client = PhotoReviveAuthClient(session: URLSession(configuration: configuration))
+        await client.signOut()
 
-        let session = try await client.signInWithPassword(
+        let session = try await client.validatePasswordKeepingCurrentSession(
             email: "review",
             password: "unit-test-only-password"
         )
 
         #expect(observedPasswordGrant.value)
-        #expect(session.accessToken == accessToken)
-        #expect(client.currentUserID == "compact-user-id")
-        #expect(client.currentUserEmail == "review-tester-photorevival@review.local")
+        #expect(session.accessToken == existingAccessToken)
+        #expect(client.currentUserID == "existing-user-id")
+        #expect(client.currentUserEmail == nil)
 
         await client.signOut()
     }
@@ -110,13 +191,18 @@ struct CompactCredentialSignInTests {
         return data
     }
 
-    private static func testAccessToken(userID: String, email: String) -> String {
+    private static func testAccessToken(
+        userID: String,
+        email: String?,
+        isAnonymous: Bool
+    ) -> String {
         let header = ["alg": "none", "typ": "JWT"]
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "sub": userID,
-            "email": email,
-            "user_metadata": ["is_compact_account": true],
+            "is_anonymous": isAnonymous,
+            "user_metadata": isAnonymous ? [:] : ["is_compact_account": true],
         ]
+        if let email { payload["email"] = email }
 
         return [header, payload]
             .compactMap { try? JSONSerialization.data(withJSONObject: $0) }
@@ -140,6 +226,19 @@ private final class LockedFlag: @unchecked Sendable {
 
     func setTrue() {
         lock.withLock { storage = true }
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int {
+        lock.withLock { storage }
+    }
+
+    func increment() {
+        lock.withLock { storage += 1 }
     }
 }
 
