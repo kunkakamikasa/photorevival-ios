@@ -45,6 +45,7 @@ struct SubscriberScratchOfferView: View {
     @State private var showsCreditToast = false
     @State private var celebrationID = 0
     @State private var purchaseTask: Task<Void, Never>?
+    @State private var legalDocument: LegalDocument?
     @StateObject private var priceStore = StoreProductPriceStore.shared
 
     init(
@@ -121,6 +122,10 @@ struct SubscriberScratchOfferView: View {
                 message: Text(item.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
         }
         .onChange(of: stage) { _, newStage in
             guard newStage == .offerRevealed else { return }
@@ -277,6 +282,10 @@ struct SubscriberScratchOfferView: View {
                 }
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.58))
+
+                LegalLinksView(onOpen: { legalDocument = $0 })
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.62))
 
                 Button {
                     purchaseTask?.cancel()

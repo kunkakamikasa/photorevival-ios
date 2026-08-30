@@ -69,4 +69,34 @@ struct UploadPreviewLayoutTests {
         #expect(sizes[0] > sizes[1])
         #expect(sizes.allSatisfy { $0 > 0 })
     }
+
+    @Test func oneAndTwoUploadCardsFitWithoutHorizontalScrolling() {
+        let single = HorizontalUploadStripLayout(
+            viewportWidth: 320,
+            itemCount: 1,
+            preferredItemWidth: 158
+        )
+        let pair = HorizontalUploadStripLayout(
+            viewportWidth: 320,
+            itemCount: 2,
+            preferredItemWidth: 158
+        )
+
+        #expect(!single.scrollsHorizontally)
+        #expect(single.contentWidth <= 320)
+        #expect(!pair.scrollsHorizontally)
+        #expect(pair.contentWidth <= 320)
+    }
+
+    @Test func threeUploadCardsKeepReadableWidthAndScrollHorizontally() {
+        let strip = HorizontalUploadStripLayout(
+            viewportWidth: 320,
+            itemCount: 3,
+            preferredItemWidth: 151
+        )
+
+        #expect(strip.scrollsHorizontally)
+        #expect(strip.itemWidth == 151)
+        #expect(strip.contentWidth > 320)
+    }
 }

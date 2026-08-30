@@ -230,6 +230,7 @@ private final class DebugOverlayViewController: UIViewController, UIAdaptivePres
 
     @objc private func openPanel() {
         guard presentedViewController == nil else { return }
+        StartupPromotionSessionGate.shared.suppressAutomaticPromotionsForCurrentLaunch()
         view.window?.makeKey()
 
         let controller = UIHostingController(
@@ -469,8 +470,7 @@ private struct DebugTestPanel: View {
     private func resetPresentationCooldown(for route: DebugPromotionRoute) {
         switch route {
         case .returning, .returningRetention:
-            returningOfferLastPresentedDay = 0
-            limitedOfferLastPresentedDay = 0
+            break
         case .paywallFollowUp(let offer):
             if offer == .limitedTime {
                 limitedOfferLastPresentedDay = 0
@@ -520,10 +520,7 @@ struct DebugPromotionPreview: View {
         case .summerSale:
             SummerSalePaywallView(offer: Self.summerSaleOffer)
         case .creditExitOffer:
-            CreditExitOfferView(
-                onClose: { dismiss() },
-                onClaim: { _ in dismiss() }
-            )
+            CreditExitOfferView(onClose: { dismiss() })
         case .subscriberScratch:
             SubscriberScratchOfferView(
                 onRewardClaimed: {

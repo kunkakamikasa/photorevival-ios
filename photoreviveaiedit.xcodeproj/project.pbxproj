@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = ABCD0002AA00000100000001 /* GoogleSignIn */; };
+		ADB00001ADB00001ADB00001 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = ADB00002ADB00002ADB00002 /* GoogleMobileAds */; };
 		E1230001E1230001E1230001 /* AdjustSdk in Frameworks */ = {isa = PBXBuildFile; productRef = E1230002E1230002E1230002 /* AdjustSdk */; };
 		F1A20001F1A20001F1A20001 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = F1A20002F1A20002F1A20002 /* FirebaseAnalytics */; };
 		F1A20004F1A20004F1A20004 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = F1A20005F1A20005F1A20005 /* GoogleService-Info.plist */; };
@@ -64,6 +65,7 @@
 				FBA30001FBA30001FBA30001 /* FacebookCore in Frameworks */,
 				F1A20001F1A20001F1A20001 /* FirebaseAnalytics in Frameworks */,
 				ABCD0001AA00000100000001 /* GoogleSignIn in Frameworks */,
+				ADB00001ADB00001ADB00001 /* GoogleMobileAds in Frameworks */,
 				E1230001E1230001E1230001 /* AdjustSdk in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -129,6 +131,7 @@
 				FBA30002FBA30002FBA30002 /* FacebookCore */,
 				F1A20002F1A20002F1A20002 /* FirebaseAnalytics */,
 				ABCD0002AA00000100000001 /* GoogleSignIn */,
+				ADB00002ADB00002ADB00002 /* GoogleMobileAds */,
 				E1230002E1230002E1230002 /* AdjustSdk */,
 			);
 			productName = photoreviveaiedit;
@@ -217,6 +220,7 @@
 				FBA30003FBA30003FBA30003 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */,
 				F1A20003F1A20003F1A20003 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				ABCD0003AA00000100000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				ADB00003ADB00003ADB00003 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 				E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -417,6 +421,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ADJUST_ENVIRONMENT = sandbox;
+				ADMOB_APP_ID = "ca-app-pub-3940256099942544~1458002511";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = photoreviveaiedit/photoreviveaiedit.entitlements;
@@ -465,6 +470,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ADJUST_ENVIRONMENT = production;
+				ADMOB_APP_ID = "ca-app-pub-4065307599185281~8280839878";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = photoreviveaiedit/photoreviveaiedit.entitlements;
@@ -639,6 +645,14 @@
 				minimumVersion = 9.1.0;
 			};
 		};
+		ADB00003ADB00003ADB00003 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googleads/swift-package-manager-google-mobile-ads.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 13.9.0;
+			};
+		};
 		E1230003E1230003E1230003 /* XCRemoteSwiftPackageReference "ios_sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/adjust/ios_sdk.git";
@@ -670,6 +684,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = ABCD0003AA00000100000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignIn;
+		};
+		ADB00002ADB00002ADB00002 /* GoogleMobileAds */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ADB00003ADB00003ADB00003 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;
+			productName = GoogleMobileAds;
 		};
 		E1230002E1230002E1230002 /* AdjustSdk */ = {
 			isa = XCSwiftPackageProductDependency;

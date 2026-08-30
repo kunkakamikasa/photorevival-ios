@@ -1,4 +1,23 @@
+import Combine
 import SwiftUI
+
+final class StartupPromotionSessionGate: ObservableObject {
+    static let shared = StartupPromotionSessionGate()
+
+    @Published private(set) var suppressesAutomaticPromotions = false
+    private var hasClaimedAutomaticEvaluation = false
+
+    func claimAutomaticEvaluation() -> Bool {
+        guard !suppressesAutomaticPromotions,
+              !hasClaimedAutomaticEvaluation else { return false }
+        hasClaimedAutomaticEvaluation = true
+        return true
+    }
+
+    func suppressAutomaticPromotionsForCurrentLaunch() {
+        suppressesAutomaticPromotions = true
+    }
+}
 
 struct ContentView: View {
     private let startupPresentationsAllowed: Bool
@@ -16,7 +35,7 @@ struct ContentView: View {
     @StateObject private var accountStore = AppAccountStore.shared
     @State private var returningOffer: ReturningOfferVariant?
     @State private var showSubscriberScratchOffer = false
-    @State private var hasEvaluatedReturningOffer = false
+    @ObservedObject private var startupPromotionGate = StartupPromotionSessionGate.shared
     @ObservedObject private var featureConfigStore: FeatureConfigStore
     @State private var pendingLoginAction: (() -> Void)?
 
@@ -34,13 +53,14 @@ struct ContentView: View {
         ZStack {
             PaperTextureBackground()
 
-            Group {
+            ZStack {
                 if selectedTab == .me {
                     MePage(
                         accountStore: accountStore,
                         onCreate: { feature in fullScreenDestination = .fixedFeature(feature) },
                         onSettings: { showSettings = true }
                     )
+                    .transition(.opacity)
                 } else {
                     DiscoveryPage(
                         tab: selectedTab,
@@ -117,6 +137,12 @@ struct ContentView: View {
                             fullScreenDestination = .fixedFeature(feature)
                         }
                     )
+                    // Keep each main tab's view tree independent. Reusing the same
+                    // discovery tree makes SwiftUI animate Photo's conditional
+                    // layout and section rows into Video's, which looks like mixed
+                    // vertical and horizontal page movement.
+                    .id(selectedTab)
+                    .transition(.opacity)
                 }
             }
             .transition(.opacity)
@@ -247,6 +273,11 @@ struct ContentView: View {
         .onChange(of: selectedTab) { _, _ in
             trackSelectedTab()
         }
+        .onChange(of: startupPromotionGate.suppressesAutomaticPromotions) { _, isSuppressed in
+            guard isSuppressed else { return }
+            returningOffer = nil
+            showSubscriberScratchOffer = false
+        }
         .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
             Task {
                 await featureConfigStore.reloadAfterAttributionChange()
@@ -297,8 +328,7 @@ struct ContentView: View {
                   !ProcessInfo.processInfo.arguments.contains("-showLimitedOfferPreview"),
                   !ProcessInfo.processInfo.arguments.contains("-showSuperPrizePreview") else { return }
 #endif
-            guard !hasEvaluatedReturningOffer else { return }
-            hasEvaluatedReturningOffer = true
+            guard startupPromotionGate.claimAutomaticEvaluation() else { return }
 
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-resetSubscriberScratchEligibility") {
@@ -311,7 +341,8 @@ struct ContentView: View {
                 arguments: arguments
             ) {
                 try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled,
+                      !startupPromotionGate.suppressesAutomaticPromotions else { return }
                 showSubscriberScratchOffer = true
                 return
             }
@@ -336,7 +367,8 @@ struct ContentView: View {
             ) else { return }
 
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled,
+                  !startupPromotionGate.suppressesAutomaticPromotions else { return }
             returningOfferLastPresentedDay = LimitedOfferEligibility.dayKey(for: Date())
             let limitedTimeAvailable = LimitedOfferEligibility.canPresent(
                 lastPresentedDay: limitedOfferLastPresentedDay

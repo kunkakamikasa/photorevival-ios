@@ -65,15 +65,29 @@ enum ReturningOfferVariant: String, CaseIterable, Equatable, Identifiable {
     }
 }
 
+enum ReturningOfferInitialPresentation: Equatable {
+    case family
+    case retention
+    case checkingTrialEligibility
+
+    static func select(startsAtTrial: Bool, startsAtRetention: Bool) -> Self {
+        if startsAtTrial { return .checkingTrialEligibility }
+        if startsAtRetention { return .retention }
+        return .family
+    }
+}
+
 struct ReturningUserOfferFlowView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("isSubscribed") private var isSubscribed = false
 
     @State private var screen: ReturningOfferScreen = .family
     @State private var isPurchasing = false
+    @State private var isRestoring = false
     @State private var purchaseAlert: ReturningOfferPurchaseAlert?
     @State private var legalDocument: LegalDocument?
     @State private var isTrialEligible = false
+    @State private var isCheckingInitialTrialEligibility: Bool
     @StateObject private var priceStore = StoreProductPriceStore.shared
 
     private let designSize = CGSize(width: 430, height: 932)
@@ -87,13 +101,23 @@ struct ReturningUserOfferFlowView: View {
     ) {
         self.analyticsSource = analyticsSource
         self.startsAtTrial = startsAtTrial
+        let initialPresentation = ReturningOfferInitialPresentation.select(
+            startsAtTrial: startsAtTrial,
+            startsAtRetention: startsAtRetention
+        )
         let initialScreen: ReturningOfferScreen
-        if startsAtRetention {
-            initialScreen = .retention
-        } else {
+        switch initialPresentation {
+        case .family:
             initialScreen = .family
+        case .retention:
+            initialScreen = .retention
+        case .checkingTrialEligibility:
+            initialScreen = .trial
         }
         _screen = State(initialValue: initialScreen)
+        _isCheckingInitialTrialEligibility = State(
+            initialValue: initialPresentation == .checkingTrialEligibility
+        )
     }
 
     var body: some View {
@@ -101,45 +125,68 @@ struct ReturningUserOfferFlowView: View {
             let layout = AspectFillLayout(source: designSize, destination: proxy.size)
 
             ZStack {
-                if screen == .family {
-                    familyOfferBackground(size: proxy.size)
-                    familyOfferContent(using: layout)
-                } else if screen == .trial {
-                    Image(screen.assetName)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFill()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
-                    trialOfferContent(using: layout)
-                } else {
-                    Image(screen.assetName)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFill()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
-                }
-
-                controls(using: layout)
-
-                if isPurchasing {
+                if isCheckingInitialTrialEligibility {
+                    Color.black
                     StoreLoadingIndicator()
-                        .transition(.opacity)
-                        .accessibilityLabel("Opening App Store purchase")
+                        .accessibilityLabel("Checking free trial eligibility")
+                        .accessibilityIdentifier("returning-trial-eligibility-loading")
+                } else {
+                    if screen == .family {
+                        familyOfferBackground(size: proxy.size)
+                        familyOfferContent(using: layout)
+                    } else if screen == .trial {
+                        Image(screen.assetName)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .clipped()
+                        trialOfferContent(using: layout)
+                    } else {
+                        Color.black.opacity(0.55)
+                            .accessibilityHidden(true)
+
+                        Image(screen.assetName)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .clipped()
+                        retentionCopyCorrections(using: layout)
+                    }
+
+                    controls(using: layout)
+
+                    if isPurchasing || isRestoring {
+                        StoreLoadingIndicator()
+                            .transition(.opacity)
+                            .accessibilityLabel(
+                                isRestoring ? "Restoring App Store purchases" : "Opening App Store purchase"
+                            )
+                    }
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .ignoresSafeArea()
+        .presentationBackground(.clear)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .preferredColorScheme(.light)
         .onAppear {
-            trackPaywallScreen()
+            if !isCheckingInitialTrialEligibility {
+                trackPaywallScreen()
+            }
         }
         .onChange(of: screen) { _, _ in
-            trackPaywallScreen()
+            if !isCheckingInitialTrialEligibility {
+                trackPaywallScreen()
+            }
+        }
+        .onChange(of: isCheckingInitialTrialEligibility) { wasChecking, isChecking in
+            if wasChecking, !isChecking {
+                trackPaywallScreen()
+            }
         }
         .alert(item: $purchaseAlert) { alert in
             Alert(
@@ -156,10 +203,14 @@ struct ReturningUserOfferFlowView: View {
             let familyID = SubscriptionProductID.familyExclusiveWeekly.rawValue
             let trialID = SubscriptionProductID.threeDayFreeTrialYearly.rawValue
             await priceStore.load(productIDs: [familyID, trialID])
-            isTrialEligible = await priceStore.isEligibleForIntroOffer(productID: trialID)
+            let trialEligible = await priceStore.isEligibleForIntroOffer(productID: trialID)
+            guard !Task.isCancelled else { return }
+            isTrialEligible = trialEligible
             if startsAtTrial {
-                if isTrialEligible {
-                    screen = .trial
+                if trialEligible {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isCheckingInitialTrialEligibility = false
+                    }
                 } else {
                     dismiss()
                 }
@@ -213,6 +264,97 @@ struct ReturningUserOfferFlowView: View {
                 y: layout.origin.y + (designSize.height * layout.scale / 2)
             )
             .allowsHitTesting(false)
+    }
+
+    private func retentionCopyCorrections(using layout: AspectFillLayout) -> some View {
+        // The retention artwork contains legacy numeric marketing claims.
+        // Cover only those baked-in labels while preserving the rest of the asset pixel-for-pixel.
+        ZStack {
+            retentionCopyPatch("Customizable Styles")
+                .position(x: 190, y: 585)
+
+            retentionCopyPatch("Create More Every Week")
+                .position(x: 190, y: 634)
+
+            VStack(spacing: 1) {
+                Text("Pro Weekly • \(weeklyOfferPriceLabel)")
+                    .font(.system(size: 14, weight: .bold))
+                Text("Auto-renews weekly until canceled")
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(Color(red: 0.27, green: 0.20, blue: 0.14))
+            .position(x: 215, y: 669)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("returning-retention-subscription-details")
+
+            HStack(spacing: 0) {
+                Spacer()
+                Text(weeklyOfferButtonTitle)
+                    .font(.system(size: 19, weight: .bold))
+                    .minimumScaleFactor(0.75)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 23, weight: .bold))
+                    .padding(.trailing, 22)
+            }
+            .foregroundStyle(.white)
+            .frame(width: 382, height: 66)
+            .background(
+                LinearGradient(
+                    colors: retentionButtonColors,
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: Capsule()
+            )
+            .position(x: 215, y: 724)
+
+            HStack(spacing: 7) {
+                Text("Restore Purchases")
+                    .underline()
+                Text("|")
+                    .accessibilityHidden(true)
+                Text("Privacy Policy")
+                    .underline()
+                Text("|")
+                    .accessibilityHidden(true)
+                Text("Terms of Use")
+                    .underline()
+            }
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(Color(red: 0.31, green: 0.23, blue: 0.16).opacity(0.82))
+            .position(x: 215, y: 777)
+        }
+        .frame(width: designSize.width, height: designSize.height)
+        .scaleEffect(layout.scale)
+        .position(
+            x: layout.origin.x + (designSize.width * layout.scale / 2),
+            y: layout.origin.y + (designSize.height * layout.scale / 2)
+        )
+        .allowsHitTesting(false)
+    }
+
+    private func retentionCopyPatch(_ title: String) -> some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.988, green: 0.961, blue: 0.918),
+                            Color(red: 0.980, green: 0.918, blue: 0.820),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+
+            Text(title)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color(red: 0.12, green: 0.11, blue: 0.10))
+                .padding(.leading, 4)
+        }
+        .frame(width: 210, height: 34)
     }
 
     private var trialOfferDesign: some View {
@@ -317,7 +459,7 @@ struct ReturningUserOfferFlowView: View {
             HStack(spacing: 13) {
                 Text("Privacy Policy").underline()
                 Text("|")
-                Text("Terms of Service").underline()
+                Text("Terms of Use").underline()
             }
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(Color.black.opacity(0.58))
@@ -390,7 +532,7 @@ struct ReturningUserOfferFlowView: View {
             HStack(spacing: 13) {
                 Text("Privacy Policy").underline()
                 Text("|")
-                Text("Terms of Service").underline()
+                Text("Terms of Use").underline()
             }
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(.white.opacity(0.82))
@@ -525,27 +667,59 @@ struct ReturningUserOfferFlowView: View {
             termsHotspot(using: layout)
 
         case .retention:
+            Button(action: dismiss.callAsFunction) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18 * layout.scale, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38 * layout.scale, height: 38 * layout.scale)
+                    .background(Color.black.opacity(0.38), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .position(layout.point(CGPoint(x: 39, y: 170)))
+            .disabled(isPurchasing || isRestoring)
+            .accessibilityLabel("Close discount offer")
+            .accessibilityIdentifier("returning-retention-close")
+
             hotspot(
-                label: "Continue with weekly offer",
+                label: weeklyOfferButtonTitle,
                 identifier: "returning-retention-continue",
-                center: CGPoint(x: 215, y: 739),
+                center: CGPoint(x: 215, y: 724),
                 size: CGSize(width: 354, height: 72),
-                layout: layout
+                layout: layout,
+                isEnabled: isWeeklyOfferAvailable
             ) {
                 beginPurchase(.weekly, origin: .retention)
             }
 
             hotspot(
-                label: "Close discount offer",
-                identifier: "returning-retention-close",
-                center: CGPoint(x: 215, y: 825),
-                size: CGSize(width: 62, height: 62),
+                label: "Restore Purchases",
+                identifier: "returning-retention-restore",
+                center: CGPoint(x: 105, y: 777),
+                size: CGSize(width: 120, height: 30),
                 layout: layout,
-                action: dismiss.callAsFunction
+                action: restorePurchases
             )
 
-            privacyHotspot(using: layout)
-            termsHotspot(using: layout)
+            hotspot(
+                label: "Privacy Policy",
+                identifier: "returning-retention-privacy",
+                center: CGPoint(x: 235, y: 777),
+                size: CGSize(width: 96, height: 30),
+                layout: layout
+            ) {
+                legalDocument = .privacyPolicy
+            }
+
+            hotspot(
+                label: "Terms of Use",
+                identifier: "returning-retention-terms",
+                center: CGPoint(x: 338, y: 777),
+                size: CGSize(width: 92, height: 30),
+                layout: layout
+            ) {
+                legalDocument = .termsOfService
+            }
 
         case .trial:
             hotspot(
@@ -587,7 +761,7 @@ struct ReturningUserOfferFlowView: View {
 
     private func termsHotspot(using layout: AspectFillLayout) -> some View {
         hotspot(
-            label: "Terms of Service",
+            label: "Terms of Use",
             identifier: "returning-offer-terms",
             center: CGPoint(x: 285, y: 890),
             size: CGSize(width: 150, height: 34),
@@ -603,6 +777,7 @@ struct ReturningUserOfferFlowView: View {
         center: CGPoint,
         size: CGSize,
         layout: AspectFillLayout,
+        isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -613,9 +788,38 @@ struct ReturningUserOfferFlowView: View {
         }
         .buttonStyle(.plain)
         .position(layout.point(center))
-        .disabled(isPurchasing)
+        .disabled(isPurchasing || isRestoring || !isEnabled)
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
+    }
+
+    private var weeklyOfferPrice: String? {
+        priceStore.loadedDisplayPrice(for: SubscriptionProductID.familyExclusiveWeekly.rawValue)
+    }
+
+    private var isWeeklyOfferAvailable: Bool {
+        weeklyOfferPrice != nil
+    }
+
+    private var weeklyOfferPriceLabel: String {
+        weeklyOfferPrice.map { "\($0)/week" } ?? "Loading price…"
+    }
+
+    private var weeklyOfferButtonTitle: String {
+        weeklyOfferPrice.map { "Subscribe for \($0)/week" } ?? "Loading price…"
+    }
+
+    private var retentionButtonColors: [Color] {
+        if isWeeklyOfferAvailable {
+            return [
+                Color(red: 1, green: 0.34, blue: 0.29),
+                Color(red: 1, green: 0.22, blue: 0.16),
+            ]
+        }
+        return [
+            Color(red: 1, green: 0.47, blue: 0.42),
+            Color(red: 1, green: 0.36, blue: 0.31),
+        ]
     }
 
     private func showTrial() {
@@ -652,7 +856,7 @@ struct ReturningUserOfferFlowView: View {
     }
 
     private func beginPurchase(_ plan: ReturningOfferPlan, origin: ReturningOfferPurchaseOrigin) {
-        guard !isPurchasing else { return }
+        guard !isPurchasing, !isRestoring else { return }
 
         isPurchasing = true
         let promotion = promotionContext(
@@ -688,6 +892,34 @@ struct ReturningUserOfferFlowView: View {
                     title: "Purchase Unavailable",
                     message: message
                 )
+            }
+        }
+    }
+
+    private func restorePurchases() {
+        guard !isPurchasing, !isRestoring else { return }
+        isRestoring = true
+
+        Task {
+            let outcome = await SubscriptionPurchaseService.restore()
+            isRestoring = false
+
+            switch outcome {
+            case .purchased:
+                isSubscribed = true
+                dismiss()
+            case .unavailable:
+                purchaseAlert = ReturningOfferPurchaseAlert(
+                    title: "No Purchases Found",
+                    message: "No active subscription was found for this Apple ID."
+                )
+            case .failed(let message):
+                purchaseAlert = ReturningOfferPurchaseAlert(
+                    title: "Restore Unavailable",
+                    message: message
+                )
+            case .cancelled, .pending:
+                break
             }
         }
     }

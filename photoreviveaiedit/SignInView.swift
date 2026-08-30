@@ -5,6 +5,11 @@ struct SignInView: View {
     @AppStorage("isLoggedIn") private var isLoggedIn = false
     @StateObject private var authStore = PhotoReviveAuthStore()
     @State private var legalDocument: LegalDocument?
+    @State private var titleTapCount = 0
+    @State private var lastTitleTapAt = Date.distantPast
+    @State private var showsCompactSignIn = false
+    @State private var compactEmail = ""
+    @State private var compactPassword = ""
     let onAuthenticated: () -> Void
 
     init(onAuthenticated: @escaping () -> Void = {}) {
@@ -68,6 +73,9 @@ struct SignInView: View {
                     .multilineTextAlignment(.center)
                     .lineSpacing(0)
                     .foregroundStyle(.white)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: registerTitleTap)
+                    .accessibilityIdentifier("sign-in-title")
                     .position(x: proxy.size.width / 2, y: proxy.size.height * 0.565)
 
                 SignInProviderButton(
@@ -118,6 +126,20 @@ struct SignInView: View {
         } message: {
             Text(authStore.errorMessage ?? "Please try again.")
         }
+        .sheet(isPresented: $showsCompactSignIn) {
+            CompactSignInSheet(
+                email: $compactEmail,
+                password: $compactPassword,
+                isLoading: authStore.isCredentialSignInBusy,
+                onCancel: { showsCompactSignIn = false },
+                onSignIn: {
+                    authStore.signIn(email: compactEmail, password: compactPassword)
+                }
+            )
+            .presentationDetents([.height(365)])
+            .presentationDragIndicator(.visible)
+            .interactiveDismissDisabled(authStore.isCredentialSignInBusy)
+        }
         .fullScreenCover(item: $legalDocument) { document in
             InAppBrowserView(url: document.url)
                 .ignoresSafeArea()
@@ -130,6 +152,90 @@ struct SignInView: View {
             onOpen: { legalDocument = $0 }
         )
         .accessibilityIdentifier("sign-in-legal-agreement")
+    }
+
+    private func registerTitleTap() {
+        let now = Date()
+        if now.timeIntervalSince(lastTitleTapAt) > 2.5 {
+            titleTapCount = 0
+        }
+        lastTitleTapAt = now
+        titleTapCount += 1
+
+        guard titleTapCount >= 10 else { return }
+        titleTapCount = 0
+        compactEmail = ""
+        compactPassword = ""
+        showsCompactSignIn = true
+    }
+}
+
+private struct CompactSignInSheet: View {
+    @Binding var email: String
+    @Binding var password: String
+    let isLoading: Bool
+    let onCancel: () -> Void
+    let onSignIn: () -> Void
+
+    private var canSubmit: Bool {
+        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !password.isEmpty
+            && !isLoading
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                TextField("Account", text: $email)
+                    .textContentType(.username)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
+                    .accessibilityIdentifier("compact-login-email")
+
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        guard canSubmit else { return }
+                        onSignIn()
+                    }
+                    .accessibilityIdentifier("compact-login-password")
+
+                Button(action: onSignIn) {
+                    HStack(spacing: 10) {
+                        if isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text(isLoading ? "Signing In..." : "Sign In")
+                    }
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSubmit)
+                .opacity(canSubmit || isLoading ? 1 : 0.45)
+                .accessibilityIdentifier("compact-login-submit")
+
+                Spacer(minLength: 0)
+            }
+            .textFieldStyle(.roundedBorder)
+            .padding(20)
+            .navigationTitle("Account Sign In")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .disabled(isLoading)
+                }
+            }
+        }
+        .accessibilityIdentifier("compact-login-sheet")
     }
 }
 

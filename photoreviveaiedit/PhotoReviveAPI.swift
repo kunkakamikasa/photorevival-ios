@@ -441,7 +441,7 @@ struct PhotoReviveImageGenerationOptions: Encodable {
     static let providerDefaultResolution = "2K"
 
     let resolution: String
-    let aspectRatio: String
+    let aspectRatio: String?
     let outputCount: Int
 
     enum CodingKeys: String, CodingKey {
@@ -986,7 +986,7 @@ private struct PhotoReviveImageToImageRequest: Encodable {
     let imageURL: PhotoReviveImageURLRequestValue
     let prompt: String?
     let resolution: String
-    let aspectRatio: String
+    let aspectRatio: String?
     let outputCount: Int
 
     enum CodingKeys: String, CodingKey {
@@ -1002,7 +1002,7 @@ private struct PhotoReviveTextToImageRequest: Encodable {
     let itemID: String
     let prompt: String?
     let resolution: String
-    let aspectRatio: String
+    let aspectRatio: String?
     let outputCount: Int
 
     enum CodingKeys: String, CodingKey {
