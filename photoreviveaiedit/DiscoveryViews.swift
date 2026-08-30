@@ -1450,10 +1450,9 @@ struct TemplateCoverCard: View {
             .frame(width: cardSize.width, height: cardSize.height)
             .overlay(alignment: .bottom) {
                 Text(item.title)
-                    .font(.system(size: item.orientation == .landscape ? 15 : 16, weight: .medium))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                    .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 7)

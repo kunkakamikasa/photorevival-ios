@@ -6,10 +6,45 @@ enum StartupAnimationPolicy {
     static func shouldKeepShowing(
         minimumDurationElapsed: Bool,
         isFirstInstall: Bool,
-        hasUsableNetworkPath: Bool
+        hasUsableNetworkPath: Bool,
+        isInitialPermissionFlowPending: Bool = false
     ) -> Bool {
         !minimumDurationElapsed
             || (isFirstInstall && !hasUsableNetworkPath)
+            || isInitialPermissionFlowPending
+    }
+
+    static func canBeginExternalRequests(
+        sceneIsActive: Bool,
+        startupVideoIsReady: Bool,
+        skipsStartupAnimation: Bool
+    ) -> Bool {
+        sceneIsActive && (startupVideoIsReady || skipsStartupAnimation)
+    }
+}
+
+enum OnboardingGuideSwipeDirection: Equatable {
+    case previous
+    case next
+}
+
+enum OnboardingGuideSwipePolicy {
+    private static let minimumHorizontalDistance: CGFloat = 44
+
+    static func direction(
+        translation: CGSize,
+        predictedEndTranslation: CGSize
+    ) -> OnboardingGuideSwipeDirection? {
+        let projectedTranslation = abs(predictedEndTranslation.width) > abs(translation.width)
+            ? predictedEndTranslation
+            : translation
+
+        guard abs(projectedTranslation.width) >= minimumHorizontalDistance,
+              abs(projectedTranslation.width) > abs(projectedTranslation.height) else {
+            return nil
+        }
+
+        return projectedTranslation.width < 0 ? .next : .previous
     }
 }
 
@@ -27,6 +62,7 @@ struct AppRootView: View {
     @State private var initialMembershipWasClosed = false
     @State private var initialFollowUpOffer: PaywallFollowUpOffer?
     @State private var isShowingStartupVideo = true
+    @State private var startupVideoIsReady = false
 #if DEBUG
     @AppStorage("debugTestUserStateOverrideEnabled") private var debugStateOverrideEnabled = false
 #endif
@@ -44,7 +80,20 @@ struct AppRootView: View {
         StartupAnimationPolicy.shouldKeepShowing(
             minimumDurationElapsed: !isShowingStartupVideo,
             isFirstInstall: shouldShowOnboarding,
-            hasUsableNetworkPath: networkAccessMonitor.hasUsableNetworkPath
+            hasUsableNetworkPath: networkAccessMonitor.hasUsableNetworkPath,
+            // Keep this exact player view alive until the first permission flow
+            // has actually completed. Scene phase alone is insufficient because
+            // iOS can move a long-lived system sheet between inactive/background.
+            isInitialPermissionFlowPending: startupVideoIsReady
+                && !trackingAuthorization.hasFinishedInitialRequest
+        )
+    }
+
+    private var canBeginExternalRequests: Bool {
+        StartupAnimationPolicy.canBeginExternalRequests(
+            sceneIsActive: scenePhase == .active,
+            startupVideoIsReady: startupVideoIsReady,
+            skipsStartupAnimation: arguments.contains("-skipStartupAnimation")
         )
     }
 
@@ -90,19 +139,28 @@ struct AppRootView: View {
                 await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
             }
         }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
+        .task(id: canBeginExternalRequests) {
+            guard canBeginExternalRequests else { return }
+            // Firebase, Meta activation, CMS loading, consent, and ATT can all
+            // cause first-install system prompts. Start them only after the
+            // bundled launch video has rendered a real frame behind the UI.
+            StartupServiceBootstrap.configureIfNeeded()
+            StartupAppActivationGate.shared.startupVisualDidBecomeReady()
+
             // Start CMS and cover warming before any permission flow. This is
             // useful work hidden by the startup animation and system prompt.
             let featureLoadTask = Task {
                 await featureConfigStore.load()
             }
+            // Ask with Apple's native ATT sheet first. Google UMP is deliberately
+            // loaded only after ATT is resolved so its AdMob-hosted IDFA
+            // explainer cannot add an extra conversion-blocking screen.
+            await trackingAuthorization.requestAuthorizationIfNeeded()
+            guard !Task.isCancelled else { return }
             if AppOpenAdConfiguration.isAdvertisingEnabled,
                AppOpenAdConfiguration.hasValidApplicationID {
                 _ = await AdvertisingConsentManager.shared.prepareForAdRequests()
             }
-            guard !Task.isCancelled else { return }
-            await trackingAuthorization.requestAuthorizationIfNeeded()
             guard !Task.isCancelled else { return }
 #if DEBUG
             if !debugStateOverrideEnabled {
@@ -147,7 +205,9 @@ struct AppRootView: View {
     @ViewBuilder
     private var appContent: some View {
         if shouldKeepShowingStartupAnimation || appOpenAdManager.isBlockingLaunchContent {
-            StartupAnimationView()
+            StartupAnimationView {
+                startupVideoIsReady = true
+            }
                 .transition(.opacity)
         } else if shouldShowOnboarding {
             LaunchExperienceView {
@@ -232,7 +292,11 @@ private struct LaunchExperienceView: View {
             case .welcome:
                 WelcomeVideoContinueHitTarget(onContinue: advance)
             case .restore, .pet, .fusion:
-                GuideOverlay(page: page, onContinue: advance)
+                GuideOverlay(
+                    page: page,
+                    onContinue: advance,
+                    onSwipe: moveGuidePage
+                )
             }
         }
         .id(page.rawValue)
@@ -255,6 +319,20 @@ private struct LaunchExperienceView: View {
         } else {
             AppAnalytics.onboardingCompleted()
             onComplete()
+        }
+    }
+
+    private func moveGuidePage(_ direction: OnboardingGuideSwipeDirection) {
+        let nextPage = switch direction {
+        case .previous:
+            max(currentPage - 1, LaunchPage.restore.rawValue)
+        case .next:
+            min(currentPage + 1, LaunchPage.fusion.rawValue)
+        }
+
+        guard nextPage != currentPage else { return }
+        withAnimation(.easeInOut(duration: 0.38)) {
+            currentPage = nextPage
         }
     }
 }
@@ -352,9 +430,14 @@ private enum LaunchPage: Int {
 }
 
 private struct StartupAnimationView: View {
+    let onReadyForDisplay: () -> Void
+
     var body: some View {
         LaunchBackgroundMedia(
-            videoName: "OnboardingLaunchVideo"
+            videoName: "OnboardingLaunchVideo",
+            posterImageName: "StartupVideoPoster",
+            preservesPlaybackWhenInactive: true,
+            onReadyForDisplay: onReadyForDisplay
         )
         .accessibilityLabel("Photo Revival startup animation")
         .preferredColorScheme(.light)
@@ -364,19 +447,22 @@ private struct StartupAnimationView: View {
 private struct LaunchBackgroundMedia: View {
     let videoName: String
     var mediaAspectRatio: CGFloat? = nil
+    var posterImageName: String? = nil
+    var preservesPlaybackWhenInactive = false
+    var onReadyForDisplay: (() -> Void)? = nil
 
     @ViewBuilder
     var body: some View {
         if let mediaAspectRatio {
             GeometryReader { proxy in
                 ZStack(alignment: .top) {
-                    // Stay image-free until AVPlayerLayer is ready. A bundled
-                    // poster here would briefly expose stale onboarding art.
-                    Color.black
+                    backgroundLayer
 
                     LoopingVideoView(
                         resourceName: videoName,
-                        videoAspectRatio: mediaAspectRatio
+                        videoAspectRatio: mediaAspectRatio,
+                        preservesPlaybackWhenInactive: preservesPlaybackWhenInactive,
+                        onReadyForDisplay: onReadyForDisplay
                     )
                 }
             }
@@ -391,10 +477,26 @@ private struct LaunchBackgroundMedia: View {
 
     private var mediaLayers: some View {
         ZStack {
-            // Match the system launch color without introducing a poster frame.
-            Color.black
+            backgroundLayer
 
-            LoopingVideoView(resourceName: videoName)
+            LoopingVideoView(
+                resourceName: videoName,
+                preservesPlaybackWhenInactive: preservesPlaybackWhenInactive,
+                onReadyForDisplay: onReadyForDisplay
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var backgroundLayer: some View {
+        if let posterImageName {
+            Image(posterImageName)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+        } else {
+            Color.black
         }
     }
 }
@@ -428,6 +530,7 @@ private struct WelcomeVideoContinueHitTarget: View {
 private struct GuideOverlay: View {
     let page: LaunchPage
     let onContinue: () -> Void
+    let onSwipe: (OnboardingGuideSwipeDirection) -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -455,6 +558,17 @@ private struct GuideOverlay: View {
                     .padding(.horizontal, 20)
                     .position(x: proxy.size.width / 2, y: proxy.size.height * 0.890)
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 16)
+                    .onEnded { value in
+                        guard let direction = OnboardingGuideSwipePolicy.direction(
+                            translation: value.translation,
+                            predictedEndTranslation: value.predictedEndTranslation
+                        ) else { return }
+                        onSwipe(direction)
+                    }
+            )
         }
     }
 }

@@ -83,6 +83,7 @@ struct BottomTabBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.title)
+                .accessibilityIdentifier("app-tab-\(tab.rawValue)")
             }
         }
         .padding(5)
@@ -161,10 +162,10 @@ private struct FixedAspectRatioLayout: Layout {
 }
 
 struct MePage: View {
+    @Binding var kind: MeHistoryKind
     @ObservedObject var accountStore: AppAccountStore
     let onCreate: (FixedFeature) -> Void
     let onSettings: () -> Void
-    @State private var kind = "Video"
     @State private var showNotice = false
     @State private var noticeTitle = ""
     @State private var noticeMessage = ""
@@ -173,14 +174,15 @@ struct MePage: View {
     @State private var deletingTaskID: String?
     @State private var exportingTaskID: String?
     @State private var activeShareSheet: MeHistoryShareSheet?
-    @State private var showPaywall = false
     @AppStorage("isSubscribed") private var isSubscribed = false
 
     init(
+        kind: Binding<MeHistoryKind>,
         accountStore: AppAccountStore? = nil,
         onCreate: @escaping (FixedFeature) -> Void,
         onSettings: @escaping () -> Void
     ) {
+        _kind = kind
         self.accountStore = accountStore ?? .shared
         self.onCreate = onCreate
         self.onSettings = onSettings
@@ -188,30 +190,39 @@ struct MePage: View {
 
     private var visibleHistoryTasks: [GenerationHistoryTask] {
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-showHistoryResultPreview"),
+        let arguments = ProcessInfo.processInfo.arguments
+        let showsVideoPreview = arguments.contains("-showHistoryResultPreview")
+        let showsPhotoPreview = arguments.contains("-showHistoryPhotoResultPreview")
+        if (showsVideoPreview || showsPhotoPreview),
            let previewURL = Bundle.main.url(
                forResource: "OnboardingRestoreVideo",
                withExtension: "mp4"
            ) {
+            let resultURL = showsPhotoPreview
+                ? previewURL.deletingPathExtension().appendingPathExtension("jpg")
+                : previewURL
+            if showsPhotoPreview, let previewImage = UIImage(named: "Cowboy") {
+                TemplateImageMemoryCache.shared.insert(previewImage, for: resultURL)
+            }
             return [
                 GenerationHistoryTask(
                     id: "history-result-preview",
                     scene: "revive_old_photos",
                     status: "completed",
-                    outputURL: previewURL.absoluteString,
+                    outputURL: resultURL.absoluteString,
                     convertedURL: nil,
                     thumbnailURL: nil,
                     thumbnailSource: nil,
                     creditsUsed: 20,
                     createdAt: ISO8601DateFormatter().string(from: Date()),
-                    contentType: "video",
-                    sectionMenu: "memory",
+                    contentType: showsPhotoPreview ? "image" : "video",
+                    sectionMenu: showsPhotoPreview ? "photo" : "memory",
                     errorMessage: nil
                 )
             ]
         }
 #endif
-        return accountStore.historyTasks.filter { kind == "Video" ? $0.isVideo : !$0.isVideo }
+        return accountStore.historyTasks.filter { kind == .video ? $0.isVideo : !$0.isVideo }
     }
 
     var body: some View {
@@ -235,17 +246,10 @@ struct MePage: View {
                 selectedHistoryTask = nil
             }
         }
-        .fullScreenCover(isPresented: $showPaywall) {
-            PaywallOfferFlowView(analyticsSource: "history_remove_watermark")
-        }
         .sheet(item: $activeShareSheet) { sheet in
             switch sheet {
             case .activity(let url):
                 GeneratedMediaActivityView(activityItems: [url])
-            case .messages(let url):
-                GeneratedMessageComposeView(attachmentURL: url) {
-                    activeShareSheet = nil
-                }
             }
         }
         .alert(
@@ -279,11 +283,11 @@ struct MePage: View {
     private var meHeader: some View {
         HStack(spacing: 10) {
             HStack(spacing: 0) {
-                ForEach(["Video", "Photo"], id: \.self) { item in
+                ForEach(MeHistoryKind.allCases) { item in
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { kind = item }
                     } label: {
-                        Text(item)
+                        Text(item.rawValue)
                             .font(.system(size: 19, weight: .bold))
                             .foregroundStyle(kind == item ? Color(red: 0.80, green: 0.29, blue: 0.25) : AppPalette.ink)
                             .frame(width: 94, height: 43)
@@ -321,14 +325,9 @@ struct MePage: View {
                         task: task,
                         isDeleting: deletingTaskID == task.id,
                         isExporting: exportingTaskID == task.id,
-                        isSubscribed: isSubscribed,
                         onOpen: { selectedHistoryTask = task },
                         onSave: { saveHistoryTask(task) },
                         onShare: { shareHistoryTask(task) },
-                        onShareTo: { destination in
-                            shareHistoryTask(task, to: destination)
-                        },
-                        onRemoveWatermark: { showPaywall = true },
                         onDelete: { taskPendingDeletion = task }
                     )
                 }
@@ -362,7 +361,7 @@ struct MePage: View {
             VStack(spacing: 3) {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 22, weight: .bold))
-                Image(systemName: kind == "Video" ? "hand.draw" : "photo.badge.plus")
+                Image(systemName: kind == .video ? "hand.draw" : "photo.badge.plus")
                     .font(.system(size: 67, weight: .ultraLight))
             }
             .foregroundStyle(AppPalette.brownInk.opacity(0.84))
@@ -371,7 +370,7 @@ struct MePage: View {
                 .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(AppPalette.brownInk)
             Button {
-                onCreate(kind == "Video" ? .photoToVideo : .imageToImage)
+                onCreate(kind == .video ? .photoToVideo : .imageToImage)
             } label: {
                 Text("Create Now")
                     .font(.system(size: 20, weight: .heavy))
@@ -466,68 +465,6 @@ struct MePage: View {
         }
     }
 
-    private func shareHistoryTask(
-        _ task: GenerationHistoryTask,
-        to destination: GeneratedSocialShareDestination
-    ) {
-        guard exportingTaskID == nil else { return }
-        exportingTaskID = task.id
-        Task {
-            defer { exportingTaskID = nil }
-            do {
-                switch destination {
-                case .messages:
-                    let fileURL = try await prepareHistoryMedia(task)
-                    activeShareSheet = GeneratedMessageComposeView.canSendAttachment
-                        ? .messages(fileURL)
-                        : .activity(fileURL)
-
-                case .whatsApp:
-                    if let resultURL = task.resultURL,
-                       let url = GeneratedSocialShareRouter.whatsAppURL(for: resultURL),
-                       await openExternalShareURL(url) {
-                        return
-                    }
-                    activeShareSheet = .activity(try await prepareHistoryMedia(task))
-
-                case .facebook:
-                    if let resultURL = task.resultURL,
-                       let url = GeneratedSocialShareRouter.facebookURL(for: resultURL),
-                       await openExternalShareURL(url) {
-                        return
-                    }
-                    activeShareSheet = .activity(try await prepareHistoryMedia(task))
-
-                case .instagram:
-                    let fileURL = try await prepareHistoryMedia(task)
-                    let url = try await GeneratedSocialShareRouter.stageInstagramStory(
-                        mediaURL: fileURL,
-                        isVideo: task.isVideo
-                    )
-                    if await openExternalShareURL(url) {
-                        return
-                    }
-                    activeShareSheet = .activity(fileURL)
-                }
-            } catch {
-                presentNotice(
-                    title: "Share Failed",
-                    message: error.userFacingEnglishMessage(
-                        fallback: "The creation could not be shared. Please try again."
-                    )
-                )
-            }
-        }
-    }
-
-    private func openExternalShareURL(_ url: URL) async -> Bool {
-        await withCheckedContinuation { continuation in
-            UIApplication.shared.open(url, options: [:]) { success in
-                continuation.resume(returning: success)
-            }
-        }
-    }
-
     private func prepareHistoryMedia(_ task: GenerationHistoryTask) async throws -> URL {
         guard let resultURL = task.resultURL else {
             throw GeneratedMediaExportError.mediaUnavailable
@@ -569,12 +506,9 @@ private struct MeHistoryTaskCard: View {
     let task: GenerationHistoryTask
     let isDeleting: Bool
     let isExporting: Bool
-    let isSubscribed: Bool
     let onOpen: () -> Void
     let onSave: () -> Void
     let onShare: () -> Void
-    let onShareTo: (GeneratedSocialShareDestination) -> Void
-    let onRemoveWatermark: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -660,13 +594,7 @@ private struct MeHistoryTaskCard: View {
             .accessibilityIdentifier("history-result-media")
 
             if resultAvailable {
-                if task.isVideo {
-                    videoActionBar
-                } else {
-                    actionBar
-                    sharePanel
-                        .padding(.top, 4)
-                }
+                mediaActionBar
             }
         }
         .accessibilityIdentifier("history-result-card-\(task.id)")
@@ -731,7 +659,7 @@ private struct MeHistoryTaskCard: View {
         }
     }
 
-    private var actionBar: some View {
+    private var mediaActionBar: some View {
         HStack(spacing: 0) {
             Button(action: onSave) {
                 Label(isExporting ? "Preparing…" : "Save", systemImage: "arrow.down.to.line")
@@ -744,37 +672,6 @@ private struct MeHistoryTaskCard: View {
             .disabled(isExporting)
             .accessibilityLabel(task.isVideo ? "Save generated video" : "Save generated photo")
 
-            if !isSubscribed {
-                Divider()
-
-                Button(action: onRemoveWatermark) {
-                    Label("No Watermark", systemImage: "eraser")
-                        .font(.system(size: 21, weight: .medium))
-                        .foregroundStyle(AppPalette.ink)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove watermark")
-            }
-        }
-        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
-    }
-
-    private var videoActionBar: some View {
-        HStack(spacing: 0) {
-            Button(action: onSave) {
-                Label(isExporting ? "Preparing…" : "Save", systemImage: "arrow.down.to.line")
-                    .font(.system(size: 21, weight: .medium))
-                    .foregroundStyle(AppPalette.ink)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-            }
-            .buttonStyle(.plain)
-            .disabled(isExporting)
-            .accessibilityLabel("Save generated video")
-
             Divider()
 
             Button(action: onShare) {
@@ -786,81 +683,21 @@ private struct MeHistoryTaskCard: View {
             }
             .buttonStyle(.plain)
             .disabled(isExporting)
-            .accessibilityLabel("Share generated video")
+            .accessibilityLabel(task.isVideo ? "Share generated video" : "Share generated photo")
         }
         .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
-    }
-
-    private var sharePanel: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text("Share to:")
-                .font(.system(size: 20, weight: .heavy))
-                .foregroundStyle(AppPalette.ink)
-
-            ViewThatFits(in: .horizontal) {
-                shareButtonRow(iconSize: 45, spacing: 4)
-                shareButtonRow(iconSize: 36, spacing: 0)
-            }
-        }
-        .padding(17)
-        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
-    }
-
-    private func shareButtonRow(iconSize: CGFloat, spacing: CGFloat) -> some View {
-        HStack(spacing: spacing) {
-            MeHistoryShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", size: iconSize) {
-                onShareTo(.messages)
-            }
-                .frame(maxWidth: .infinity)
-            MeHistoryShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", size: iconSize) {
-                onShareTo(.whatsApp)
-            }
-                .frame(maxWidth: .infinity)
-            MeHistoryShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", size: iconSize) {
-                onShareTo(.facebook)
-            }
-                .frame(maxWidth: .infinity)
-            MeHistoryShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", size: iconSize) {
-                onShareTo(.instagram)
-            }
-                .frame(maxWidth: .infinity)
-        }
     }
 }
 
 private enum MeHistoryShareSheet: Identifiable {
     case activity(URL)
-    case messages(URL)
 
     var id: String {
         switch self {
         case .activity(let url):
             "activity-\(url.absoluteString)"
-        case .messages(let url):
-            "messages-\(url.absoluteString)"
         }
-    }
-}
-
-private struct MeHistoryShareIcon: View {
-    let symbol: String
-    let color: Color
-    let label: String
-    let size: CGFloat
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: max(17, size * 0.47), weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: size, height: size)
-                .background(color, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 }
 

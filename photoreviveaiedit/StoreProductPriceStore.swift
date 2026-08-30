@@ -15,7 +15,6 @@ final class StoreProductPriceStore: ObservableObject {
     static let shared = StoreProductPriceStore()
 
     @Published private(set) var products: [String: Product] = [:]
-    private var requestedIDs = Set<String>()
 
     private init() {}
 
@@ -24,17 +23,47 @@ final class StoreProductPriceStore: ObservableObject {
     }
 
     func load(productIDs: [String]) async {
-        let ids = Set(productIDs.filter { !$0.isEmpty })
-        let missing = ids.subtracting(requestedIDs)
-        guard !missing.isEmpty else { return }
-        requestedIDs.formUnion(missing)
-        do {
-            let loaded = try await Product.products(for: missing)
-            for product in loaded {
-                products[product.id] = product
+        await load(productIDs: productIDs, maximumAttempts: 1)
+    }
+
+    func loadWithRetry(
+        productIDs: [String],
+        maximumAttempts: Int = 3
+    ) async {
+        await load(
+            productIDs: productIDs,
+            maximumAttempts: max(1, maximumAttempts)
+        )
+    }
+
+    private func load(
+        productIDs: [String],
+        maximumAttempts: Int
+    ) async {
+        let requestedProductIDs = Set(productIDs.filter { !$0.isEmpty })
+        guard !requestedProductIDs.isEmpty else { return }
+
+        for attempt in 0..<maximumAttempts {
+            guard !Task.isCancelled else { return }
+
+            let missingProductIDs = requestedProductIDs.subtracting(products.keys)
+            guard !missingProductIDs.isEmpty else { return }
+
+            if attempt > 0 {
+                let retryDelay = UInt64(attempt) * 500_000_000
+                try? await Task.sleep(nanoseconds: retryDelay)
+                guard !Task.isCancelled else { return }
             }
-        } catch {
-            requestedIDs.subtract(missing)
+
+            do {
+                let loaded = try await Product.products(for: missingProductIDs)
+                for product in loaded {
+                    products[product.id] = product
+                }
+            } catch {
+                // A failed StoreKit lookup must remain retryable. In particular,
+                // startup preloading must not permanently block a paywall lookup.
+            }
         }
     }
 

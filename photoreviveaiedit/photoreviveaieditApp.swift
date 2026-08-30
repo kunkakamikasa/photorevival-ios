@@ -20,10 +20,10 @@ final class PhotoReviveAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        let didFinishLaunching = ApplicationDelegate.shared.application(
-            application,
-            didFinishLaunchingWithOptions: launchOptions
-        )
+        // Facebook's launch hook starts network discovery immediately. Preserve
+        // the options now, then forward them after the launch video has rendered
+        // so a first-network system sheet never lands on the black launch color.
+        StartupServiceBootstrap.captureLaunchOptions(launchOptions)
 
         let shouldPrepareAppOpenAd = AppOpenAdLaunchPolicy().shouldPrepareForLaunch(
             isAdvertisingEnabled: AppOpenAdConfiguration.isAdvertisingEnabled,
@@ -43,13 +43,13 @@ final class PhotoReviveAppDelegate: NSObject, UIApplicationDelegate {
             }
         }
 
-        return didFinishLaunching
+        return true
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         // Auto App Events are disabled so Meta cannot classify a free trial as
         // an implicit Purchase. Keep install/session attribution explicitly.
-        AppEvents.shared.activateApp()
+        StartupAppActivationGate.shared.applicationDidBecomeActive()
         AppOpenAdManager.shared.applicationDidBecomeActive()
     }
 
@@ -57,6 +57,62 @@ final class PhotoReviveAppDelegate: NSObject, UIApplicationDelegate {
         appOpenAdPreparationTask?.cancel()
         appOpenAdPreparationTask = nil
         AppOpenAdManager.shared.applicationDidEnterBackground()
+    }
+}
+
+@MainActor
+final class StartupAppActivationGate {
+    static let shared = StartupAppActivationGate()
+
+    private var isStartupVisualReady = false
+    private var hasPendingActivation = false
+
+    private init() {}
+
+    func applicationDidBecomeActive() {
+        hasPendingActivation = true
+        activateMetaIfReady()
+    }
+
+    func startupVisualDidBecomeReady() {
+        isStartupVisualReady = true
+        activateMetaIfReady()
+    }
+
+    private func activateMetaIfReady() {
+        guard isStartupVisualReady, hasPendingActivation else { return }
+        hasPendingActivation = false
+        AppEvents.shared.activateApp()
+    }
+}
+
+@MainActor
+enum StartupServiceBootstrap {
+    private static var hasConfiguredServices = false
+    private static var launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+
+    static func captureLaunchOptions(
+        _ options: [UIApplication.LaunchOptionsKey: Any]?
+    ) {
+        launchOptions = options
+    }
+
+    static func configureIfNeeded() {
+        guard !hasConfiguredServices else { return }
+        hasConfiguredServices = true
+
+        _ = ApplicationDelegate.shared.application(
+            UIApplication.shared,
+            didFinishLaunchingWithOptions: launchOptions
+        )
+        launchOptions = nil
+
+        FirebaseApp.configure()
+        AppAnalytics.configure(
+            userID: PhotoReviveAuthClient.shared.currentUserID,
+            isSignedIn: UserDefaults.standard.bool(forKey: "isLoggedIn"),
+            isSubscribed: UserDefaults.standard.bool(forKey: "isSubscribed")
+        )
     }
 }
 
@@ -74,13 +130,6 @@ struct photoreviveaieditApp: App {
             UserDefaults.standard.set(false, forKey: "isSubscribed")
         }
 #endif
-
-        FirebaseApp.configure()
-        AppAnalytics.configure(
-            userID: PhotoReviveAuthClient.shared.currentUserID,
-            isSignedIn: UserDefaults.standard.bool(forKey: "isLoggedIn"),
-            isSubscribed: UserDefaults.standard.bool(forKey: "isSubscribed")
-        )
 
         // Diagnostic-only path used to inspect the IDFA on a test device.
         if ProcessInfo.processInfo.arguments.contains("-printIDFA") {

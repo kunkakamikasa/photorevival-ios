@@ -536,7 +536,7 @@ private struct SubscriberFreeRewardCard: View {
                 .foregroundStyle(SubscriberScratchPalette.ink.opacity(0.62))
 
             VStack(spacing: 0) {
-                Text("PHOTO REVIVE CREDITS")
+                Text("PHOTO REVIVAL CREDITS")
                 Text("(VALID FOR 2 HOURS)")
             }
                 .font(.system(size: 11, weight: .black))

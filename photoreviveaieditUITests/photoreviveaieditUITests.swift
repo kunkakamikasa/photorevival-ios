@@ -879,6 +879,48 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testRestoreTipsCardFitsAndUsesRestoreExamples() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let restore = app.buttons["fixed-feature-oneTapRestore"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 3))
+        restore.tap()
+
+        let help = app.buttons["Help"]
+        XCTAssertTrue(help.waitForExistence(timeout: 3))
+        help.tap()
+
+        let title = app.staticTexts["feature-tips-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+
+        let windowFrame = app.windows.firstMatch.frame
+        let tipImages = (1...4).map { app.images["feature-tip-RestoreTip\($0)"] }
+        for image in tipImages {
+            XCTAssertTrue(image.exists)
+            XCTAssertTrue(windowFrame.contains(image.frame))
+        }
+
+        let continueButton = app.buttons["feature-tips-continue"]
+        XCTAssertTrue(continueButton.isHittable)
+        XCTAssertTrue(windowFrame.contains(title.frame))
+        XCTAssertTrue(windowFrame.contains(continueButton.frame))
+        XCTAssertLessThan(title.frame.maxY, tipImages[0].frame.minY)
+        XCTAssertLessThan(tipImages[3].frame.maxY, continueButton.frame.minY)
+        attachScreenshot(named: "One-Tap Restore Tips", app: app)
+
+        continueButton.tap()
+        XCTAssertTrue(continueButton.waitForNonExistence(timeout: 2))
+    }
+
+    @MainActor
     func testAIImageBackReturnsHomeWhileKeyboardIsVisible() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -994,6 +1036,37 @@ final class photoreviveaieditUITests: XCTestCase {
 
         continueButton.tap()
 
+        XCTAssertTrue(app.staticTexts["Bring Memories to Life"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testOnboardingGuidePagesSupportHorizontalSwipes() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-forceOnboarding",
+            "-skipStartupAnimation",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog"
+        ]
+        app.launch()
+
+        let continueButton = app.buttons["onboarding-continue"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 8))
+        continueButton.tap()
+        XCTAssertTrue(app.staticTexts["Bring Memories to Life"].waitForExistence(timeout: 2))
+
+        app.swipeLeft()
+        XCTAssertTrue(app.staticTexts["See Your Pet Again"].waitForExistence(timeout: 2))
+
+        app.swipeLeft()
+        XCTAssertTrue(app.staticTexts["Bring Your\nFamily Together"].waitForExistence(timeout: 2))
+
+        app.swipeRight()
+        XCTAssertTrue(app.staticTexts["See Your Pet Again"].waitForExistence(timeout: 2))
+
+        app.swipeRight()
         XCTAssertTrue(app.staticTexts["Bring Memories to Life"].waitForExistence(timeout: 2))
     }
 
@@ -1297,6 +1370,149 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testVideoGenerationProgressAllowsAnotherCreationAndTabNavigation() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-loggedIn",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showGeneratedVideoPreview",
+            "-holdGeneratedVideoLoading"
+        ]
+        app.launch()
+
+        let memoryCover = app.buttons["template-memory"].firstMatch
+        if !memoryCover.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(memoryCover.waitForExistence(timeout: 3))
+        memoryCover.tap()
+        app.buttons["Try Memory"].tap()
+
+        XCTAssertTrue(app.staticTexts["Please wait (1-3 min)"].waitForExistence(timeout: 3))
+        for tabID in ["app-tab-home", "app-tab-photo", "app-tab-video", "app-tab-me"] {
+            let tabs = app.buttons.matching(identifier: tabID)
+            XCTAssertTrue(tabs.firstMatch.waitForExistence(timeout: 2))
+            XCTAssertTrue(
+                tabs.allElementsBoundByIndex.contains { $0.isHittable },
+                "Generation must not block \(tabID)"
+            )
+        }
+
+        let continueCreating = app.buttons["Continue Creating"]
+        attachScreenshot(named: "Interactive Video Generation Progress", app: app)
+        XCTAssertTrue(continueCreating.waitForExistence(timeout: 2))
+        XCTAssertTrue(continueCreating.isHittable)
+        continueCreating.tap()
+
+        XCTAssertTrue(app.navigationBars["Revive Old Photos"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["creation-primary-action"].isHittable)
+
+        // Reopen a fresh progress screen and verify that a main-tab tap exits
+        // the entire nested detail/editor stack, not only the progress cover.
+        app.buttons["Close creation editor"].tap()
+        XCTAssertTrue(app.buttons["Try Memory"].waitForExistence(timeout: 3))
+        app.buttons["Try Memory"].tap()
+        XCTAssertTrue(app.staticTexts["Please wait (1-3 min)"].waitForExistence(timeout: 3))
+
+        let videoTab = try XCTUnwrap(
+            app.buttons
+                .matching(identifier: "app-tab-video")
+                .allElementsBoundByIndex
+                .first { $0.isHittable }
+        )
+        videoTab.tap()
+        XCTAssertTrue(app.staticTexts["AI Video"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["video-generation-loading"].waitForNonExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testImageGenerationProgressAllowsTabNavigation() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-loggedIn",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showGeneratedImagePreview",
+            "-holdGeneratedImageLoading"
+        ]
+        app.launch()
+
+        app.buttons["AI Photo"].tap()
+        let cowboy = app.buttons["template-cowboy-style"].firstMatch
+        for _ in 0..<8 where !cowboy.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(cowboy.waitForExistence(timeout: 3))
+        cowboy.tap()
+        XCTAssertTrue(app.buttons["Try Cowboy Style"].waitForExistence(timeout: 3))
+        app.buttons["Try Cowboy Style"].tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["image-generation-loading"].waitForExistence(timeout: 3))
+        for tabID in ["app-tab-home", "app-tab-photo", "app-tab-video", "app-tab-me"] {
+            let tabs = app.buttons.matching(identifier: tabID)
+            XCTAssertTrue(tabs.firstMatch.waitForExistence(timeout: 2))
+            XCTAssertTrue(
+                tabs.allElementsBoundByIndex.contains { $0.isHittable },
+                "Image generation must not block \(tabID)"
+            )
+        }
+
+        let videoTab = try XCTUnwrap(
+            app.buttons
+                .matching(identifier: "app-tab-video")
+                .allElementsBoundByIndex
+                .first { $0.isHittable }
+        )
+        videoTab.tap()
+        XCTAssertTrue(app.staticTexts["AI Video"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["image-generation-loading"].waitForNonExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testImageGenerationCompletionOpensPhotoHistory() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-loggedIn",
+            "-forceUnsubscribed",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showGeneratedImagePreview",
+            "-showHistoryPhotoResultPreview"
+        ]
+        app.launch()
+
+        app.buttons["AI Photo"].tap()
+        let cowboy = app.buttons["template-cowboy-style"].firstMatch
+        for _ in 0..<8 where !cowboy.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(cowboy.waitForExistence(timeout: 3))
+        cowboy.tap()
+        XCTAssertTrue(app.buttons["Try Cowboy Style"].waitForExistence(timeout: 3))
+        app.buttons["Try Cowboy Style"].tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["image-generation-loading"].waitForExistence(timeout: 3))
+        let card = app.descendants(matching: .any)["history-result-card-history-result-preview"]
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Save generated photo"].exists)
+        XCTAssertTrue(app.buttons["Share generated photo"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["image-generation-result"].exists)
+    }
+
+    @MainActor
     func testHistoryResultUsesCompactPlayableLayout() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -1360,6 +1576,47 @@ final class photoreviveaieditUITests: XCTestCase {
             portraitVideoMinY,
             "Close preview button overlaps the top letterbox"
         )
+    }
+
+    @MainActor
+    func testPhotoHistoryResultUsesSaveAndShareActionsWithoutSocialIconRow() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-loggedIn",
+            "-forceUnsubscribed",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showHistoryPhotoResultPreview"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Me"].waitForExistence(timeout: 5))
+        app.buttons["Me"].tap()
+        XCTAssertTrue(app.buttons["Photo"].waitForExistence(timeout: 2))
+        app.buttons["Photo"].tap()
+
+        let card = app.descendants(matching: .any)["history-result-card-history-result-preview"]
+        XCTAssertTrue(card.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Save generated photo"].exists)
+        XCTAssertTrue(app.buttons["Share generated photo"].exists)
+        XCTAssertFalse(app.staticTexts["Share to:"].exists)
+        for label in ["Remove watermark", "Messages", "WhatsApp", "Facebook", "Instagram", "Messenger", "TikTok"] {
+            XCTAssertFalse(app.buttons[label].exists, "Unexpected \(label)")
+        }
+
+        let maximize = app.buttons["Maximize creation"]
+        XCTAssertTrue(maximize.isHittable)
+        maximize.tap()
+        XCTAssertTrue(app.buttons["Close preview"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["Share to:"].exists)
+        for label in ["Messages", "WhatsApp", "Facebook", "Instagram", "Messenger", "TikTok"] {
+            XCTAssertFalse(app.buttons[label].exists, "Unexpected \(label) in photo preview")
+        }
+        attachScreenshot(named: "Compact Photo History Result", app: app)
     }
 
     @MainActor

@@ -276,30 +276,44 @@ struct ReturningUserOfferFlowView: View {
             retentionCopyPatch("Create More Every Week")
                 .position(x: 190, y: 634)
 
-            VStack(spacing: 1) {
-                Text("Pro Weekly • \(weeklyOfferPriceLabel)")
-                    .font(.system(size: 14, weight: .bold))
-                Text("Auto-renews weekly until canceled")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundStyle(Color(red: 0.27, green: 0.20, blue: 0.14))
-            .position(x: 215, y: 669)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("returning-retention-subscription-details")
+            // The source artwork contains a full-width CTA. Restore the card's
+            // vertical gradient first so the live CTA can use a calmer size.
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.961, green: 0.839, blue: 0.631),
+                            Color(red: 0.953, green: 0.816, blue: 0.580),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 382, height: 80)
+                .position(x: 215, y: 723)
+
+            Text("Pro Weekly • \(weeklyOfferPriceLabel) • Auto-renews weekly until canceled")
+                .font(.system(size: 11.5, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .foregroundStyle(Color(red: 0.27, green: 0.20, blue: 0.14))
+                .position(x: 215, y: 674)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("returning-retention-subscription-details")
 
             HStack(spacing: 0) {
                 Spacer()
                 Text(weeklyOfferButtonTitle)
-                    .font(.system(size: 19, weight: .bold))
-                    .minimumScaleFactor(0.75)
+                    .font(.system(size: 17, weight: .bold))
+                    .minimumScaleFactor(0.80)
                     .lineLimit(1)
                 Spacer()
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 23, weight: .bold))
-                    .padding(.trailing, 22)
+                    .font(.system(size: 19, weight: .bold))
+                    .padding(.trailing, 18)
             }
             .foregroundStyle(.white)
-            .frame(width: 382, height: 66)
+            .frame(width: 330, height: 52)
             .background(
                 LinearGradient(
                     colors: retentionButtonColors,
@@ -308,9 +322,9 @@ struct ReturningUserOfferFlowView: View {
                 ),
                 in: Capsule()
             )
-            .position(x: 215, y: 724)
+            .position(x: 215, y: 722)
 
-            HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 Text("Restore Purchases")
                     .underline()
                 Text("|")
@@ -322,9 +336,9 @@ struct ReturningUserOfferFlowView: View {
                 Text("Terms of Use")
                     .underline()
             }
-            .font(.system(size: 11.5, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(Color(red: 0.31, green: 0.23, blue: 0.16).opacity(0.82))
-            .position(x: 215, y: 777)
+            .position(x: 215, y: 769)
         }
         .frame(width: designSize.width, height: designSize.height)
         .scaleEffect(layout.scale)
@@ -684,8 +698,8 @@ struct ReturningUserOfferFlowView: View {
             hotspot(
                 label: weeklyOfferButtonTitle,
                 identifier: "returning-retention-continue",
-                center: CGPoint(x: 215, y: 724),
-                size: CGSize(width: 354, height: 72),
+                center: CGPoint(x: 215, y: 722),
+                size: CGSize(width: 330, height: 56),
                 layout: layout,
                 isEnabled: isWeeklyOfferAvailable
             ) {
@@ -695,7 +709,7 @@ struct ReturningUserOfferFlowView: View {
             hotspot(
                 label: "Restore Purchases",
                 identifier: "returning-retention-restore",
-                center: CGPoint(x: 105, y: 777),
+                center: CGPoint(x: 105, y: 769),
                 size: CGSize(width: 120, height: 30),
                 layout: layout,
                 action: restorePurchases
@@ -704,7 +718,7 @@ struct ReturningUserOfferFlowView: View {
             hotspot(
                 label: "Privacy Policy",
                 identifier: "returning-retention-privacy",
-                center: CGPoint(x: 235, y: 777),
+                center: CGPoint(x: 235, y: 769),
                 size: CGSize(width: 96, height: 30),
                 layout: layout
             ) {
@@ -714,7 +728,7 @@ struct ReturningUserOfferFlowView: View {
             hotspot(
                 label: "Terms of Use",
                 identifier: "returning-retention-terms",
-                center: CGPoint(x: 338, y: 777),
+                center: CGPoint(x: 338, y: 769),
                 size: CGSize(width: 92, height: 30),
                 layout: layout
             ) {
@@ -806,7 +820,7 @@ struct ReturningUserOfferFlowView: View {
     }
 
     private var weeklyOfferButtonTitle: String {
-        weeklyOfferPrice.map { "Subscribe for \($0)/week" } ?? "Loading price…"
+        weeklyOfferPrice.map { "Subscribe • \($0)/week" } ?? "Loading price…"
     }
 
     private var retentionButtonColors: [Color] {

@@ -1,6 +1,15 @@
+import AppTrackingTransparency
 import Combine
 import Foundation
 import UserMessagingPlatform
+
+enum AdvertisingConsentPresentationPolicy {
+    static func canLoadGoogleForm(
+        trackingAuthorizationStatus: ATTrackingManager.AuthorizationStatus
+    ) -> Bool {
+        trackingAuthorizationStatus != .notDetermined
+    }
+}
 
 /// Keeps Google advertising consent in sync and provides the user-facing
 /// privacy-options entry point required by some regional consent messages.
@@ -19,6 +28,15 @@ final class AdvertisingConsentManager: ObservableObject {
     /// Refreshes consent once per process launch and returns whether Google
     /// permits ad requests for the current consent state.
     func prepareForAdRequests() async -> Bool {
+        // Always let the native iOS ATT sheet make the first and only tracking
+        // request. Loading UMP while ATT is undecided lets a remotely published
+        // AdMob IDFA explainer appear in front of it.
+        guard AdvertisingConsentPresentationPolicy.canLoadGoogleForm(
+            trackingAuthorizationStatus: ATTrackingManager.trackingAuthorizationStatus
+        ) else {
+            return false
+        }
+
         if hasCompletedPreparation {
             refreshPrivacyOptionsRequirement()
             return ConsentInformation.shared.canRequestAds
