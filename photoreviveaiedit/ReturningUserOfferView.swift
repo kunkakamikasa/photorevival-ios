@@ -127,8 +127,9 @@ struct ReturningUserOfferFlowView: View {
             ZStack {
                 if isCheckingInitialTrialEligibility {
                     Color.black
-                    StoreLoadingIndicator()
-                        .accessibilityLabel("Checking free trial eligibility")
+                    StorePurchaseLoadingOverlay(
+                        accessibilityLabel: "Checking free trial eligibility"
+                    )
                         .accessibilityIdentifier("returning-trial-eligibility-loading")
                 } else {
                     if screen == .family {
@@ -158,11 +159,12 @@ struct ReturningUserOfferFlowView: View {
                     controls(using: layout)
 
                     if isPurchasing || isRestoring {
-                        StoreLoadingIndicator()
+                        StorePurchaseLoadingOverlay(
+                            accessibilityLabel: isRestoring
+                                ? "Restoring App Store purchases"
+                                : "Processing App Store purchase"
+                        )
                             .transition(.opacity)
-                            .accessibilityLabel(
-                                isRestoring ? "Restoring App Store purchases" : "Opening App Store purchase"
-                            )
                     }
                 }
             }
@@ -1095,16 +1097,6 @@ private struct AspectFillLayout {
             x: origin.x + sourcePoint.x * scale,
             y: origin.y + sourcePoint.y * scale
         )
-    }
-}
-
-private struct StoreLoadingIndicator: View {
-    var body: some View {
-        ProgressView()
-            .controlSize(.large)
-            .tint(.white)
-            .frame(width: 110, height: 110)
-            .background(Color.black.opacity(0.74), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

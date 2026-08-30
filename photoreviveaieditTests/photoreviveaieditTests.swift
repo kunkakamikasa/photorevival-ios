@@ -187,6 +187,42 @@ struct photoreviveaieditTests {
         #expect(PhotoReviveAPIClient.longRunningGenerationTimeout == 300)
     }
 
+    @Test func authorizationHeaderRequiresBothFlagAndSessionToken() throws {
+        let url = try #require(URL(string: "https://api.alihantakaz.site/functions/v1/test"))
+
+        var authenticatedRequest = URLRequest(url: url)
+        PhotoReviveRequestAuthorization.apply(
+            to: &authenticatedRequest,
+            needsToken: true,
+            accessToken: "session-token"
+        )
+        #expect(authenticatedRequest.value(forHTTPHeaderField: "Authorization") == "Bearer session-token")
+
+        var publicRequest = URLRequest(url: url)
+        PhotoReviveRequestAuthorization.apply(
+            to: &publicRequest,
+            needsToken: false,
+            accessToken: "session-token"
+        )
+        #expect(publicRequest.value(forHTTPHeaderField: "Authorization") == nil)
+
+        var missingTokenRequest = URLRequest(url: url)
+        PhotoReviveRequestAuthorization.apply(
+            to: &missingTokenRequest,
+            needsToken: true,
+            accessToken: nil
+        )
+        #expect(missingTokenRequest.value(forHTTPHeaderField: "Authorization") == nil)
+
+        var emptyTokenRequest = URLRequest(url: url)
+        PhotoReviveRequestAuthorization.apply(
+            to: &emptyTokenRequest,
+            needsToken: true,
+            accessToken: ""
+        )
+        #expect(emptyTokenRequest.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
     @MainActor
     @Test func cmsCreditPricingMatchesEveryRequestedVideoCombination() throws {
         let json = """
@@ -808,6 +844,20 @@ struct photoreviveaieditTests {
             translation: CGSize(width: -18, height: 4),
             predictedEndTranslation: CGSize(width: -30, height: 6)
         ) == nil)
+    }
+
+    @MainActor
+    @Test func onboardingVideosHaveBundledFirstFramePosters() {
+        let posterNames = [
+            "OnboardingWelcomePoster",
+            "OnboardingRestorePoster",
+            "OnboardingPetPoster",
+            "OnboardingFusionPoster",
+        ]
+
+        for posterName in posterNames {
+            #expect(UIImage(named: posterName) != nil)
+        }
     }
 
     @Test func launchPricePreloadIncludesEveryKnownStoreProduct() {

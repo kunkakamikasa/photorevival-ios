@@ -226,11 +226,10 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["Offer countdown"].exists)
         attachScreenshot(named: "Limited Time Offer Yearly Review", app: app)
         purchase.tap()
-        let connecting = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isEnabled == false"),
-            object: purchase
+        XCTAssertTrue(
+            app.descendants(matching: .any)["Processing App Store purchase"]
+                .waitForExistence(timeout: 2)
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [connecting], timeout: 2), .completed)
 
         let close = app.buttons["limited-offer-close"]
         XCTAssertTrue(close.isHittable)
@@ -1026,7 +1025,8 @@ final class photoreviveaieditUITests: XCTestCase {
         app.launchArguments += [
             "-forceOnboarding",
             "-skipStartupAnimation",
-            "-disableReturningOffer"
+            "-disableReturningOffer",
+            "-disableAppOpenAd"
         ]
         app.launch()
 
@@ -1478,6 +1478,76 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testVideoGenerationRemainsVisibleAfterLeavingAndReturningToMe() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-loggedIn",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showGeneratedVideoPreview",
+            "-holdGeneratedVideoLoading"
+        ]
+        app.launch()
+
+        let memoryCover = app.buttons["template-memory"].firstMatch
+        if !memoryCover.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(memoryCover.waitForExistence(timeout: 3))
+        memoryCover.tap()
+        app.buttons["Try Memory"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["video-generation-loading"].waitForExistence(timeout: 3))
+
+        app.buttons["app-tab-me"].firstMatch.tap()
+        let pendingMessage = app.staticTexts["Your video is being generated."]
+        XCTAssertTrue(pendingMessage.waitForExistence(timeout: 3))
+
+        app.buttons["AI Photo"].tap()
+        app.buttons["Me"].tap()
+        XCTAssertTrue(pendingMessage.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testImageGenerationRemainsVisibleAfterLeavingAndReturningToMe() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd",
+            "-loggedIn",
+            "-hideDebugTestControls",
+            "-useLocalFeatureCatalog",
+            "-showGeneratedImagePreview",
+            "-holdGeneratedImageLoading"
+        ]
+        app.launch()
+
+        app.buttons["AI Photo"].tap()
+        let cowboy = app.buttons["template-cowboy-style"].firstMatch
+        for _ in 0..<8 where !cowboy.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(cowboy.waitForExistence(timeout: 3))
+        cowboy.tap()
+        XCTAssertTrue(app.buttons["Try Cowboy Style"].waitForExistence(timeout: 3))
+        app.buttons["Try Cowboy Style"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["image-generation-loading"].waitForExistence(timeout: 3))
+
+        app.buttons["app-tab-me"].firstMatch.tap()
+        let pendingMessage = app.staticTexts["Your image is being generated."]
+        XCTAssertTrue(pendingMessage.waitForExistence(timeout: 3))
+
+        app.buttons["AI Video"].tap()
+        app.buttons["Me"].tap()
+        XCTAssertTrue(pendingMessage.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testImageGenerationCompletionOpensPhotoHistory() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -1612,6 +1682,29 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(maximize.isHittable)
         maximize.tap()
         XCTAssertTrue(app.buttons["Close preview"].waitForExistence(timeout: 2))
+        let photoPreview = app.descendants(matching: .any)["history-photo-preview"]
+        XCTAssertTrue(photoPreview.exists)
+        let closePreview = app.buttons["Close preview"]
+        XCTAssertGreaterThanOrEqual(
+            closePreview.frame.minX,
+            photoPreview.frame.minX,
+            "Close preview button extends beyond the photo's left edge"
+        )
+        XCTAssertLessThanOrEqual(
+            closePreview.frame.maxX,
+            photoPreview.frame.maxX,
+            "Close preview button extends beyond the photo's right edge"
+        )
+        XCTAssertGreaterThanOrEqual(
+            closePreview.frame.minY,
+            photoPreview.frame.minY,
+            "Close preview button overlaps the top letterbox"
+        )
+        XCTAssertLessThanOrEqual(
+            closePreview.frame.maxY,
+            photoPreview.frame.maxY,
+            "Close preview button extends below the photo"
+        )
         XCTAssertFalse(app.staticTexts["Share to:"].exists)
         for label in ["Messages", "WhatsApp", "Facebook", "Instagram", "Messenger", "TikTok"] {
             XCTAssertFalse(app.buttons[label].exists, "Unexpected \(label) in photo preview")

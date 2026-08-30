@@ -136,6 +136,10 @@ struct CreditStoreView: View {
                     .frame(minHeight: proxy.size.height)
                 }
                 .scrollIndicators(.hidden)
+
+                if isPurchasing {
+                    StorePurchaseLoadingOverlay()
+                }
             }
         }
         .ignoresSafeArea(edges: .bottom)
@@ -376,6 +380,11 @@ struct CreditExitOfferView: View {
                     y: max(35, proxy.size.height - min(proxy.size.height - 62, 610) - 8)
                 )
                 .zIndex(100)
+
+                if isPurchasing {
+                    StorePurchaseLoadingOverlay()
+                        .zIndex(200)
+                }
             }
         }
         .preferredColorScheme(.dark)

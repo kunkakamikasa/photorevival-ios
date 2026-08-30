@@ -128,12 +128,12 @@ struct AppRootView: View {
         .fullScreenCover(item: $initialFollowUpOffer) { offer in
             PaywallFollowUpOfferView(offer: offer)
         }
-#if DEBUG
-        .background {
-            DebugTestWindowInstaller()
-                .frame(width: 0, height: 0)
-        }
-#endif
+// #if DEBUG
+//        .background {
+//            DebugTestWindowInstaller()
+//                .frame(width: 0, height: 0)
+//        }
+// #endif
         .onReceive(NotificationCenter.default.publisher(for: .adjustAttributionDidChange)) { _ in
             Task {
                 await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
@@ -274,7 +274,8 @@ private struct LaunchExperienceView: View {
         ZStack {
             LaunchBackgroundMedia(
                 videoName: page.videoName,
-                mediaAspectRatio: page.mediaAspectRatio
+                mediaAspectRatio: page.mediaAspectRatio,
+                posterImageName: page.posterImageName
             )
             .allowsHitTesting(false)
 
@@ -358,6 +359,15 @@ private enum LaunchPage: Int {
         case .restore: "OnboardingRestoreVideo"
         case .pet: "OnboardingPetVideo"
         case .fusion: "OnboardingFusionVideo"
+        }
+    }
+
+    var posterImageName: String {
+        switch self {
+        case .welcome: "OnboardingWelcomePoster"
+        case .restore: "OnboardingRestorePoster"
+        case .pet: "OnboardingPetPoster"
+        case .fusion: "OnboardingFusionPoster"
         }
     }
 
@@ -454,9 +464,20 @@ private struct LaunchBackgroundMedia: View {
     @ViewBuilder
     var body: some View {
         if let mediaAspectRatio {
-            GeometryReader { proxy in
+            GeometryReader { _ in
                 ZStack(alignment: .top) {
-                    backgroundLayer
+                    Color.black
+
+                    if let posterImageName {
+                        Image(posterImageName)
+                            .resizable()
+                            .aspectRatio(mediaAspectRatio, contentMode: .fit)
+                            .frame(
+                                maxWidth: .infinity,
+                                maxHeight: .infinity,
+                                alignment: .top
+                            )
+                    }
 
                     LoopingVideoView(
                         resourceName: videoName,

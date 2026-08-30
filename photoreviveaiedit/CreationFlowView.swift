@@ -26,7 +26,13 @@ private enum CreateFlowPhotoSelectionTarget: Identifiable {
     }
 }
 
+private enum PendingVideoGenerationEndpoint {
+    case imageToVideo
+    case textToVideo
+}
+
 private struct PendingVideoGenerationRequest {
+    let endpoint: PendingVideoGenerationEndpoint
     let itemID: String
     let images: [UIImage]
     let prompt: String?
@@ -35,22 +41,31 @@ private struct PendingVideoGenerationRequest {
 
     @MainActor
     func submit() async throws -> PhotoReviveVideoGenerationSubmission {
-        var imageURLs: [String] = []
-        for image in images {
-            guard let imageData = image.jpegData(compressionQuality: 0.90) else {
-                throw PhotoReviveAPIError.invalidResponse
+        switch endpoint {
+        case .imageToVideo:
+            var imageURLs: [String] = []
+            for image in images {
+                guard let imageData = image.jpegData(compressionQuality: 0.90) else {
+                    throw PhotoReviveAPIError.invalidResponse
+                }
+                let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(imageData)
+                imageURLs.append(imageURL)
             }
-            let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(imageData)
-            imageURLs.append(imageURL)
-        }
 
-        return try await PhotoReviveAPIClient.shared.createImageToVideo(
-            itemID: itemID,
-            imageURLs: imageURLs,
-            prompt: prompt,
-            appVersion: appVersion,
-            options: options
-        )
+            return try await PhotoReviveAPIClient.shared.createImageToVideo(
+                itemID: itemID,
+                imageURLs: imageURLs,
+                prompt: prompt,
+                appVersion: appVersion,
+                options: options
+            )
+        case .textToVideo:
+            return try await PhotoReviveAPIClient.shared.createTextToVideo(
+                itemID: itemID,
+                prompt: prompt,
+                options: options
+            )
+        }
     }
 }
 
@@ -95,25 +110,6 @@ private struct PendingImageGenerationRequest {
                 prompt: prompt,
                 options: options
             )
-        }
-    }
-}
-
-/// SwiftUI cancels work started with `.task` when its progress screen is
-/// dismissed. Generation is server-backed and must keep submitting/polling
-/// after the user leaves that screen, so this store owns those unstructured
-/// tasks until they finish. More than one job may be active at the same time.
-@MainActor
-private final class BackgroundGenerationWorkStore {
-    static let shared = BackgroundGenerationWorkStore()
-
-    private var tasks: [UUID: Task<Void, Never>] = [:]
-
-    func start(_ operation: @escaping @MainActor () async -> Void) {
-        let id = UUID()
-        tasks[id] = Task { @MainActor [weak self] in
-            await operation()
-            self?.tasks[id] = nil
         }
     }
 }
@@ -539,6 +535,7 @@ struct CreateFlowView: View {
                     templateTitle: activeTemplate?.title ?? template?.title ?? "Generated Video",
                     videoName: activeTemplate?.videoName ?? template?.videoName,
                     template: activeTemplate ?? template,
+                    loadingPreviewImage: pendingVideoGeneration.images.first,
                     submissionAction: {
                         try await pendingVideoGeneration.submit()
                     },
@@ -1271,6 +1268,7 @@ struct CreateFlowView: View {
 
         generationError = nil
         pendingVideoGeneration = PendingVideoGenerationRequest(
+            endpoint: .imageToVideo,
             itemID: selectedTemplate.id,
             images: images,
             prompt: editablePrompt,
@@ -1856,6 +1854,7 @@ private struct VideoGenerationFlowView: View {
     let videoName: String?
     let template: TemplateItem?
     var taskID: String? = nil
+    var loadingPreviewImage: UIImage? = nil
     var submissionAction: (@MainActor () async throws -> PhotoReviveVideoGenerationSubmission)? = nil
     var onSubmission: ((PhotoReviveVideoGenerationSubmission) -> Void)? = nil
     let onRegenerate: () -> Void
@@ -1877,6 +1876,7 @@ private struct VideoGenerationFlowView: View {
     @State private var pollingStartedAt = Date()
     @State private var submittedTaskID: String?
     @State private var hasStartedBackgroundWork = false
+    @State private var progressRecordID: UUID?
     @AppStorage("isSubscribed") private var isSubscribed = false
 
     var body: some View {
@@ -1974,24 +1974,46 @@ private struct VideoGenerationFlowView: View {
     private func startBackgroundWorkIfNeeded() {
         guard stage == .loading, !hasStartedBackgroundWork else { return }
         hasStartedBackgroundWork = true
+        let shouldTrackProgress: Bool
+#if DEBUG
+        shouldTrackProgress = submissionAction != nil
+            || taskID != nil
+            || ProcessInfo.processInfo.arguments.contains("-holdGeneratedVideoLoading")
+#else
+        shouldTrackProgress = submissionAction != nil || taskID != nil
+#endif
+        if shouldTrackProgress {
+            progressRecordID = BackgroundGenerationWorkStore.shared.register(
+                kind: .video,
+                title: title,
+                subtitle: templateTitle,
+                previewImage: loadingPreviewImage,
+                serverTaskID: taskID
+            )
+        }
+        let recordID = progressRecordID
         BackgroundGenerationWorkStore.shared.start {
-            await runLoadingFlow()
+            await runLoadingFlow(progressRecordID: recordID)
         }
     }
 
     private func navigateToMainTab(_ tab: AppTab) {
         selectedTab = tab
         onClose()
+        let historyKind = tab == .me ? MeHistoryKind.video.rawValue : nil
         DispatchQueue.main.async {
             NotificationCenter.default.post(
                 name: .appTabNavigationRequested,
-                object: tab
+                object: tab,
+                userInfo: historyKind.map {
+                    [Notification.Name.appTabNavigationHistoryKindKey: $0]
+                }
             )
         }
     }
 
     @MainActor
-    private func runLoadingFlow() async {
+    private func runLoadingFlow(progressRecordID: UUID?) async {
         if let submissionAction {
             do {
                 // Let the full-screen cover finish presenting before JPEG
@@ -2002,30 +2024,45 @@ private struct VideoGenerationFlowView: View {
                 let submission = try await submissionAction()
                 guard !Task.isCancelled, stage == .loading else { return }
                 submittedTaskID = submission.taskID
+                BackgroundGenerationWorkStore.shared.markSubmitted(
+                    recordID: progressRecordID,
+                    serverTaskID: submission.taskID
+                )
                 onSubmission?(submission)
                 await AppAccountStore.shared.refreshHistory()
+                BackgroundGenerationWorkStore.shared.reconcile(
+                    with: AppAccountStore.shared.historyTasks
+                )
                 AppAnalytics.generationSubmitted(
                     contentType: "video",
                     itemID: template?.id
                 )
                 pollingStartedAt = Date()
-                await pollGenerationTask(submission.taskID)
+                await pollGenerationTask(
+                    submission.taskID,
+                    progressRecordID: progressRecordID
+                )
             } catch {
                 guard !Task.isCancelled else { return }
+                let message = error.userFacingEnglishMessage(
+                    fallback: "Video generation failed. Please try again."
+                )
+                BackgroundGenerationWorkStore.shared.markFailed(
+                    recordID: progressRecordID,
+                    message: message
+                )
                 AppAnalytics.generationFailed(
                     contentType: "video",
                     itemID: template?.id,
                     stage: "submission",
                     failureType: AppAnalytics.apiFailureType(error)
                 )
-                stage = .failed(error.userFacingEnglishMessage(
-                    fallback: "Video generation failed. Please try again."
-                ))
+                stage = .failed(message)
             }
         } else if let taskID {
             submittedTaskID = taskID
             pollingStartedAt = Date()
-            await pollGenerationTask(taskID)
+            await pollGenerationTask(taskID, progressRecordID: progressRecordID)
         } else {
             // Legacy preview-only callers keep their existing handoff.
 #if DEBUG
@@ -2457,7 +2494,10 @@ private struct VideoGenerationFlowView: View {
         }
     }
 
-    private func pollGenerationTask(_ taskID: String) async {
+    private func pollGenerationTask(
+        _ taskID: String,
+        progressRecordID: UUID?
+    ) async {
         let maximumAttempts = 100
         for attempt in 0..<maximumAttempts {
             guard !Task.isCancelled else { return }
@@ -2465,7 +2505,14 @@ private struct VideoGenerationFlowView: View {
                 let task = try await PhotoReviveAPIClient.shared.generationTask(id: taskID)
                 if task.status == "completed", let resultURL = task.resultURL {
                     generatedVideoURL = resultURL
+                    BackgroundGenerationWorkStore.shared.markCompleted(
+                        recordID: progressRecordID,
+                        resultURL: resultURL
+                    )
                     await AppAccountStore.shared.refreshHistory()
+                    BackgroundGenerationWorkStore.shared.reconcile(
+                        with: AppAccountStore.shared.historyTasks
+                    )
                     AppAnalytics.generationCompleted(
                         contentType: "video",
                         itemID: template?.id,
@@ -2480,8 +2527,18 @@ private struct VideoGenerationFlowView: View {
                     // get-task performs the server-side failure refund before
                     // returning. Refresh the wallet so the UI never keeps the
                     // pre-refund balance after a failed generation.
+                    let message = task.userFacingErrorMessage(
+                        fallback: "The model could not generate this video. Please try again."
+                    )
+                    BackgroundGenerationWorkStore.shared.markFailed(
+                        recordID: progressRecordID,
+                        message: message
+                    )
                     await AppAccountStore.shared.refreshCredits()
                     await AppAccountStore.shared.refreshHistory()
+                    BackgroundGenerationWorkStore.shared.reconcile(
+                        with: AppAccountStore.shared.historyTasks
+                    )
                     AppAnalytics.generationFailed(
                         contentType: "video",
                         itemID: template?.id,
@@ -2489,15 +2546,20 @@ private struct VideoGenerationFlowView: View {
                         failureType: "server_task",
                         elapsedMilliseconds: pollingElapsedMilliseconds
                     )
-                    stage = .failed(task.userFacingErrorMessage(
-                        fallback: "The model could not generate this video. Please try again."
-                    ))
+                    stage = .failed(message)
                     return
                 }
             } catch {
                 // A brief connection failure should not discard a task that is
                 // still running on the server. Surface it only after retries.
                 if attempt == maximumAttempts - 1 {
+                    let message = error.userFacingEnglishMessage(
+                        fallback: "Unable to check the video status. Please try again."
+                    )
+                    BackgroundGenerationWorkStore.shared.markFailed(
+                        recordID: progressRecordID,
+                        message: message
+                    )
                     AppAnalytics.generationFailed(
                         contentType: "video",
                         itemID: template?.id,
@@ -2505,9 +2567,7 @@ private struct VideoGenerationFlowView: View {
                         failureType: AppAnalytics.apiFailureType(error),
                         elapsedMilliseconds: pollingElapsedMilliseconds
                     )
-                    stage = .failed(error.userFacingEnglishMessage(
-                        fallback: "Unable to check the video status. Please try again."
-                    ))
+                    stage = .failed(message)
                     return
                 }
             }
@@ -3634,6 +3694,7 @@ private struct FixedVideoGeneratorFeature: View {
     @State private var isGenerating = false
     @State private var generationError: String?
     @State private var generationTaskID: String?
+    @State private var pendingVideoGeneration: PendingVideoGenerationRequest?
 
     init(
         initialMode: FixedVideoGeneratorMode,
@@ -3770,15 +3831,25 @@ private struct FixedVideoGeneratorFeature: View {
         }
         .fullScreenCover(isPresented: $showCredits) { CreditCenterView(credits: $credits) }
         .fullScreenCover(isPresented: $showGenerationFlow) {
-            VideoGenerationFlowView(
-                title: "Video Generator",
-                templateTitle: mode == .image ? "Photo To Video" : "Text To Video",
-                videoName: nil,
-                template: activeCoverItem,
-                taskID: generationTaskID,
-                onRegenerate: { showGenerationFlow = false },
-                onClose: { showGenerationFlow = false }
-            )
+            if let pendingVideoGeneration {
+                VideoGenerationFlowView(
+                    title: "Video Generator",
+                    templateTitle: mode == .image ? "Photo To Video" : "Text To Video",
+                    videoName: nil,
+                    template: activeCoverItem,
+                    loadingPreviewImage: selectedImage,
+                    submissionAction: {
+                        try await pendingVideoGeneration.submit()
+                    },
+                    onSubmission: { submission in
+                        credits = submission.creditsBalance
+                        generationTaskID = submission.taskID
+                        isGenerating = false
+                    },
+                    onRegenerate: closeGenerationFlow,
+                    onClose: closeGenerationFlow
+                )
+            }
         }
         .fullScreenCover(isPresented: $showCrop) {
             if let selectedImage {
@@ -3884,48 +3955,44 @@ private struct FixedVideoGeneratorFeature: View {
             multiShot: normalizedMultiShot
         )
 
-        isGenerating = true
-        Task {
-            defer { isGenerating = false }
-            do {
-                let submission: PhotoReviveVideoGenerationSubmission
-                switch (mode, target.endpoint) {
-                case (.image, "image-to-video"):
-                    guard let selectedImage,
-                          let data = selectedImage.jpegData(compressionQuality: 0.90) else {
-                        throw PhotoReviveAPIError.invalidResponse
-                    }
-                    let imageURL = try await PhotoReviveAPIClient.shared.uploadGenerationImage(data)
-                    let appVersion = Bundle.main.object(
-                        forInfoDictionaryKey: "CFBundleShortVersionString"
-                    ) as? String
-                    submission = try await PhotoReviveAPIClient.shared.createImageToVideo(
-                        itemID: target.itemID,
-                        imageURLs: [imageURL],
-                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-                        appVersion: appVersion,
-                        options: options
-                    )
-                case (.text, "text-to-video"):
-                    submission = try await PhotoReviveAPIClient.shared.createTextToVideo(
-                        itemID: target.itemID,
-                        prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-                        options: options
-                    )
-                default:
-                    generationError = "The CMS generation target for this feature is invalid."
-                    return
-                }
-
-                credits = submission.creditsBalance
-                generationTaskID = submission.taskID
-                showGenerationFlow = true
-            } catch {
-                generationError = error.userFacingEnglishMessage(
-                    fallback: "Video generation failed. Please try again."
-                )
+        let endpoint: PendingVideoGenerationEndpoint
+        let images: [UIImage]
+        switch (mode, target.endpoint) {
+        case (.image, "image-to-video"):
+            guard let selectedImage else {
+                generationError = "Please choose a source photo."
+                return
             }
+            endpoint = .imageToVideo
+            images = [selectedImage]
+        case (.text, "text-to-video"):
+            endpoint = .textToVideo
+            images = []
+        default:
+            generationError = "The CMS generation target for this feature is invalid."
+            return
         }
+
+        generationError = nil
+        generationTaskID = nil
+        pendingVideoGeneration = PendingVideoGenerationRequest(
+            endpoint: endpoint,
+            itemID: target.itemID,
+            images: images,
+            prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+            appVersion: Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String,
+            options: options
+        )
+        isGenerating = true
+        showGenerationFlow = true
+    }
+
+    private func closeGenerationFlow() {
+        showGenerationFlow = false
+        isGenerating = false
+        pendingVideoGeneration = nil
     }
 }
 
@@ -5243,6 +5310,7 @@ private struct ImageGenerationFlowView: View {
     @State private var resolvedGeneratedImageURL: URL?
     @State private var submittedTaskID: String?
     @State private var hasStartedBackgroundWork = false
+    @State private var progressRecordID: UUID?
     @State private var permitsAutomaticHistoryNavigation = true
     @AppStorage("isSubscribed") private var isSubscribed = false
 
@@ -5330,14 +5398,35 @@ private struct ImageGenerationFlowView: View {
     private func startBackgroundWorkIfNeeded() {
         guard stage == .loading, !hasStartedBackgroundWork else { return }
         hasStartedBackgroundWork = true
+        let shouldTrackProgress: Bool
+#if DEBUG
+        shouldTrackProgress = submissionAction != nil
+            || taskID != nil
+            || ProcessInfo.processInfo.arguments.contains("-holdGeneratedImageLoading")
+#else
+        shouldTrackProgress = submissionAction != nil || taskID != nil
+#endif
+        if shouldTrackProgress {
+            progressRecordID = BackgroundGenerationWorkStore.shared.register(
+                kind: .image,
+                title: title,
+                subtitle: template.title,
+                previewImage: loadingPreviewImage,
+                serverTaskID: taskID
+            )
+        }
+        let recordID = progressRecordID
         BackgroundGenerationWorkStore.shared.start {
-            await runLoadingFlow()
+            await runLoadingFlow(progressRecordID: recordID)
         }
     }
 
     private func navigateToMainTab(_ tab: AppTab) {
         permitsAutomaticHistoryNavigation = false
-        completeNavigation(to: tab)
+        completeNavigation(
+            to: tab,
+            historyKind: tab == .me ? .photo : nil
+        )
     }
 
     private func navigateToCompletedImageHistory() {
@@ -5364,7 +5453,7 @@ private struct ImageGenerationFlowView: View {
     }
 
     @MainActor
-    private func runLoadingFlow() async {
+    private func runLoadingFlow(progressRecordID: UUID?) async {
         if let submissionAction {
             let generationStartedAt = Date()
             do {
@@ -5380,6 +5469,14 @@ private struct ImageGenerationFlowView: View {
 
                 resolvedGeneratedImageURL = resultURL
                 submittedTaskID = submission.taskID
+                BackgroundGenerationWorkStore.shared.markSubmitted(
+                    recordID: progressRecordID,
+                    serverTaskID: submission.taskID
+                )
+                BackgroundGenerationWorkStore.shared.markCompleted(
+                    recordID: progressRecordID,
+                    resultURL: resultURL
+                )
                 onSubmission?(submission)
                 AppAnalytics.generationSubmitted(
                     contentType: "image",
@@ -5393,18 +5490,26 @@ private struct ImageGenerationFlowView: View {
                     )
                 )
                 await AppAccountStore.shared.refreshHistory()
+                BackgroundGenerationWorkStore.shared.reconcile(
+                    with: AppAccountStore.shared.historyTasks
+                )
                 navigateToCompletedImageHistory()
             } catch {
                 guard !Task.isCancelled else { return }
+                let message = error.userFacingEnglishMessage(
+                    fallback: "Image generation failed. Please try again."
+                )
+                BackgroundGenerationWorkStore.shared.markFailed(
+                    recordID: progressRecordID,
+                    message: message
+                )
                 AppAnalytics.generationFailed(
                     contentType: "image",
                     itemID: template.id,
                     stage: "submission",
                     failureType: AppAnalytics.apiFailureType(error)
                 )
-                stage = .failed(error.userFacingEnglishMessage(
-                    fallback: "Image generation failed. Please try again."
-                ))
+                stage = .failed(message)
             }
             return
         }
@@ -5423,10 +5528,22 @@ private struct ImageGenerationFlowView: View {
         if let generatedImageURL {
             resolvedGeneratedImageURL = generatedImageURL
             submittedTaskID = taskID
+            BackgroundGenerationWorkStore.shared.markCompleted(
+                recordID: progressRecordID,
+                resultURL: generatedImageURL
+            )
             await AppAccountStore.shared.refreshHistory()
+            BackgroundGenerationWorkStore.shared.reconcile(
+                with: AppAccountStore.shared.historyTasks
+            )
             navigateToCompletedImageHistory()
         } else {
-            stage = .failed("The generated image is not available. Please try again.")
+            let message = "The generated image is not available. Please try again."
+            BackgroundGenerationWorkStore.shared.markFailed(
+                recordID: progressRecordID,
+                message: message
+            )
+            stage = .failed(message)
         }
     }
 

@@ -104,12 +104,7 @@ struct SubscriberScratchOfferView: View {
                 }
 
                 if isWorking {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(.white)
-                        .frame(width: 104, height: 104)
-                        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .accessibilityLabel("Processing reward")
+                    StorePurchaseLoadingOverlay(accessibilityLabel: "Processing reward")
                 }
             }
         }
