@@ -1,11 +1,26 @@
 import SwiftUI
 
+enum StartupAnimationPolicy {
+    static let minimumDisplayNanoseconds: UInt64 = 4_000_000_000
+
+    static func shouldKeepShowing(
+        minimumDurationElapsed: Bool,
+        isFirstInstall: Bool,
+        hasUsableNetworkPath: Bool
+    ) -> Bool {
+        !minimumDurationElapsed
+            || (isFirstInstall && !hasUsableNetworkPath)
+    }
+}
+
 struct AppRootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var appOpenAdManager = AppOpenAdManager.shared
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage("isSubscribed") private var isSubscribed = false
     @AppStorage("limitedOfferLastPresentedDay") private var limitedOfferLastPresentedDay = 0.0
     @StateObject private var trackingAuthorization = TrackingAuthorizationManager()
+    @StateObject private var networkAccessMonitor = NetworkAccessMonitor()
     @StateObject private var featureConfigStore = FeatureConfigStore()
     @State private var completedOnboardingThisSession = false
     @State private var showInitialMembership = false
@@ -23,6 +38,20 @@ struct AppRootView: View {
         if arguments.contains("-forceOnboarding") { return true }
         if arguments.contains("-skipOnboarding") { return false }
         return !hasCompletedOnboarding
+    }
+
+    private var shouldKeepShowingStartupAnimation: Bool {
+        StartupAnimationPolicy.shouldKeepShowing(
+            minimumDurationElapsed: !isShowingStartupVideo,
+            isFirstInstall: shouldShowOnboarding,
+            hasUsableNetworkPath: networkAccessMonitor.hasUsableNetworkPath
+        )
+    }
+
+    private var configuredOfferProductIDs: [String] {
+        [featureConfigStore.homeHeroOffer, featureConfigStore.homeBottomOffer]
+            .compactMap { $0 }
+            .flatMap { [$0.weeklyPlan.productID, $0.annualPlan.productID] }
     }
 
     var body: some View {
@@ -64,10 +93,17 @@ struct AppRootView: View {
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             // Start CMS and cover warming before any permission flow. This is
-            // the useful work hidden by the three-second startup animation.
+            // useful work hidden by the startup animation and system prompt.
             let featureLoadTask = Task {
                 await featureConfigStore.load()
             }
+            if AppOpenAdConfiguration.isAdvertisingEnabled,
+               AppOpenAdConfiguration.hasValidApplicationID {
+                _ = await AdvertisingConsentManager.shared.prepareForAdRequests()
+            }
+            guard !Task.isCancelled else { return }
+            await trackingAuthorization.requestAuthorizationIfNeeded()
+            guard !Task.isCancelled else { return }
 #if DEBUG
             if !debugStateOverrideEnabled {
                 isSubscribed = await SubscriptionPurchaseService.hasActiveStoreEntitlement()
@@ -76,13 +112,22 @@ struct AppRootView: View {
             isSubscribed = await SubscriptionPurchaseService.hasActiveStoreEntitlement()
 #endif
             AppAnalytics.updateSubscription(isSubscribed: isSubscribed)
-            await trackingAuthorization.requestAuthorizationIfNeeded()
-            guard !Task.isCancelled else { return }
             AdjustService.shared.startIfNeeded(
                 externalDeviceID: PhotoReviveAuthClient.shared.currentUserID
             )
             await PhotoReviveAuthClient.shared.bindAdjustAttributionIfAvailable()
             await featureLoadTask.value
+        }
+        .task(id: networkAccessMonitor.hasUsableNetworkPath) {
+            guard networkAccessMonitor.hasUsableNetworkPath else { return }
+            // Do not wait for the permission flow or the four-second minimum.
+            // Use that hidden time to warm every known App Store price.
+            await StoreProductPriceStore.shared.preloadKnownProducts()
+            await StoreProductPriceStore.shared.load(productIDs: configuredOfferProductIDs)
+        }
+        .task(id: configuredOfferProductIDs) {
+            guard networkAccessMonitor.hasUsableNetworkPath else { return }
+            await StoreProductPriceStore.shared.load(productIDs: configuredOfferProductIDs)
         }
         .task {
             if arguments.contains("-skipStartupAnimation") {
@@ -90,7 +135,7 @@ struct AppRootView: View {
                 return
             }
 
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: StartupAnimationPolicy.minimumDisplayNanoseconds)
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.28)) {
                 isShowingStartupVideo = false
@@ -101,7 +146,7 @@ struct AppRootView: View {
 
     @ViewBuilder
     private var appContent: some View {
-        if isShowingStartupVideo {
+        if shouldKeepShowingStartupAnimation || appOpenAdManager.isBlockingLaunchContent {
             StartupAnimationView()
                 .transition(.opacity)
         } else if shouldShowOnboarding {
@@ -112,7 +157,8 @@ struct AppRootView: View {
         } else {
             ContentView(
                 featureConfigStore: featureConfigStore,
-                startupPresentationsAllowed: trackingAuthorization.hasFinishedInitialRequest,
+                startupPresentationsAllowed: trackingAuthorization.hasFinishedInitialRequest
+                    && !appOpenAdManager.didPresentAdForCurrentLaunch,
                 isReturningSession: hasCompletedOnboarding && !completedOnboardingThisSession
             )
                 .transition(.opacity)

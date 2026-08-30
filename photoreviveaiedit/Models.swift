@@ -93,6 +93,125 @@ enum EnglishDisplayText {
     }
 }
 
+enum VideoPromptSubmission {
+    /// The polished default is only a display layer. Submit a prompt override
+    /// when the CMS permits editing and the user has actually changed the text.
+    static func userOverride(
+        displayedPrompt: String,
+        defaultDisplayedPrompt: String,
+        isEditable: Bool
+    ) -> String? {
+        guard isEditable else { return nil }
+        let trimmedPrompt = displayedPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDefault = defaultDisplayedPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty, trimmedPrompt != trimmedDefault else { return nil }
+        return trimmedPrompt
+    }
+}
+
+struct VideoGenerationOptionCapabilities: Equatable {
+    let supportsSound: Bool
+    let supportsMultiShot: Bool
+    let durations: [String]
+    let resolutions: [String]
+    let aspectRatios: [String]
+
+    static let seedance15 = VideoGenerationOptionCapabilities(
+        supportsSound: true,
+        supportsMultiShot: true,
+        durations: ["5s", "8s", "10s"],
+        resolutions: ["480p", "720p", "1080p"],
+        aspectRatios: ["16:9", "1:1", "9:16", "4:3", "3:4"]
+    )
+
+    static let grokVideo = VideoGenerationOptionCapabilities(
+        supportsSound: true,
+        supportsMultiShot: false,
+        durations: ["5s", "8s", "10s"],
+        resolutions: ["480p", "720p", "1080p"],
+        aspectRatios: ["16:9", "1:1", "9:16", "4:3", "3:4"]
+    )
+
+    /// Unknown future CMS models get a deliberately small, server-safe set.
+    /// A new model must be explicitly mapped before richer controls appear.
+    static let conservativeFallback = VideoGenerationOptionCapabilities(
+        supportsSound: false,
+        supportsMultiShot: false,
+        durations: ["5s"],
+        resolutions: ["480p"],
+        aspectRatios: ["9:16"]
+    )
+
+    static func current(forModelID modelID: String?) -> VideoGenerationOptionCapabilities {
+        let normalized = modelID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if normalized.contains("seedance-1-5") {
+            return .seedance15
+        }
+        if normalized.contains("grok") && normalized.contains("video") {
+            return .grokVideo
+        }
+        return .conservativeFallback
+    }
+
+    func normalizedDuration(_ value: String) -> String {
+        durations.contains(value) ? value : durations[0]
+    }
+
+    func normalizedResolution(_ value: String) -> String {
+        resolutions.contains(value) ? value : resolutions[0]
+    }
+
+    func normalizedAspectRatio(_ value: String) -> String {
+        aspectRatios.contains(value) ? value : aspectRatios[0]
+    }
+}
+
+struct ImageGenerationOptionCapabilities: Equatable {
+    let resolutions: [String]
+    let aspectRatios: [String]
+    let outputCounts: [String]
+
+    static let seedream45 = ImageGenerationOptionCapabilities(
+        resolutions: ["2K"],
+        aspectRatios: ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9"],
+        outputCounts: ["1"]
+    )
+
+    /// Models that have not been explicitly verified must not receive an
+    /// aspect ratio. This keeps deprecated or future CMS models from inheriting
+    /// Seedream-specific controls by accident.
+    static let conservativeFallback = ImageGenerationOptionCapabilities(
+        resolutions: [PhotoReviveImageGenerationOptions.providerDefaultResolution],
+        aspectRatios: [],
+        outputCounts: ["1"]
+    )
+
+    static func current(forModelID modelID: String?) -> ImageGenerationOptionCapabilities {
+        let normalized = modelID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if normalized.contains("seedream-4-5") {
+            return .seedream45
+        }
+        return .conservativeFallback
+    }
+
+    func normalizedResolution(_ value: String) -> String {
+        resolutions.contains(value) ? value : resolutions[0]
+    }
+
+    func normalizedAspectRatio(_ value: String) -> String? {
+        guard let defaultAspectRatio = aspectRatios.first else { return nil }
+        return aspectRatios.contains(value) ? value : defaultAspectRatio
+    }
+
+    func normalizedOutputCount(_ value: String) -> String {
+        outputCounts.contains(value) ? value : outputCounts[0]
+    }
+}
+
 extension Error {
     func userFacingEnglishMessage(
         fallback: String = "Something went wrong. Please try again."
@@ -353,9 +472,9 @@ struct TemplateItem: Identifiable, Hashable {
 
     /// Batch-published two-stage videos store the image-composition prompt and
     /// video-motion prompt in one compatibility field. The upload page should
-    /// only show the second-stage motion prompt to the user.
+    /// only use the second-stage motion prompt to build a display-safe summary.
     var displayedPromptTemplate: String? {
-        guard let promptTemplate else { return nil }
+        guard generationKind == .video, let promptTemplate else { return nil }
         let visiblePrompt: String
         if let markerRange = promptTemplate.range(
             of: "VIDEO MOTION:",
@@ -367,7 +486,8 @@ struct TemplateItem: Identifiable, Hashable {
         } else {
             visiblePrompt = promptTemplate
         }
-        return EnglishDisplayText.prompt(visiblePrompt)
+        guard EnglishDisplayText.prompt(visiblePrompt) != nil else { return nil }
+        return VideoPromptDisplayCatalog.prompt(for: id)
     }
 
     func uploadPlaceholderURL(at index: Int) -> URL? {
@@ -611,6 +731,33 @@ struct FeatureGenerationTarget: Hashable {
     let modelID: String
     let estimatedCredits: Int
     let promptTemplate: String?
+}
+
+enum FixedFeatureGenerationTargetResolver {
+    static func target(
+        for feature: FixedFeature,
+        endpoint: String,
+        in quickActions: [HomeQuickAction]
+    ) -> FeatureGenerationTarget? {
+        if let directTarget = quickActions
+            .first(where: { $0.feature == feature })?
+            .generationTarget(endpoint: endpoint) {
+            return directTarget
+        }
+
+        // The CMS publishes both AI Image modes under the combined
+        // `ai_image.generation_targets` entry. The dedicated AI Photo tools
+        // are UI aliases, so resolve them from that combined entry when a
+        // legacy standalone fixed-feature item is not present.
+        switch feature {
+        case .imageToImage, .textToImage:
+            return quickActions
+                .first(where: { $0.feature == .aiImage })?
+                .generationTarget(endpoint: endpoint)
+        default:
+            return nil
+        }
+    }
 }
 
 enum CouponPlanKind: String, CaseIterable, Identifiable, Hashable {

@@ -14,20 +14,49 @@ import AppTrackingTransparency
 import UIKit
 
 final class PhotoReviveAppDelegate: NSObject, UIApplicationDelegate {
+    private var appOpenAdPreparationTask: Task<Void, Never>?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        ApplicationDelegate.shared.application(
+        let didFinishLaunching = ApplicationDelegate.shared.application(
             application,
             didFinishLaunchingWithOptions: launchOptions
         )
+
+        let shouldPrepareAppOpenAd = AppOpenAdLaunchPolicy().shouldPrepareForLaunch(
+            isAdvertisingEnabled: AppOpenAdConfiguration.isAdvertisingEnabled,
+            isSubscribed: UserDefaults.standard.bool(forKey: "isSubscribed")
+        )
+        if shouldPrepareAppOpenAd {
+            appOpenAdPreparationTask = Task { [weak self] in
+                defer { self?.appOpenAdPreparationTask = nil }
+
+                let isSubscribed = await SubscriptionPurchaseService.hasActiveStoreEntitlement()
+                guard !Task.isCancelled else { return }
+
+                UserDefaults.standard.set(isSubscribed, forKey: "isSubscribed")
+                guard !isSubscribed else { return }
+
+                AppOpenAdManager.shared.prepareForCurrentLaunch()
+            }
+        }
+
+        return didFinishLaunching
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         // Auto App Events are disabled so Meta cannot classify a free trial as
         // an implicit Purchase. Keep install/session attribution explicitly.
         AppEvents.shared.activateApp()
+        AppOpenAdManager.shared.applicationDidBecomeActive()
+    }
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        appOpenAdPreparationTask?.cancel()
+        appOpenAdPreparationTask = nil
+        AppOpenAdManager.shared.applicationDidEnterBackground()
     }
 }
 

@@ -84,6 +84,16 @@ private struct PhotoReviveIDTokenRequest: Encodable {
     let nonce: String?
 }
 
+private struct PhotoRevivePasswordRequest: Encodable {
+    let email: String
+    let password: String
+}
+
+private enum PhotoReviveReviewAccount {
+    static let alias = "review"
+    static let email = "review-tester-photorevival@review.local"
+}
+
 private struct PhotoReviveAppContextRequest: Encodable {
     let app_id: String
     let timezone_name: String
@@ -165,6 +175,7 @@ enum PhotoReviveAuthError: LocalizedError {
 @MainActor
 final class PhotoReviveAuthStore: ObservableObject {
     @Published private(set) var activeProvider: PhotoReviveAuthProvider?
+    @Published private(set) var isCredentialSignInBusy = false
     @Published private(set) var didAuthenticate = false
     @Published var errorMessage: String?
 
@@ -174,10 +185,10 @@ final class PhotoReviveAuthStore: ObservableObject {
         self.client = client ?? PhotoReviveAuthClient.shared
     }
 
-    var isBusy: Bool { activeProvider != nil }
+    var isBusy: Bool { activeProvider != nil || isCredentialSignInBusy }
 
     func signIn(with provider: PhotoReviveAuthProvider) {
-        guard activeProvider == nil else { return }
+        guard !isBusy else { return }
 
         activeProvider = provider
         errorMessage = nil
@@ -246,6 +257,58 @@ final class PhotoReviveAuthStore: ObservableObject {
             }
 
             activeProvider = nil
+        }
+    }
+
+    func signIn(email: String, password: String) {
+        guard !isBusy else { return }
+
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedEmail.isEmpty, !password.isEmpty else {
+            errorMessage = "Enter the account and password."
+            return
+        }
+
+        isCredentialSignInBusy = true
+        errorMessage = nil
+        AppAnalytics.authAttempt(method: "credentials")
+
+        Task {
+            do {
+                _ = try await client.signInWithPassword(
+                    email: normalizedEmail,
+                    password: password
+                )
+
+                UserDefaults.standard.set(true, forKey: "isLoggedIn")
+                let userID = client.currentUserID
+                AdjustService.shared.setExternalDeviceID(userID)
+                AdjustService.shared.trackCompleteRegistration(userID: userID)
+                AppAnalytics.updateUser(userID: userID, isSignedIn: true)
+                AppAnalytics.authResult(method: "credentials", result: "success")
+                await client.bindAdjustAttributionIfAvailable()
+                didAuthenticate = true
+            } catch let error as PhotoReviveAuthError {
+                errorMessage = error.userFacingEnglishMessage(
+                    fallback: "Sign-in failed. Check the account and password."
+                )
+                AppAnalytics.authResult(
+                    method: "credentials",
+                    result: "failed",
+                    failureType: analyticsFailureType(error)
+                )
+            } catch {
+                errorMessage = error.userFacingEnglishMessage(
+                    fallback: "Sign-in failed. Check the account and password."
+                )
+                AppAnalytics.authResult(
+                    method: "credentials",
+                    result: "failed",
+                    failureType: error is URLError ? "network" : "unknown"
+                )
+            }
+
+            isCredentialSignInBusy = false
         }
     }
 
@@ -353,6 +416,35 @@ final class PhotoReviveAuthClient {
             accessToken: accessToken,
             nonce: nonce
         )
+    }
+
+    func signInWithPassword(email: String, password: String) async throws -> PhotoReviveSession {
+        let normalizedAccount = email
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let serverEmail = normalizedAccount == PhotoReviveReviewAccount.alias
+            ? PhotoReviveReviewAccount.email
+            : normalizedAccount
+
+        var components = URLComponents(
+            url: PhotoReviveAPIConfig.projectURL.appendingPathComponent("auth/v1/token"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "grant_type", value: "password")]
+
+        guard let url = components?.url else {
+            throw PhotoReviveAuthError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            PhotoRevivePasswordRequest(email: serverEmail, password: password)
+        )
+
+        let response: PhotoReviveSessionResponse = try await send(request)
+        return try await persistAuthenticatedSession(response)
     }
 
     func accessToken() async throws -> String {
@@ -553,6 +645,12 @@ final class PhotoReviveAuthClient {
         )
 
         let response: PhotoReviveSessionResponse = try await send(request)
+        return try await persistAuthenticatedSession(response)
+    }
+
+    private func persistAuthenticatedSession(
+        _ response: PhotoReviveSessionResponse
+    ) async throws -> PhotoReviveSession {
         let expiresAt = response.expires_at
             ?? response.expires_in.map { Date().addingTimeInterval($0).timeIntervalSince1970 }
             ?? Date().addingTimeInterval(3600).timeIntervalSince1970

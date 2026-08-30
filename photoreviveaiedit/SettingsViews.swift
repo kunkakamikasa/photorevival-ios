@@ -35,6 +35,7 @@ struct SettingsView: View {
     @AppStorage("profileDisplayName") private var storedDisplayName = ""
     @AppStorage("profileAvatarURL") private var storedAvatarURL = ""
     @ObservedObject private var accountStore = AppAccountStore.shared
+    @ObservedObject private var advertisingConsent = AdvertisingConsentManager.shared
     @State private var destination: SettingsDestination?
     @State private var legalDocument: LegalDocument?
     @State private var notice: SettingsNotice?
@@ -103,8 +104,14 @@ struct SettingsView: View {
                         )
                         SettingsRow(title: "Feedback", action: { destination = .feedback })
                         SettingsRow(title: "Rate us", action: { requestReview() })
-                        SettingsRow(title: "Terms of Service", action: { legalDocument = .termsOfService })
+                        SettingsRow(title: "Terms of Use", action: { legalDocument = .termsOfService })
                         SettingsRow(title: "Privacy Policy", action: { legalDocument = .privacyPolicy })
+                        if advertisingConsent.isPrivacyOptionsRequired {
+                            SettingsRow(
+                                title: "Privacy Choices",
+                                action: { presentAdvertisingPrivacyOptions() }
+                            )
+                        }
                         SettingsRow(title: "Version", value: appVersion, action: nil)
                     }
                     .padding(.top, 20)
@@ -305,6 +312,19 @@ struct SettingsView: View {
                 showNotice("Restore Unavailable", message)
             case .cancelled, .pending:
                 break
+            }
+        }
+    }
+
+    private func presentAdvertisingPrivacyOptions() {
+        Task {
+            do {
+                try await advertisingConsent.presentPrivacyOptions()
+            } catch {
+                showNotice(
+                    "Privacy Choices Unavailable",
+                    "We couldn't load your advertising privacy choices. Please check your connection and try again."
+                )
             }
         }
     }

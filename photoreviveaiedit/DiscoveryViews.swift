@@ -51,6 +51,7 @@ struct DiscoveryPage: View {
                 } else {
                     StandardDiscoveryView(
                         tab: tab,
+                        containerWidth: proxy.size.width,
                         sections: tab == .video ? videoSections : imageSections,
                         heroEntries: heroEntries,
                         videoModeActions: videoModeActions,
@@ -149,6 +150,7 @@ private struct HomeDiscoveryView: View {
 
 private struct StandardDiscoveryView: View {
     let tab: AppTab
+    let containerWidth: CGFloat
     let sections: [TemplateSection]
     let heroEntries: [TemplateDetailEntry]
     let videoModeActions: [HomeQuickAction]
@@ -177,6 +179,7 @@ private struct StandardDiscoveryView: View {
                 if tab == .video {
                     VideoModeStrip(
                         actions: videoModeActions,
+                        containerWidth: containerWidth,
                         selection: $selectedVideoMode
                     )
                         .padding(.top, 10)
@@ -184,7 +187,11 @@ private struct StandardDiscoveryView: View {
                     if let action = selectedVideoMode.flatMap({ selectedMode in
                         videoModeActions.first { $0.feature == selectedMode }
                     }) ?? videoModeActions.first {
-                        VideoModeHero(action: action, onSelect: onFixedFeature)
+                        VideoModeHero(
+                            action: action,
+                            containerWidth: containerWidth,
+                            onSelect: onFixedFeature
+                        )
                     }
                 }
 
@@ -235,6 +242,7 @@ private struct StandardDiscoveryView: View {
                         .padding(.top, 42)
                 }
             }
+            .frame(width: containerWidth, alignment: .leading)
             .padding(.bottom, 124)
         }
         .scrollIndicators(.hidden)
@@ -2035,6 +2043,7 @@ private struct VideoModeSelectionShape: Shape {
 
 private struct VideoModeStrip: View {
     let actions: [HomeQuickAction]
+    let containerWidth: CGFloat
     @Binding var selection: FixedFeature?
 
     private var columns: [GridItem] {
@@ -2044,6 +2053,8 @@ private struct VideoModeStrip: View {
     }
 
     var body: some View {
+        let stripWidth = max(containerWidth - 36, 0)
+
         LazyVGrid(columns: columns, spacing: 0) {
             ForEach(actions) { action in
                 Button {
@@ -2080,8 +2091,8 @@ private struct VideoModeStrip: View {
                 .accessibilityIdentifier("video-mode-\(action.feature.id)")
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 18)
+        .frame(width: stripWidth)
+        .frame(width: containerWidth)
         .padding(.top, -6)
         .onChange(of: actions.map(\.feature), initial: true) { _, features in
             guard let firstFeature = features.first else {
@@ -2096,10 +2107,13 @@ private struct VideoModeStrip: View {
 
 private struct VideoModeHero: View {
     let action: HomeQuickAction
+    let containerWidth: CGFloat
     let onSelect: (FixedFeature) -> Void
 
     var body: some View {
-        ZStack {
+        let heroWidth = max(containerWidth - 40, 0)
+
+        ZStack(alignment: .bottomTrailing) {
             Button { onSelect(action.feature) } label: {
                 ZStack {
                     TemplateMediaView(item: action.item, gravity: .resizeAspectFill)
@@ -2132,12 +2146,13 @@ private struct VideoModeHero: View {
                     )
             }
             .buttonStyle(TemplatePressStyle())
-            .padding(15)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .accessibilityIdentifier("video-mode-try-now-\(action.feature.id)")
+            .padding(.trailing, 20)
+            .padding(.bottom, 15)
         }
-        .frame(height: 219)
+        .frame(width: heroWidth, height: 219)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .padding(.horizontal, 20)
+        .frame(width: containerWidth)
         .accessibilityLabel("Try \(action.feature.title)")
         .id(action.feature)
         .transition(.opacity)

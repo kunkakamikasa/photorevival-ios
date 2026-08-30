@@ -324,7 +324,8 @@ struct MePage: View {
                         isSubscribed: isSubscribed,
                         onOpen: { selectedHistoryTask = task },
                         onSave: { saveHistoryTask(task) },
-                        onShare: { destination in
+                        onShare: { shareHistoryTask(task) },
+                        onShareTo: { destination in
                             shareHistoryTask(task, to: destination)
                         },
                         onRemoveWatermark: { showPaywall = true },
@@ -446,6 +447,26 @@ struct MePage: View {
     }
 
     private func shareHistoryTask(
+        _ task: GenerationHistoryTask
+    ) {
+        guard exportingTaskID == nil else { return }
+        exportingTaskID = task.id
+        Task {
+            defer { exportingTaskID = nil }
+            do {
+                activeShareSheet = .activity(try await prepareHistoryMedia(task))
+            } catch {
+                presentNotice(
+                    title: "Share Failed",
+                    message: error.userFacingEnglishMessage(
+                        fallback: "The creation could not be shared. Please try again."
+                    )
+                )
+            }
+        }
+    }
+
+    private func shareHistoryTask(
         _ task: GenerationHistoryTask,
         to destination: GeneratedSocialShareDestination
     ) {
@@ -551,7 +572,8 @@ private struct MeHistoryTaskCard: View {
     let isSubscribed: Bool
     let onOpen: () -> Void
     let onSave: () -> Void
-    let onShare: (GeneratedSocialShareDestination) -> Void
+    let onShare: () -> Void
+    let onShareTo: (GeneratedSocialShareDestination) -> Void
     let onRemoveWatermark: () -> Void
     let onDelete: () -> Void
 
@@ -638,9 +660,13 @@ private struct MeHistoryTaskCard: View {
             .accessibilityIdentifier("history-result-media")
 
             if resultAvailable {
-                actionBar
-                sharePanel
-                    .padding(.top, 4)
+                if task.isVideo {
+                    videoActionBar
+                } else {
+                    actionBar
+                    sharePanel
+                        .padding(.top, 4)
+                }
             }
         }
         .accessibilityIdentifier("history-result-card-\(task.id)")
@@ -736,6 +762,36 @@ private struct MeHistoryTaskCard: View {
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
     }
 
+    private var videoActionBar: some View {
+        HStack(spacing: 0) {
+            Button(action: onSave) {
+                Label(isExporting ? "Preparing…" : "Save", systemImage: "arrow.down.to.line")
+                    .font(.system(size: 21, weight: .medium))
+                    .foregroundStyle(AppPalette.ink)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+            }
+            .buttonStyle(.plain)
+            .disabled(isExporting)
+            .accessibilityLabel("Save generated video")
+
+            Divider()
+
+            Button(action: onShare) {
+                Label("Share", systemImage: "square.and.arrow.up")
+                    .font(.system(size: 21, weight: .medium))
+                    .foregroundStyle(AppPalette.ink)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+            }
+            .buttonStyle(.plain)
+            .disabled(isExporting)
+            .accessibilityLabel("Share generated video")
+        }
+        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(.white.opacity(0.72), lineWidth: 1))
+    }
+
     private var sharePanel: some View {
         VStack(alignment: .leading, spacing: 13) {
             Text("Share to:")
@@ -755,19 +811,19 @@ private struct MeHistoryTaskCard: View {
     private func shareButtonRow(iconSize: CGFloat, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
             MeHistoryShareIcon(symbol: "bubble.left.and.bubble.right.fill", color: Color(red: 0.11, green: 0.81, blue: 0.25), label: "Messages", size: iconSize) {
-                onShare(.messages)
+                onShareTo(.messages)
             }
                 .frame(maxWidth: .infinity)
             MeHistoryShareIcon(symbol: "message.fill", color: Color(red: 0.08, green: 0.78, blue: 0.27), label: "WhatsApp", size: iconSize) {
-                onShare(.whatsApp)
+                onShareTo(.whatsApp)
             }
                 .frame(maxWidth: .infinity)
             MeHistoryShareIcon(symbol: "f.cursive", color: Color(red: 0.06, green: 0.37, blue: 0.95), label: "Facebook", size: iconSize) {
-                onShare(.facebook)
+                onShareTo(.facebook)
             }
                 .frame(maxWidth: .infinity)
             MeHistoryShareIcon(symbol: "camera.fill", color: Color(red: 0.90, green: 0.15, blue: 0.54), label: "Instagram", size: iconSize) {
-                onShare(.instagram)
+                onShareTo(.instagram)
             }
                 .frame(maxWidth: .infinity)
         }
@@ -847,7 +903,8 @@ private struct MeHistoryPreviewView: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(18)
+            .padding(.trailing, 18)
+            .padding(.top, 44)
             .accessibilityLabel("Close preview")
         }
         .preferredColorScheme(.dark)

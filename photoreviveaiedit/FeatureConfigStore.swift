@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 final class FeatureConfigStore: ObservableObject {
+    typealias CatalogDataFetcher = @Sendable (URL) async -> Data?
+
     @Published private(set) var videoSections: [TemplateSection] = []
     @Published private(set) var imageSections: [TemplateSection] = []
     @Published private(set) var homeCarouselEntries: [TemplateDetailEntry] = []
@@ -19,6 +21,21 @@ final class FeatureConfigStore: ObservableObject {
 
     private var hasStartedLoading = false
     private var loadGeneration = 0
+    private let fetchCatalogData: CatalogDataFetcher
+    private let restoresCatalogSnapshot: Bool
+
+    init() {
+        fetchCatalogData = Self.fetchCatalogDataWithRetry
+        restoresCatalogSnapshot = true
+    }
+
+    init(
+        fetchCatalogData: @escaping CatalogDataFetcher,
+        restoresCatalogSnapshot: Bool = true
+    ) {
+        self.fetchCatalogData = fetchCatalogData
+        self.restoresCatalogSnapshot = restoresCatalogSnapshot
+    }
 
     /// Home is a cross-menu catalog. The CMS controls the section order, so
     /// keep the video and image tabs separate while exposing one ordered list
@@ -31,10 +48,18 @@ final class FeatureConfigStore: ObservableObject {
     }
 
     var videoModeActions: [HomeQuickAction] {
-        // `get-app-fixed-features` only returns enabled Home entries and keeps
-        // their CMS order. The AI Video header mirrors the first four visible
-        // Home entries, so a disabled slot is replaced by the next enabled one.
-        Array(homeQuickActions.prefix(4))
+        Self.displayedVideoModeActions(configured: homeQuickActions)
+    }
+
+    static func displayedVideoModeActions(
+        configured: [HomeQuickAction]
+    ) -> [HomeQuickAction] {
+        // The CMS controls which video-generation entries are enabled, their
+        // order, titles, covers, and generation targets. Show every configured
+        // video mode without imposing a client-side count limit.
+        configured.filter { action in
+            action.feature == .photoToVideo || action.feature == .textToVideo
+        }
     }
 
     func heroEntries(for tab: AppTab) -> [TemplateDetailEntry] {
@@ -192,16 +217,20 @@ final class FeatureConfigStore: ObservableObject {
         // resolves to a different audience later.
         let referrer = AdjustService.shared.referrer
 
-        let storedSnapshot = await CatalogSnapshotStore.load(
-            appID: PhotoReviveAPIConfig.appID,
-            referrer: referrer
-        )
+        let storedSnapshot = restoresCatalogSnapshot
+            ? await CatalogSnapshotStore.load(
+                appID: PhotoReviveAPIConfig.appID,
+                referrer: referrer
+            )
+            : nil
         let matchingSnapshot = storedSnapshot.flatMap {
             $0.appID == PhotoReviveAPIConfig.appID && $0.referrer == referrer ? $0 : nil
         }
+        var restoredOrLoadedAnyComponent = false
         if !force, let matchingSnapshot, restore(matchingSnapshot) {
             // The old catalog is immediately usable while all four endpoints
             // refresh independently in the background.
+            restoredOrLoadedAnyComponent = true
             isLoading = false
             TemplateMediaMetrics.shared.markCatalogAvailable(source: "snapshot")
         }
@@ -215,13 +244,14 @@ final class FeatureConfigStore: ObservableObject {
             return (component, url)
         }
         var resolvedCarouselFromNetwork = false
+        let fetchCatalogData = fetchCatalogData
 
         await withTaskGroup(of: CatalogFetchResult.self) { group in
             for (component, url) in requests {
                 group.addTask {
                     CatalogFetchResult(
                         component: component,
-                        data: await Self.fetchCatalogData(from: url)
+                        data: await fetchCatalogData(url)
                     )
                 }
             }
@@ -238,6 +268,7 @@ final class FeatureConfigStore: ObservableObject {
                 guard let data = result.data else { continue }
                 do {
                     try applyCatalogData(data, component: result.component)
+                    restoredOrLoadedAnyComponent = true
                     currentSnapshot.set(data, for: result.component)
                     await CatalogSnapshotStore.save(currentSnapshot)
                     isLoading = false
@@ -253,6 +284,14 @@ final class FeatureConfigStore: ObservableObject {
             // Let section covers become the fallback after a failed first-ever
             // carousel request. An existing carousel snapshot stays visible.
             hasResolvedInitialCarouselLoad = true
+        }
+
+        if generation == loadGeneration, !restoredOrLoadedAnyComponent {
+            // A first-launch request can be cancelled while iOS presents ATT,
+            // an app-open ad, or another full-screen startup surface. Do not
+            // permanently turn that transient failure into an empty catalog:
+            // ContentView appearance or the next active scene may try again.
+            hasStartedLoading = false
         }
     }
 
@@ -301,6 +340,7 @@ final class FeatureConfigStore: ObservableObject {
         var items = [TemplateItem]()
         items.append(contentsOf: homeCarouselEntries.prefix(3).map(\.displayItem))
         items.append(contentsOf: homeQuickActions.prefix(4).map(\.item))
+        items.append(contentsOf: videoModeActions.map(\.item))
         items.append(contentsOf: homeSections.prefix(3).flatMap { $0.items.prefix(3) })
         items.append(contentsOf: imageSections.prefix(3).compactMap { $0.items.first })
         items.append(contentsOf: videoSections.prefix(2).compactMap { $0.items.first })
@@ -357,17 +397,39 @@ final class FeatureConfigStore: ObservableObject {
         return components?.url
     }
 
-    private nonisolated static func fetchCatalogData(from url: URL) async -> Data? {
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let response = response as? HTTPURLResponse,
-                  (200..<300).contains(response.statusCode) else {
-                return nil
+    private nonisolated static func fetchCatalogDataWithRetry(from url: URL) async -> Data? {
+        let retryDelays: [UInt64] = [0, 800_000_000, 2_000_000_000]
+
+        for (attempt, delay) in retryDelays.enumerated() {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
             }
-            return data
-        } catch {
-            return nil
+            guard !Task.isCancelled else { return nil }
+
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard let response = response as? HTTPURLResponse else {
+                    if attempt == retryDelays.indices.last { return nil }
+                    continue
+                }
+                if (200..<300).contains(response.statusCode) {
+                    return data
+                }
+
+                let isTransientStatus = response.statusCode == 408
+                    || response.statusCode == 429
+                    || (500..<600).contains(response.statusCode)
+                if !isTransientStatus || attempt == retryDelays.indices.last {
+                    return nil
+                }
+            } catch is CancellationError {
+                return nil
+            } catch {
+                if attempt == retryDelays.indices.last { return nil }
+            }
         }
+
+        return nil
     }
 
     private func decodedSections(

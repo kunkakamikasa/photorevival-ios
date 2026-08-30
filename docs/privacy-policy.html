@@ -221,6 +221,43 @@
       .summary-grid, .service-list { grid-template-columns: 1fr; }
       .toc ol { columns: 1; }
       .hero, article, .summary, .toc { border-radius: 17px; }
+
+      .table-wrap { overflow-x: visible; }
+      table { min-width: 0; }
+      thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      tbody, tr, td { display: block; }
+      tr {
+        padding: 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      tr:last-child { border-bottom: 0; }
+      td {
+        padding: 0;
+        border: 0;
+      }
+      td + td { margin-top: 12px; }
+      td::before {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      td:nth-child(1)::before { content: "Category"; }
+      td:nth-child(2)::before { content: "Examples"; }
+      td:nth-child(3)::before { content: "Source and purpose"; }
     }
 
     @media print {
@@ -251,7 +288,7 @@
       </p>
       <div class="meta">
         <span>Effective date: August 26, 2026</span>
-        <span>Last updated: August 28, 2026</span>
+        <span>Last updated: August 30, 2026</span>
         <span>Platforms: iOS and iPadOS</span>
       </div>
     </header>
@@ -268,8 +305,8 @@
           <p>Your selected images, prompts, and generation settings are sent to servers to perform restoration, enhancement, image generation, or video generation.</p>
         </div>
         <div class="summary-card">
-          <strong>Tracking is your choice</strong>
-          <p>Where required, cross-app or cross-website advertising measurement is subject to the iOS tracking permission. Refusing it does not disable core editing features.</p>
+          <strong>Ads respect your choices</strong>
+          <p>The App may display Google AdMob ads. Where required, advertising consent and cross-app tracking are controlled through Google's privacy choices and the iOS tracking permission. Refusing them does not disable core editing features.</p>
         </div>
         <div class="summary-card">
           <strong>You can manage your data</strong>
@@ -308,7 +345,7 @@
           <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a>.
         </p>
         <p>
-          Apple, Google (including Firebase), Adjust, Meta, and other third parties may independently
+          Apple, Google (including Firebase and AdMob), Adjust, Meta, and other third parties may independently
           determine how they process information through their services. Their activities are governed
           by their own privacy policies.
         </p>
@@ -349,13 +386,18 @@
               </tr>
               <tr>
                 <td>Device, network, and log information</td>
-                <td>iOS platform, App version, time zone, IDFV, Firebase app-instance or installation identifiers, Adjust ADID, other random installation identifiers, IP address, and server request logs; this may also include device model, operating-system version, language, network information, and limited diagnostic or crash information collected by integrated SDKs.</td>
-                <td>Collected automatically to connect the service, operate analytics and attribution, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
+                <td>iOS platform, App version, time zone, IDFV, Firebase app-instance or installation identifiers, Adjust ADID, other app- or developer-bounded identifiers, IP address, and server request logs; this may also include device model, operating-system version, language, network information, approximate location inferred from IP address, and crash, performance, or other diagnostic information collected by integrated SDKs.</td>
+                <td>Collected automatically to connect the service, deliver and measure ads, operate analytics and attribution, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
               </tr>
               <tr>
                 <td>Product analytics, advertising attribution, and usage data</td>
-                <td>Firebase app-instance information; your Photo Revival account ID when signed in; authentication and subscription status; screen views; onboarding progress; template and feature selections; paywall and promotion interactions; generation type, template ID, input count, credit cost, output settings, status, processing time, and generalized failure category; content-save events; purchase product, value, currency, and result; Adjust attribution data; Meta automatically logged App events and SDK data; and IDFA if you authorize tracking.</td>
+                <td>Firebase app-instance information; your Photo Revival account ID when signed in; authentication and subscription status; screen views; onboarding progress; template and feature selections; paywall and promotion interactions; generation type, template ID, input count, credit cost, output settings, status, processing time, and generalized failure category; content-save events; purchase product, value, currency, and result; Adjust attribution data; Meta automatically logged App events and SDK data; AdMob advertising and interaction data; and IDFA if you authorize tracking.</td>
                 <td>Used to understand how the App is used, analyze product and purchase funnels, improve features, measure advertising performance, identify installation sources, prevent fraud, and avoid duplicate attribution. Analytics data may be associated with your account when you are signed in.</td>
+              </tr>
+              <tr>
+                <td>Advertising data and privacy choices</td>
+                <td>Ads requested or shown, ad impressions, ad interactions, ad performance and delivery information, device or app identifiers, consent status, and advertising privacy selections. Depending on your region and choices, Google and participating advertising providers may use permitted information to select personalized, non-personalized, limited, or technically delivered ads.</td>
+                <td>Collected or stored through Google Mobile Ads and Google's User Messaging Platform to deliver ads, remember privacy choices, limit repetition, measure performance, detect invalid activity, maintain security, and comply with advertising and privacy requirements.</td>
               </tr>
               <tr>
                 <td>Feedback and contact information</td>
@@ -369,7 +411,7 @@
               </tr>
               <tr>
                 <td>Local settings and cache</td>
-                <td>Login and subscription state, onboarding state, offer-display records, attribution snapshots, media cache, and securely stored session tokens.</td>
+                <td>Login and subscription state, onboarding state, offer-display records, advertising consent choices, attribution snapshots, media cache, and securely stored session tokens.</td>
                 <td>Stored on your device to remember settings, improve loading, and maintain your session. Deleting the App generally clears ordinary local data but does not delete a server account or cancel an App Store subscription.</td>
               </tr>
             </tbody>
@@ -393,7 +435,7 @@
         <h2>3. Device Permissions</h2>
         <ul>
           <li><strong>Photos:</strong> Used to select source images or a feedback screenshot. The App uses the system photo picker, and only items you explicitly select are provided to the App.</li>
-          <li><strong>Tracking:</strong> Used, where applicable, for advertising measurement across apps or websites. You may refuse this permission without losing access to core editing and generation features.</li>
+          <li><strong>Tracking:</strong> Used, where applicable, to access IDFA and support advertising measurement or personalization across apps or websites. You may refuse this permission without losing access to core editing and generation features.</li>
           <li><strong>Notifications:</strong> Used to deliver service messages you permit and may be part of a reward task. You can refuse or disable notifications at any time in iOS Settings.</li>
         </ul>
         <p>
@@ -411,6 +453,7 @@
           <li>Verify App Store subscriptions, restore purchases, and manage memberships, credits, and transaction records;</li>
           <li>Provide check-in, reward, referral, and anti-abuse functions;</li>
           <li>Respond to feedback, diagnose errors, secure servers and accounts, and prevent fraud or misuse;</li>
+          <li>Deliver personalized, non-personalized, limited, or technically delivered ads as permitted by your region and choices; control ad frequency; measure ad performance; and prevent invalid or fraudulent activity;</li>
           <li>Analyze screen views, onboarding, template selection, generation and purchase funnels, installation sources, advertising performance, and product performance to improve features and user experience; and</li>
           <li>Comply with legal obligations and establish, exercise, or defend legal claims.</li>
         </ol>
@@ -435,6 +478,10 @@
           <div class="service">
             <strong>Google Firebase Analytics</strong>
             <p>Product analytics, account-linked user properties, screen and feature interactions, generation-funnel measurement, purchase measurement, and app-instance identifiers. Firebase Analytics does not receive the source photos, prompts, or generated media through our analytics integration. <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener noreferrer">Firebase Privacy and Security</a></p>
+          </div>
+          <div class="service">
+            <strong>Google AdMob / Google Mobile Ads</strong>
+            <p>Advertising delivery, ad selection, frequency control, measurement, reporting, diagnostics, security, and invalid-activity prevention. Google and participating advertising providers may process advertising data, product interactions, device identifiers, IP-derived approximate location, and limited crash, performance, or diagnostic information as permitted by your consent, device settings, and applicable law. Google's User Messaging Platform is used to collect and store advertising privacy choices where required. <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a> · <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener noreferrer">How Google uses information from partners</a></p>
           </div>
           <div class="service">
             <strong>Adjust</strong>
@@ -483,14 +530,31 @@
           diagnostic information. Meta may use permitted data for analytics, App functionality, and
           advertising measurement under its own privacy policy.
         </p>
+        <h3>Google AdMob and advertising consent</h3>
+        <p>
+          The App uses Google Mobile Ads to display ads. The SDK may process IP address to estimate general
+          location, device identifiers, information about ads requested or shown, ad and product interactions,
+          and limited crash, performance, or diagnostic data. This information may be used to deliver and
+          measure ads, control frequency, improve advertising performance, maintain security, and prevent
+          invalid activity. Advertising providers participating in an AdMob ad request may process permitted
+          information under their own privacy policies.
+        </p>
+        <p>
+          Where required, Google's User Messaging Platform presents an advertising privacy message and records
+          your selections before the App requests ads. Depending on applicable law and your selections, you may
+          receive personalized, non-personalized, limited, or technically delivered ads. When Google requires an
+          ongoing privacy-options entry point, you can reopen the form from “Settings &gt; Privacy Choices” and
+          change your selection. Withdrawing a choice does not affect processing lawfully completed beforehand.
+        </p>
         <h3>iOS tracking permission</h3>
         <p>
           When processing constitutes “tracking” as defined by Apple, the App first presents the iOS App
-          Tracking Transparency request. Only after you authorize tracking may Adjust, Meta, Firebase, or
+          Tracking Transparency request. Only after you authorize tracking may AdMob, Adjust, Meta, Firebase, or
           another relevant SDK access IDFA or conduct authorized cross-app or cross-website advertising
           measurement. You can change your choice under “Settings &gt; Privacy &amp; Security &gt; Tracking.”
           Refusing or withdrawing tracking permission does not affect core service functionality. It may
-          not stop first-party product analytics that does not use IDFA and is not considered tracking by Apple.
+          not stop first-party product analytics that does not use IDFA and is not considered tracking by Apple,
+          and it does not necessarily prevent non-personalized, limited, or technically delivered ads.
         </p>
       </section>
 
@@ -513,7 +577,7 @@
           <li><strong>Deleted information and backups:</strong> Information removed from active systems may remain temporarily in isolated backups. It is not used for ordinary business and is removed through the normal backup-rotation process unless longer retention is required by law.</li>
           <li><strong>Feedback:</strong> Retained only as long as reasonably necessary to respond, improve the service, handle related disputes, or comply with legal obligations.</li>
           <li><strong>Transaction, log, and security records:</strong> Retained as needed for tax, accounting, anti-fraud, dispute-resolution, and other legal requirements.</li>
-          <li><strong>Analytics and attribution data:</strong> Retained for the periods configured in Firebase, Adjust, and Meta and only as long as reasonably necessary for product analytics, advertising measurement, fraud prevention, and legal compliance. Aggregated or anonymized statistics may be retained longer.</li>
+          <li><strong>Analytics, attribution, and advertising data:</strong> Retained for the periods configured in Firebase, AdMob, Adjust, and Meta and only as long as reasonably necessary for product analytics, ad delivery and measurement, fraud prevention, and legal compliance. Aggregated or anonymized statistics may be retained longer.</li>
           <li><strong>Local data:</strong> Generally remains on your device until you sign out, clear system data, or delete the App.</li>
         </ul>
         <p>When information is no longer needed, we delete or anonymize it unless continued retention is legally required.</p>
@@ -527,7 +591,8 @@
           <li>Correct inaccurate or incomplete information;</li>
           <li>Delete an individual generation record or request deletion of your account and associated data;</li>
           <li>Withdraw consent, object to or restrict certain processing, and request data portability where applicable;</li>
-          <li>Refuse cross-app or cross-website tracking, manage photo and notification permissions, and object to or request deletion of analytics data where applicable; and</li>
+          <li>Refuse cross-app or cross-website tracking, manage photo and notification permissions, reopen “Settings &gt; Privacy Choices” where that option is required, and object to or request deletion of analytics or advertising data where applicable;</li>
+          <li>Opt out of the sale or sharing of personal information or of targeted advertising where applicable law provides that right; and</li>
           <li>Submit a complaint to a competent data-protection authority.</li>
         </ul>
         <h3>Deleting data or your account</h3>

@@ -45,7 +45,7 @@ struct FlowingLegalAgreementText: View {
         privacy.link = LegalDocument.privacyPolicy.url
         privacy.underlineStyle = Text.LineStyle(pattern: .solid)
 
-        var terms = AttributedString("Terms\u{00A0}of\u{00A0}Service")
+        var terms = AttributedString("Terms\u{00A0}of\u{00A0}Use")
         terms.link = LegalDocument.termsOfService.url
         terms.underlineStyle = Text.LineStyle(pattern: .solid)
 
@@ -56,10 +56,10 @@ struct FlowingLegalAgreementText: View {
     }
 }
 
-/// Compact legal links shared by subscription purchase surfaces.
+/// Compact legal links shared by purchase surfaces.
 struct LegalLinksView: View {
     var privacyLabel = "Privacy Policy"
-    var termsLabel = "Terms of Service"
+    var termsLabel = "Terms of Use"
     var spacing: CGFloat = 10
     let onOpen: (LegalDocument) -> Void
 

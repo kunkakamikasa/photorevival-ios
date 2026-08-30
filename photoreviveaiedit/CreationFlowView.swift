@@ -158,6 +158,37 @@ struct UploadPageFlexibleLayout {
     }
 }
 
+/// Keeps one or two upload cards inside the available width, while preserving
+/// a readable card width for three or more inputs and letting that row scroll
+/// horizontally. This never changes the row's vertical height.
+struct HorizontalUploadStripLayout {
+    let itemWidth: CGFloat
+    let contentWidth: CGFloat
+    let scrollsHorizontally: Bool
+
+    init(
+        viewportWidth: CGFloat,
+        itemCount: Int,
+        preferredItemWidth: CGFloat,
+        minimumScrollableItemWidth: CGFloat = 118,
+        spacing: CGFloat = 14
+    ) {
+        let viewportWidth = max(0, viewportWidth)
+        let itemCount = max(1, itemCount)
+        scrollsHorizontally = itemCount >= 3
+
+        if scrollsHorizontally {
+            itemWidth = max(minimumScrollableItemWidth, preferredItemWidth)
+        } else {
+            let availableWidth = max(0, viewportWidth - spacing * CGFloat(itemCount - 1))
+            itemWidth = min(preferredItemWidth, availableWidth / CGFloat(itemCount))
+        }
+
+        contentWidth = itemWidth * CGFloat(itemCount)
+            + spacing * CGFloat(itemCount - 1)
+    }
+}
+
 struct FixedPhotoUploadLayout {
     let spacing: CGFloat
     let titleHeight: CGFloat
@@ -421,6 +452,8 @@ struct CreateFlowView: View {
         .sheet(isPresented: $showOptions) {
             GenerationOptionsSheet(
                 isImageFlow: flow.isImageFlow,
+                videoCapabilities: videoCapabilities,
+                imageCapabilities: imageCapabilities,
                 soundEnabled: $soundEnabled,
                 multiShotEnabled: $multiShotEnabled,
                 duration: $duration,
@@ -886,21 +919,12 @@ struct CreateFlowView: View {
                 .font(usesCompactTitle ? .headline.bold() : .title2.bold())
                 .foregroundStyle(AppPalette.ink)
 
-            GeometryReader { proxy in
-                let itemCount = max(1, flow.templates.count)
-                let itemSpacing: CGFloat = itemCount > 4 ? 6 : 12
-                let availableWidth = max(
-                    0,
-                    proxy.size.width - itemSpacing * CGFloat(max(0, itemCount - 1))
-                )
-                let requestedWidth = thumbnailWidth ?? 158
-                let fittedWidth = availableWidth / CGFloat(itemCount)
-                let resolvedWidth = min(requestedWidth, fittedWidth)
-                let requestedHeight = thumbnailHeight ?? 214
-                let resolvedHeight = min(requestedHeight, resolvedWidth / 0.74)
-
-                HStack(spacing: itemSpacing) {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 12) {
                     ForEach(flow.templates) { item in
+                        let resolvedWidth = thumbnailWidth ?? 158
+                        let resolvedHeight = thumbnailHeight ?? 214
+
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 selectTemplate(item)
@@ -941,8 +965,10 @@ struct CreateFlowView: View {
                         .accessibilityLabel("Select \(item.title)")
                     }
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
+            .accessibilityIdentifier("creation-template-strip")
         }
     }
 
@@ -954,14 +980,20 @@ struct CreateFlowView: View {
                 if flow.isImageFlow {
                     parameterPill("\(outputCount) Img", compact: compact)
                     parameterPill(imageResolution, compact: compact)
-                    parameterPill(ratio, compact: compact)
+                    if let imageRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+                        parameterPill(imageRatio, compact: compact)
+                    }
                 } else {
-                    Image(systemName: soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                        .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
-                        .background(AppPalette.backgroundTop, in: Circle())
-                    Image(systemName: multiShotEnabled ? "video.badge.waveform.fill" : "video.slash.fill")
-                        .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
-                        .background(AppPalette.backgroundTop, in: Circle())
+                    if videoCapabilities.supportsSound {
+                        Image(systemName: soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                            .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
+                            .background(AppPalette.backgroundTop, in: Circle())
+                    }
+                    if videoCapabilities.supportsMultiShot {
+                        Image(systemName: multiShotEnabled ? "video.badge.waveform.fill" : "video.slash.fill")
+                            .frame(width: compact ? 30 : 34, height: compact ? 30 : 34)
+                            .background(AppPalette.backgroundTop, in: Circle())
+                    }
                     parameterPill(duration, compact: compact)
                     parameterPill(videoResolution, compact: compact)
                     if flow.family != .videoNoPrompt {
@@ -1066,14 +1098,24 @@ struct CreateFlowView: View {
             return creditPricing.otherImageCredits
         }
 
-        let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
+        let normalizedDuration = videoCapabilities.normalizedDuration(duration)
+        let normalizedResolution = videoCapabilities.normalizedResolution(videoResolution)
+        let seconds = Int(normalizedDuration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
             ?? creditPricing.videoDefaultDurationSeconds
         return creditPricing.videoGenerationCredits(
             duration: seconds,
-            resolution: videoResolution,
-            sound: soundEnabled,
-            multiShot: multiShotEnabled
+            resolution: normalizedResolution,
+            sound: videoCapabilities.supportsSound && soundEnabled,
+            multiShot: videoCapabilities.supportsMultiShot && multiShotEnabled
         )
+    }
+
+    private var videoCapabilities: VideoGenerationOptionCapabilities {
+        .current(forModelID: (activeTemplate ?? template)?.modelID)
+    }
+
+    private var imageCapabilities: ImageGenerationOptionCapabilities {
+        .current(forModelID: (activeTemplate ?? template)?.modelID)
     }
 
     private func requireLogin(_ action: @escaping () -> Void) {
@@ -1105,7 +1147,13 @@ struct CreateFlowView: View {
             return
         }
 
-        guard let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted)) else {
+        let normalizedDuration = videoCapabilities.normalizedDuration(duration)
+        let normalizedResolution = videoCapabilities.normalizedResolution(videoResolution)
+        let normalizedRatio = videoCapabilities.normalizedAspectRatio(ratio)
+        let normalizedSound = videoCapabilities.supportsSound && soundEnabled
+        let normalizedMultiShot = videoCapabilities.supportsMultiShot && multiShotEnabled
+
+        guard let seconds = Int(normalizedDuration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted)) else {
             AppAnalytics.generationBlocked(
                 contentType: "video",
                 itemID: (activeTemplate ?? template)?.id,
@@ -1126,22 +1174,24 @@ struct CreateFlowView: View {
             return
         }
 
-        let editablePrompt: String?
-        if flow.promptIsEditable {
-            let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            editablePrompt = trimmedPrompt.isEmpty ? nil : trimmedPrompt
-        } else {
-            // Let the server use the canonical CMS template prompt. This also
-            // avoids sending stale prompt copies from an older App build.
-            editablePrompt = nil
-        }
+        // The prompt box contains a polished, display-only summary. Unless the
+        // user explicitly edits it, let the server keep using the canonical CMS
+        // prompt so the established template result does not change.
+        let editablePrompt = VideoPromptSubmission.userOverride(
+            displayedPrompt: prompt,
+            defaultDisplayedPrompt: CreationFlowConfiguration(
+                template: selectedTemplate,
+                templateOptions: templates
+            ).prompt,
+            isEditable: flow.promptIsEditable
+        )
 
         let options = PhotoReviveVideoGenerationOptions(
-            resolution: videoResolution,
-            aspectRatio: ratio,
+            resolution: normalizedResolution,
+            aspectRatio: normalizedRatio,
             duration: seconds,
-            sound: soundEnabled,
-            multiShot: multiShotEnabled
+            sound: normalizedSound,
+            multiShot: normalizedMultiShot
         )
 
         AppAnalytics.generationStarted(
@@ -1149,10 +1199,10 @@ struct CreateFlowView: View {
             itemID: selectedTemplate.id,
             creditsCost: currentCost,
             inputCount: images.count,
-            resolution: videoResolution,
+            resolution: normalizedResolution,
             durationSeconds: seconds,
-            soundEnabled: soundEnabled,
-            multiShotEnabled: multiShotEnabled
+            soundEnabled: normalizedSound,
+            multiShotEnabled: normalizedMultiShot
         )
 
         generationError = nil
@@ -1198,10 +1248,28 @@ struct CreateFlowView: View {
 
     private func selectTemplate(_ item: TemplateItem) {
         activeTemplate = item
+        applyVideoCapabilities(.current(forModelID: item.modelID))
+        applyImageCapabilities(.current(forModelID: item.modelID))
         prompt = CreationFlowConfiguration(template: item, templateOptions: templates).prompt
         let count = max(1, item.imageUploadCount)
         if selectedVideoImages.count != count {
             selectedVideoImages = Array((selectedVideoImages + Array(repeating: nil, count: count)).prefix(count))
+        }
+    }
+
+    private func applyVideoCapabilities(_ capabilities: VideoGenerationOptionCapabilities) {
+        duration = capabilities.normalizedDuration(duration)
+        videoResolution = capabilities.normalizedResolution(videoResolution)
+        ratio = capabilities.normalizedAspectRatio(ratio)
+        if !capabilities.supportsSound { soundEnabled = false }
+        if !capabilities.supportsMultiShot { multiShotEnabled = false }
+    }
+
+    private func applyImageCapabilities(_ capabilities: ImageGenerationOptionCapabilities) {
+        imageResolution = capabilities.normalizedResolution(imageResolution)
+        outputCount = capabilities.normalizedOutputCount(outputCount)
+        if let normalizedRatio = capabilities.normalizedAspectRatio(ratio) {
+            ratio = normalizedRatio
         }
     }
 
@@ -1212,11 +1280,53 @@ struct CreateFlowView: View {
         GeometryReader { proxy in
             let spacing: CGFloat = 14
             let uploadCount = flow.imageUploadCount
-            let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
-            let slotWidth = uploadCount == 1
-                ? min(maximumSingleSlotWidth, proxy.size.width)
-                : availableWidth / CGFloat(uploadCount)
+            let preferredItemWidth = min(
+                maximumSingleSlotWidth,
+                max(118, height * 0.74)
+            )
+            let stripLayout = HorizontalUploadStripLayout(
+                viewportWidth: proxy.size.width,
+                itemCount: uploadCount,
+                preferredItemWidth: preferredItemWidth,
+                spacing: spacing
+            )
 
+            if stripLayout.scrollsHorizontally {
+                ScrollView(.horizontal) {
+                    videoUploadSlotRow(
+                        uploadCount: uploadCount,
+                        itemWidth: stripLayout.itemWidth,
+                        contentWidth: stripLayout.contentWidth,
+                        spacing: spacing,
+                        height: height
+                    )
+                    .frame(minWidth: proxy.size.width, alignment: .leading)
+                }
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("video-upload-strip")
+            } else {
+                videoUploadSlotRow(
+                    uploadCount: uploadCount,
+                    itemWidth: stripLayout.itemWidth,
+                    contentWidth: stripLayout.contentWidth,
+                    spacing: spacing,
+                    height: height
+                )
+                .frame(width: proxy.size.width, alignment: .leading)
+            }
+        }
+        .frame(height: height)
+    }
+
+    private func videoUploadSlotRow(
+        uploadCount: Int,
+        itemWidth: CGFloat,
+        contentWidth: CGFloat,
+        spacing: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        ZStack(alignment: .bottomLeading) {
             Button {
                 photoSelectionTarget = .videoSlots
             } label: {
@@ -1228,29 +1338,26 @@ struct CreateFlowView: View {
                             placeholderURL: activeTemplate?.uploadPlaceholderURL(at: index),
                             height: height
                         )
-                        .frame(width: slotWidth, height: height)
+                        .frame(width: itemWidth, height: height)
                         .accessibilityIdentifier("video-image-upload-slot-\(index + 1)")
                     }
                 }
-                .frame(width: proxy.size.width, alignment: .leading)
             }
             .buttonStyle(.plain)
-            .overlay(alignment: .bottomLeading) {
-                HStack(spacing: spacing) {
-                    ForEach(0..<uploadCount, id: \.self) { index in
-                        UploadPhotoEditOverlay(
-                            hasImage: selectedVideoImages.indices.contains(index)
-                                && selectedVideoImages[index] != nil,
-                            width: slotWidth,
-                            height: height,
-                            action: { cropTarget = .videoSlot(index) }
-                        )
-                    }
+
+            HStack(spacing: spacing) {
+                ForEach(0..<uploadCount, id: \.self) { index in
+                    UploadPhotoEditOverlay(
+                        hasImage: selectedVideoImages.indices.contains(index)
+                            && selectedVideoImages[index] != nil,
+                        width: itemWidth,
+                        height: height,
+                        action: { cropTarget = .videoSlot(index) }
+                    )
                 }
-                .frame(width: proxy.size.width, alignment: .leading)
             }
         }
-        .frame(height: height)
+        .frame(width: contentWidth, height: height, alignment: .leading)
     }
 
     private var flow: CreationFlowConfiguration {
@@ -1420,6 +1527,8 @@ private enum CreationNotice: String, Identifiable {
 
 private struct GenerationOptionsSheet: View {
     let isImageFlow: Bool
+    let videoCapabilities: VideoGenerationOptionCapabilities
+    let imageCapabilities: ImageGenerationOptionCapabilities
     @Binding var soundEnabled: Bool
     @Binding var multiShotEnabled: Bool
     @Binding var duration: String
@@ -1430,8 +1539,6 @@ private struct GenerationOptionsSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    private let ratios = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"]
-
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -1439,32 +1546,54 @@ private struct GenerationOptionsSheet: View {
                     if isImageFlow {
                         optionSection(
                             "Resolution",
-                            values: [PhotoReviveImageGenerationOptions.providerDefaultResolution],
+                            values: imageCapabilities.resolutions,
                             selection: $imageResolution,
                             columns: 3
                         )
-                        optionSection("Ratio", values: ratios, selection: $ratio, columns: 3)
+                        if !imageCapabilities.aspectRatios.isEmpty {
+                            optionSection(
+                                "Ratio",
+                                values: imageCapabilities.aspectRatios,
+                                selection: $ratio,
+                                columns: 3
+                            )
+                        }
                         // The current image endpoints return one canonical
                         // output URL. Do not advertise unsupported batch output.
-                        optionSection("Output Image Number", values: ["1"], selection: $outputCount, columns: 1)
+                        optionSection(
+                            "Output Image Number",
+                            values: imageCapabilities.outputCounts,
+                            selection: $outputCount,
+                            columns: 1
+                        )
                     } else {
-                        binarySection(
-                            "Sounds",
-                            offIcon: "speaker.slash.fill",
-                            onIcon: "speaker.wave.2.fill",
-                            isOn: $soundEnabled
-                        )
-                        binarySection(
-                            "Multi-Shot Video",
-                            offIcon: "video.slash.fill",
-                            onIcon: "video.badge.waveform.fill",
-                            isOn: $multiShotEnabled
-                        )
-                        optionSection("Duration", values: ["5s", "8s", "10s"], selection: $duration, columns: 3)
+                        if videoCapabilities.supportsSound {
+                            binarySection(
+                                "Sounds",
+                                offIcon: "speaker.slash.fill",
+                                onIcon: "speaker.wave.2.fill",
+                                isOn: $soundEnabled
+                            )
+                        }
+                        if videoCapabilities.supportsMultiShot {
+                            binarySection(
+                                "Multi-Shot Video",
+                                offIcon: "video.slash.fill",
+                                onIcon: "video.badge.waveform.fill",
+                                isOn: $multiShotEnabled
+                            )
+                        }
+                        optionSection("Duration", values: videoCapabilities.durations, selection: $duration, columns: 3)
                         optionSection(
                             "Resolution",
-                            values: ["480p", "720p", "1080p"],
+                            values: videoCapabilities.resolutions,
                             selection: $videoResolution,
+                            columns: 3
+                        )
+                        optionSection(
+                            "Ratio",
+                            values: videoCapabilities.aspectRatios,
+                            selection: $ratio,
                             columns: 3
                         )
                     }
@@ -1486,6 +1615,23 @@ private struct GenerationOptionsSheet: View {
             }
         }
         .tint(AppPalette.accent)
+        .onAppear(perform: normalizeSelections)
+    }
+
+    private func normalizeSelections() {
+        guard !isImageFlow else {
+            imageResolution = imageCapabilities.normalizedResolution(imageResolution)
+            outputCount = imageCapabilities.normalizedOutputCount(outputCount)
+            if let normalizedRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+                ratio = normalizedRatio
+            }
+            return
+        }
+        duration = videoCapabilities.normalizedDuration(duration)
+        videoResolution = videoCapabilities.normalizedResolution(videoResolution)
+        ratio = videoCapabilities.normalizedAspectRatio(ratio)
+        if !videoCapabilities.supportsSound { soundEnabled = false }
+        if !videoCapabilities.supportsMultiShot { multiShotEnabled = false }
     }
 
     private func binarySection(
@@ -2508,8 +2654,11 @@ struct FixedFeatureView: View {
         for feature: FixedFeature,
         endpoint: String
     ) -> FeatureGenerationTarget? {
-        quickActions.first { $0.feature == feature }?
-            .generationTarget(endpoint: endpoint)
+        FixedFeatureGenerationTargetResolver.target(
+            for: feature,
+            endpoint: endpoint,
+            in: quickActions
+        )
     }
 
     var body: some View {
@@ -3011,7 +3160,9 @@ private struct FixedPhotoRestoreFeature: View {
                     prompt: nil,
                     options: PhotoReviveImageGenerationOptions(
                         resolution: PhotoReviveImageGenerationOptions.providerDefaultResolution,
-                        aspectRatio: "9:16",
+                        // Restore/enhance should preserve the uploaded photo's
+                        // composition instead of forcing a generation ratio.
+                        aspectRatio: nil,
                         outputCount: 1
                     )
                 )
@@ -3414,7 +3565,7 @@ private struct FixedVideoGeneratorFeature: View {
                     )
 
                     FeatureSettingsSummary(
-                        values: [soundEnabled ? "sound" : "mute", multiShotEnabled ? "multi" : "single", duration, resolution, ratio],
+                        values: videoSettingsSummaryValues,
                         onTap: { showSettings = true }
                     )
                     .frame(height: layout.settingsHeight)
@@ -3447,6 +3598,8 @@ private struct FixedVideoGeneratorFeature: View {
         .sheet(isPresented: $showSettings) {
             FeatureSettingsSheet(
                 mode: .video,
+                videoCapabilities: videoCapabilities,
+                imageCapabilities: .conservativeFallback,
                 soundEnabled: $soundEnabled,
                 multiShotEnabled: $multiShotEnabled,
                 duration: $duration,
@@ -3486,16 +3639,21 @@ private struct FixedVideoGeneratorFeature: View {
         } message: {
             Text(generationError ?? "Please try again.")
         }
+        .onChange(of: mode) { _, _ in
+            applyVideoCapabilities()
+        }
     }
 
     private var generationCost: Int {
-        let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
+        let normalizedDuration = videoCapabilities.normalizedDuration(duration)
+        let normalizedResolution = videoCapabilities.normalizedResolution(resolution)
+        let seconds = Int(normalizedDuration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
             ?? creditPricing.videoDefaultDurationSeconds
         return creditPricing.videoGenerationCredits(
             duration: seconds,
-            resolution: resolution,
-            sound: soundEnabled,
-            multiShot: multiShotEnabled
+            resolution: normalizedResolution,
+            sound: videoCapabilities.supportsSound && soundEnabled,
+            multiShot: videoCapabilities.supportsMultiShot && multiShotEnabled
         )
     }
 
@@ -3505,6 +3663,34 @@ private struct FixedVideoGeneratorFeature: View {
 
     private var activeGenerationTarget: FeatureGenerationTarget? {
         mode == .image ? imageGenerationTarget : textGenerationTarget
+    }
+
+    private var videoCapabilities: VideoGenerationOptionCapabilities {
+        .current(forModelID: activeGenerationTarget?.modelID)
+    }
+
+    private var videoSettingsSummaryValues: [String] {
+        var values: [String] = []
+        if videoCapabilities.supportsSound {
+            values.append(soundEnabled ? "sound" : "mute")
+        }
+        if videoCapabilities.supportsMultiShot {
+            values.append(multiShotEnabled ? "multi" : "single")
+        }
+        values.append(contentsOf: [
+            videoCapabilities.normalizedDuration(duration),
+            videoCapabilities.normalizedResolution(resolution),
+            videoCapabilities.normalizedAspectRatio(ratio),
+        ])
+        return values
+    }
+
+    private func applyVideoCapabilities() {
+        duration = videoCapabilities.normalizedDuration(duration)
+        resolution = videoCapabilities.normalizedResolution(resolution)
+        ratio = videoCapabilities.normalizedAspectRatio(ratio)
+        if !videoCapabilities.supportsSound { soundEnabled = false }
+        if !videoCapabilities.supportsMultiShot { multiShotEnabled = false }
     }
 
     private func startGeneration() {
@@ -3524,14 +3710,19 @@ private struct FixedVideoGeneratorFeature: View {
             return
         }
 
-        let seconds = Int(duration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
+        let normalizedDuration = videoCapabilities.normalizedDuration(duration)
+        let normalizedResolution = videoCapabilities.normalizedResolution(resolution)
+        let normalizedRatio = videoCapabilities.normalizedAspectRatio(ratio)
+        let normalizedSound = videoCapabilities.supportsSound && soundEnabled
+        let normalizedMultiShot = videoCapabilities.supportsMultiShot && multiShotEnabled
+        let seconds = Int(normalizedDuration.trimmingCharacters(in: CharacterSet.decimalDigits.inverted))
             ?? creditPricing.videoDefaultDurationSeconds
         let options = PhotoReviveVideoGenerationOptions(
-            resolution: resolution,
-            aspectRatio: ratio,
+            resolution: normalizedResolution,
+            aspectRatio: normalizedRatio,
             duration: seconds,
-            sound: soundEnabled,
-            multiShot: multiShotEnabled
+            sound: normalizedSound,
+            multiShot: normalizedMultiShot
         )
 
         isGenerating = true
@@ -3682,6 +3873,33 @@ private struct FeatureModeTabs<Selection: Hashable>: View {
     }
 }
 
+private enum PromptEditorStyle {
+    static let bodyColor = UIColor(
+        red: 0.67,
+        green: 0.68,
+        blue: 0.70,
+        alpha: 1
+    )
+    static let imageReferenceColor = UIColor(
+        red: 0.76,
+        green: 0.53,
+        blue: 0.30,
+        alpha: 1
+    )
+    static let imageReferenceBackgroundColor = UIColor(
+        red: 1.00,
+        green: 0.86,
+        blue: 0.64,
+        alpha: 0.36
+    )
+
+    static var bodyFont: UIFont {
+        UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: UIFont.systemFont(ofSize: 18, weight: .regular)
+        )
+    }
+}
+
 private struct FeaturePromptBox: View {
     @Binding var text: String
     let placeholder: String
@@ -3693,8 +3911,8 @@ private struct FeaturePromptBox: View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty {
                 Text(placeholder)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(AppPalette.surfaceEdge.opacity(0.78))
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(Color(uiColor: PromptEditorStyle.bodyColor))
                     .padding(.horizontal, 18)
                     .padding(.top, 17)
             }
@@ -3748,7 +3966,7 @@ private final class ImageReferenceLayoutManager: NSLayoutManager {
                 let tokenRect = rect
                     .offsetBy(dx: origin.x, dy: origin.y)
                     .insetBy(dx: -4, dy: -2)
-                UIColor(red: 1.0, green: 0.83, blue: 0.58, alpha: 0.38).setFill()
+                PromptEditorStyle.imageReferenceBackgroundColor.setFill()
                 UIBezierPath(roundedRect: tokenRect, cornerRadius: 9).fill()
             }
         }
@@ -3936,12 +4154,12 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
 
             let selectedRange = textView.selectedRange
             let paragraphStyle = NSMutableParagraphStyle()
-            paragraphStyle.lineSpacing = 4
+            paragraphStyle.lineSpacing = 6
             let attributed = NSMutableAttributedString(
                 string: rawText,
                 attributes: [
-                    .font: UIFont.preferredFont(forTextStyle: .body),
-                    .foregroundColor: UIColor(AppPalette.brownInk),
+                    .font: PromptEditorStyle.bodyFont,
+                    .foregroundColor: PromptEditorStyle.bodyColor,
                     .paragraphStyle: paragraphStyle,
                 ]
             )
@@ -3950,7 +4168,7 @@ private struct ImageReferencePromptEditor: UIViewRepresentable {
                 guard let range = match?.range else { return }
                 attributed.addAttributes([
                     .imageReferenceToken: true,
-                    .foregroundColor: UIColor(red: 0.72, green: 0.43, blue: 0.18, alpha: 1),
+                    .foregroundColor: PromptEditorStyle.imageReferenceColor,
                 ], range: range)
             }
             textView.attributedText = attributed
@@ -4077,7 +4295,7 @@ struct ImageGenerationUploadView: View {
                     uploadSlots(height: layout.uploadHeight)
 
                     FeatureSettingsSummary(
-                        values: ["\(outputCount) Img", resolution, ratio],
+                        values: imageSettingsSummaryValues,
                         onTap: { showSettings = true }
                     )
                     .frame(height: layout.settingsHeight)
@@ -4113,6 +4331,8 @@ struct ImageGenerationUploadView: View {
         .sheet(isPresented: $showSettings) {
             FeatureSettingsSheet(
                 mode: .image,
+                videoCapabilities: .conservativeFallback,
+                imageCapabilities: imageCapabilities,
                 soundEnabled: .constant(false),
                 multiShotEnabled: .constant(false),
                 duration: .constant("5s"),
@@ -4228,11 +4448,47 @@ struct ImageGenerationUploadView: View {
         GeometryReader { proxy in
             let spacing: CGFloat = 14
             let uploadCount = template.imageUploadCount
-            let availableWidth = proxy.size.width - spacing * CGFloat(max(0, uploadCount - 1))
-            let slotWidth = uploadCount == 1
-                ? min(151, proxy.size.width)
-                : max(0, availableWidth / CGFloat(uploadCount))
+            let preferredItemWidth = min(151, max(118, height * 0.80))
+            let stripLayout = HorizontalUploadStripLayout(
+                viewportWidth: proxy.size.width,
+                itemCount: uploadCount,
+                preferredItemWidth: preferredItemWidth,
+                spacing: spacing
+            )
 
+            if stripLayout.scrollsHorizontally {
+                ScrollView(.horizontal) {
+                    imageTemplateUploadSlotRow(
+                        itemWidth: stripLayout.itemWidth,
+                        contentWidth: stripLayout.contentWidth,
+                        spacing: spacing,
+                        height: height
+                    )
+                    .frame(minWidth: proxy.size.width, alignment: .leading)
+                }
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("image-template-upload-strip")
+            } else {
+                imageTemplateUploadSlotRow(
+                    itemWidth: stripLayout.itemWidth,
+                    contentWidth: stripLayout.contentWidth,
+                    spacing: spacing,
+                    height: height
+                )
+                .frame(width: proxy.size.width, alignment: .center)
+            }
+        }
+        .frame(height: height)
+    }
+
+    private func imageTemplateUploadSlotRow(
+        itemWidth: CGFloat,
+        contentWidth: CGFloat,
+        spacing: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        ZStack(alignment: .bottomLeading) {
             Button {
                 showPhotoSelection = true
             } label: {
@@ -4244,28 +4500,25 @@ struct ImageGenerationUploadView: View {
                             placeholderURL: template.uploadPlaceholderURL(at: index),
                             height: height
                         )
-                        .frame(width: slotWidth)
+                        .frame(width: itemWidth)
                         .accessibilityIdentifier("image-upload-slot-\(index + 1)")
                     }
                 }
-                .frame(width: proxy.size.width, alignment: .center)
             }
             .buttonStyle(.plain)
-            .overlay(alignment: .bottomLeading) {
-                HStack(spacing: spacing) {
-                    ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                        UploadPhotoEditOverlay(
-                            hasImage: image != nil,
-                            width: slotWidth,
-                            height: height,
-                            action: { showCropIndex = index }
-                        )
-                    }
+
+            HStack(spacing: spacing) {
+                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                    UploadPhotoEditOverlay(
+                        hasImage: image != nil,
+                        width: itemWidth,
+                        height: height,
+                        action: { showCropIndex = index }
+                    )
                 }
-                .frame(width: proxy.size.width, alignment: .center)
             }
         }
-        .frame(height: height)
+        .frame(width: contentWidth, height: height, alignment: .leading)
     }
 
     private func beginGeneration() {
@@ -4348,7 +4601,7 @@ struct ImageGenerationUploadView: View {
                     prompt: nil,
                     options: PhotoReviveImageGenerationOptions(
                         resolution: normalizedImageResolution,
-                        aspectRatio: ratio,
+                        aspectRatio: imageCapabilities.normalizedAspectRatio(ratio),
                         outputCount: 1
                     )
                 )
@@ -4391,12 +4644,23 @@ struct ImageGenerationUploadView: View {
             : creditPricing.imageToImageCredits
     }
 
-    private var normalizedImageResolution: String {
-        switch resolution.lowercased() {
-        case "1k": "1K"
-        case "2k": "2K"
-        default: resolution
+    private var imageCapabilities: ImageGenerationOptionCapabilities {
+        .current(forModelID: template.modelID)
+    }
+
+    private var imageSettingsSummaryValues: [String] {
+        var values = [
+            "\(imageCapabilities.normalizedOutputCount(outputCount)) Img",
+            imageCapabilities.normalizedResolution(resolution),
+        ]
+        if let normalizedRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+            values.append(normalizedRatio)
         }
+        return values
+    }
+
+    private var normalizedImageResolution: String {
+        imageCapabilities.normalizedResolution(resolution)
     }
 
     private func applySelectedImages(_ images: [UIImage]) {
@@ -5376,39 +5640,29 @@ private struct FixedAIImageFeature: View {
 
                         GeometryReader { slotProxy in
                             let slotSpacing: CGFloat = 14
-                            let slotWidth = max(0, (slotProxy.size.width - slotSpacing * 2) / 3)
+                            let preferredItemWidth = min(
+                                158,
+                                max(118, layout.uploadHeight * 0.72)
+                            )
+                            let stripLayout = HorizontalUploadStripLayout(
+                                viewportWidth: slotProxy.size.width,
+                                itemCount: 3,
+                                preferredItemWidth: preferredItemWidth,
+                                spacing: slotSpacing
+                            )
 
-                            Button {
-                                showPhotoSelection = true
-                            } label: {
-                                HStack(spacing: slotSpacing) {
-                                    ForEach(0..<3, id: \.self) { index in
-                                        FeatureImageSlot(
-                                            image: selectedImages.indices.contains(index) ? selectedImages[index] : nil,
-                                            title: index == 0 ? nil : "Optional",
-                                            width: slotWidth,
-                                            height: layout.uploadHeight
-                                        )
-                                    }
-                                }
-                                .frame(width: slotProxy.size.width)
+                            ScrollView(.horizontal) {
+                                fixedAIImageUploadSlotRow(
+                                    itemWidth: stripLayout.itemWidth,
+                                    contentWidth: stripLayout.contentWidth,
+                                    spacing: slotSpacing,
+                                    height: layout.uploadHeight
+                                )
+                                .frame(minWidth: slotProxy.size.width, alignment: .leading)
                             }
-                            .buttonStyle(.plain)
-                            .overlay(alignment: .bottomLeading) {
-                                HStack(spacing: slotSpacing) {
-                                    ForEach(0..<3, id: \.self) { index in
-                                        UploadPhotoEditOverlay(
-                                            hasImage: selectedImages.indices.contains(index),
-                                            width: slotWidth,
-                                            height: layout.uploadHeight,
-                                            buttonSize: 34,
-                                            padding: 8,
-                                            action: { showCropIndex = index }
-                                        )
-                                    }
-                                }
-                                .frame(width: slotProxy.size.width)
-                            }
+                            .scrollIndicators(.hidden)
+                            .scrollBounceBehavior(.basedOnSize)
+                            .accessibilityIdentifier("fixed-ai-image-upload-strip")
                         }
                         .frame(height: layout.uploadHeight)
                     }
@@ -5432,7 +5686,7 @@ private struct FixedAIImageFeature: View {
                         }
                     }
 
-                    FeatureSettingsSummary(values: ["\(outputCount) Img", resolution, ratio], onTap: { showSettings = true })
+                    FeatureSettingsSummary(values: imageSettingsSummaryValues, onTap: { showSettings = true })
                         .frame(height: layout.settingsHeight)
                 }
                 .frame(height: contentSize.height, alignment: .top)
@@ -5460,6 +5714,7 @@ private struct FixedAIImageFeature: View {
         }
         .sheet(isPresented: $showSettings) {
             AIImageOutputSettingsSheet(
+                imageCapabilities: imageCapabilities,
                 resolution: $resolution,
                 ratio: $ratio,
                 outputCount: $outputCount
@@ -5509,6 +5764,48 @@ private struct FixedAIImageFeature: View {
         } message: {
             Text(generationError ?? "Please try again.")
         }
+        .onChange(of: mode) { _, _ in
+            normalizeImageSelections()
+        }
+    }
+
+    private func fixedAIImageUploadSlotRow(
+        itemWidth: CGFloat,
+        contentWidth: CGFloat,
+        spacing: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            Button {
+                showPhotoSelection = true
+            } label: {
+                HStack(spacing: spacing) {
+                    ForEach(0..<3, id: \.self) { index in
+                        FeatureImageSlot(
+                            image: selectedImages.indices.contains(index) ? selectedImages[index] : nil,
+                            title: index == 0 ? nil : "Optional",
+                            width: itemWidth,
+                            height: height
+                        )
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+
+            HStack(spacing: spacing) {
+                ForEach(0..<3, id: \.self) { index in
+                    UploadPhotoEditOverlay(
+                        hasImage: selectedImages.indices.contains(index),
+                        width: itemWidth,
+                        height: height,
+                        buttonSize: 34,
+                        padding: 8,
+                        action: { showCropIndex = index }
+                    )
+                }
+            }
+        }
+        .frame(width: contentWidth, height: height, alignment: .leading)
     }
 
     @ViewBuilder
@@ -5598,7 +5895,7 @@ private struct FixedAIImageFeature: View {
             do {
                 let options = PhotoReviveImageGenerationOptions(
                     resolution: normalizedImageResolution,
-                    aspectRatio: ratio,
+                    aspectRatio: imageCapabilities.normalizedAspectRatio(ratio),
                     outputCount: 1
                 )
                 let submission: PhotoReviveImageGenerationSubmission
@@ -5645,10 +5942,29 @@ private struct FixedAIImageFeature: View {
     }
 
     private var normalizedImageResolution: String {
-        switch resolution.lowercased() {
-        case "1k": "1K"
-        case "2k": "2K"
-        default: resolution
+        imageCapabilities.normalizedResolution(resolution)
+    }
+
+    private var imageCapabilities: ImageGenerationOptionCapabilities {
+        .current(forModelID: activeGenerationTarget?.modelID)
+    }
+
+    private var imageSettingsSummaryValues: [String] {
+        var values = [
+            "\(imageCapabilities.normalizedOutputCount(outputCount)) Img",
+            imageCapabilities.normalizedResolution(resolution),
+        ]
+        if let normalizedRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+            values.append(normalizedRatio)
+        }
+        return values
+    }
+
+    private func normalizeImageSelections() {
+        resolution = imageCapabilities.normalizedResolution(resolution)
+        outputCount = imageCapabilities.normalizedOutputCount(outputCount)
+        if let normalizedRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+            ratio = normalizedRatio
         }
     }
 }
@@ -5702,41 +6018,45 @@ private struct FeatureImageSlot: View {
 }
 
 private struct AIImageOutputSettingsSheet: View {
+    let imageCapabilities: ImageGenerationOptionCapabilities
     @Binding var resolution: String
     @Binding var ratio: String
     @Binding var outputCount: String
     @Environment(\.dismiss) private var dismiss
 
-    private let ratios = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"]
     private let selectionColor = Color(red: 0.86, green: 0.30, blue: 0.22)
     private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            settingSection("Resolution") {
-                singleChoiceGrid(
-                    PhotoReviveImageGenerationOptions.providerDefaultResolution,
-                    selection: $resolution
-                )
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                settingSection("Resolution") {
+                    singleChoiceGrid(
+                        imageCapabilities.resolutions,
+                        selection: $resolution
+                    )
+                }
 
-            settingSection("Ratio") {
-                LazyVGrid(columns: gridColumns, spacing: 12) {
-                    ForEach(ratios, id: \.self) { value in
-                        singleChoice(value, selection: $ratio)
+                if !imageCapabilities.aspectRatios.isEmpty {
+                    settingSection("Ratio") {
+                        singleChoiceGrid(
+                            imageCapabilities.aspectRatios,
+                            selection: $ratio
+                        )
                     }
                 }
-            }
 
-            settingSection("Output Image Number") {
-                singleChoiceGrid("1", selection: $outputCount)
+                settingSection("Output Image Number") {
+                    singleChoiceGrid(
+                        imageCapabilities.outputCounts,
+                        selection: $outputCount
+                    )
+                }
             }
-
-            Spacer(minLength: 0)
+            .padding(.horizontal, 20)
+            .padding(.top, 63)
+            .padding(.bottom, 18)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 63)
-        .padding(.bottom, 18)
         .background(.white)
         .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
@@ -5750,6 +6070,7 @@ private struct AIImageOutputSettingsSheet: View {
             .padding(.trailing, 5)
             .accessibilityLabel("Close output settings")
         }
+        .onAppear(perform: normalizeSelections)
     }
 
     private func settingSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -5761,9 +6082,19 @@ private struct AIImageOutputSettingsSheet: View {
         }
     }
 
-    private func singleChoiceGrid(_ value: String, selection: Binding<String>) -> some View {
+    private func singleChoiceGrid(_ values: [String], selection: Binding<String>) -> some View {
         LazyVGrid(columns: gridColumns, spacing: 12) {
-            singleChoice(value, selection: selection)
+            ForEach(values, id: \.self) { value in
+                singleChoice(value, selection: selection)
+            }
+        }
+    }
+
+    private func normalizeSelections() {
+        resolution = imageCapabilities.normalizedResolution(resolution)
+        outputCount = imageCapabilities.normalizedOutputCount(outputCount)
+        if let normalizedRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+            ratio = normalizedRatio
         }
     }
 
@@ -5788,6 +6119,8 @@ private struct FeatureSettingsSheet: View {
     enum Mode: Equatable { case video, image }
 
     let mode: Mode
+    let videoCapabilities: VideoGenerationOptionCapabilities
+    let imageCapabilities: ImageGenerationOptionCapabilities
     @Binding var soundEnabled: Bool
     @Binding var multiShotEnabled: Bool
     @Binding var duration: String
@@ -5796,26 +6129,34 @@ private struct FeatureSettingsSheet: View {
     @Binding var outputCount: String
     @Environment(\.dismiss) private var dismiss
 
-    private let ratios = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"]
-
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if mode == .video {
-                        settingToggle("Sounds", off: "speaker.slash.fill", on: "speaker.wave.2.fill", value: $soundEnabled)
-                        settingToggle("Multi-Shot Video", off: "video.slash.fill", on: "video.badge.waveform.fill", value: $multiShotEnabled)
-                        settingGrid("Duration", values: ["5s", "8s", "10s"], selection: $duration)
-                        settingGrid("Resolution", values: ["480p", "720p", "1080p"], selection: $resolution)
-                        settingGrid("Ratio", values: ["16:9", "1:1", "9:16", "4:3", "3:4"], selection: $ratio)
+                        if videoCapabilities.supportsSound {
+                            settingToggle("Sounds", off: "speaker.slash.fill", on: "speaker.wave.2.fill", value: $soundEnabled)
+                        }
+                        if videoCapabilities.supportsMultiShot {
+                            settingToggle("Multi-Shot Video", off: "video.slash.fill", on: "video.badge.waveform.fill", value: $multiShotEnabled)
+                        }
+                        settingGrid("Duration", values: videoCapabilities.durations, selection: $duration)
+                        settingGrid("Resolution", values: videoCapabilities.resolutions, selection: $resolution)
+                        settingGrid("Ratio", values: videoCapabilities.aspectRatios, selection: $ratio)
                     } else {
                         settingGrid(
                             "Resolution",
-                            values: [PhotoReviveImageGenerationOptions.providerDefaultResolution],
+                            values: imageCapabilities.resolutions,
                             selection: $resolution
                         )
-                        settingGrid("Ratio", values: ratios, selection: $ratio)
-                        settingGrid("Output Image Number", values: ["1", "2", "4"], selection: $outputCount)
+                        if !imageCapabilities.aspectRatios.isEmpty {
+                            settingGrid("Ratio", values: imageCapabilities.aspectRatios, selection: $ratio)
+                        }
+                        settingGrid(
+                            "Output Image Number",
+                            values: imageCapabilities.outputCounts,
+                            selection: $outputCount
+                        )
                     }
                 }
                 .padding(20)
@@ -5830,6 +6171,23 @@ private struct FeatureSettingsSheet: View {
             }
         }
         .tint(AppPalette.accent)
+        .onAppear(perform: normalizeSelections)
+    }
+
+    private func normalizeSelections() {
+        if mode == .image {
+            resolution = imageCapabilities.normalizedResolution(resolution)
+            outputCount = imageCapabilities.normalizedOutputCount(outputCount)
+            if let normalizedRatio = imageCapabilities.normalizedAspectRatio(ratio) {
+                ratio = normalizedRatio
+            }
+            return
+        }
+        duration = videoCapabilities.normalizedDuration(duration)
+        resolution = videoCapabilities.normalizedResolution(resolution)
+        ratio = videoCapabilities.normalizedAspectRatio(ratio)
+        if !videoCapabilities.supportsSound { soundEnabled = false }
+        if !videoCapabilities.supportsMultiShot { multiShotEnabled = false }
     }
 
     private func settingToggle(_ title: String, off: String, on: String, value: Binding<Bool>) -> some View {

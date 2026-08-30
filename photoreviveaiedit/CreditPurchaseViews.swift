@@ -59,6 +59,10 @@ enum CreditProductCatalog {
         productID: subscriberReturn1600ProductID,
         badge: "SUBSCRIBER EXCLUSIVE"
     )
+
+    static var allProductIDs: [String] {
+        (packs + [exitOfferPack, subscriberReturnOffer]).compactMap(\.productID)
+    }
 }
 
 struct CreditStoreView: View {
@@ -72,6 +76,7 @@ struct CreditStoreView: View {
     @State private var isPurchasing = false
     @State private var purchaseAlert: CreditPurchaseAlert?
     @State private var purchaseTask: Task<Void, Never>?
+    @State private var legalDocument: LegalDocument?
 
     private var selectedPack: CreditPack {
         CreditProductCatalog.packs.first { $0.id == selectedPackID }
@@ -121,7 +126,12 @@ struct CreditStoreView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.58))
                         .padding(.top, 12)
-                        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 18))
+
+                        LegalLinksView(onOpen: { legalDocument = $0 })
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.72))
+                            .padding(.top, 10)
+                            .padding(.bottom, max(proxy.safeAreaInsets.bottom, 18))
                     }
                     .frame(minHeight: proxy.size.height)
                 }
@@ -143,6 +153,10 @@ struct CreditStoreView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
         }
         .onDisappear {
             purchaseTask?.cancel()
@@ -293,12 +307,12 @@ struct CreditStoreView: View {
 
 struct CreditExitOfferView: View {
     let onClose: () -> Void
-    var onClaim: ((CreditPack) -> Void)?
     var onPurchased: ((Int) -> Void)?
 
     @State private var isPurchasing = false
     @State private var purchaseAlert: CreditPurchaseAlert?
     @State private var purchaseTask: Task<Void, Never>?
+    @State private var legalDocument: LegalDocument?
     @StateObject private var priceStore = StoreProductPriceStore.shared
 
     var body: some View {
@@ -373,6 +387,10 @@ struct CreditExitOfferView: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+        .fullScreenCover(item: $legalDocument) { document in
+            InAppBrowserView(url: document.url)
+                .ignoresSafeArea()
+        }
         .onDisappear {
             purchaseTask?.cancel()
         }
@@ -445,11 +463,7 @@ struct CreditExitOfferView: View {
             .padding(.horizontal, 19)
 
             Button {
-                if let onClaim {
-                    onClaim(CreditProductCatalog.exitOfferPack)
-                } else {
-                    beginPurchase()
-                }
+                beginPurchase()
             } label: {
                 HStack {
                     Spacer()
@@ -481,6 +495,11 @@ struct CreditExitOfferView: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.white.opacity(0.90))
                 .padding(.top, 16)
+
+            LegalLinksView(onOpen: { legalDocument = $0 })
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.76))
+                .padding(.top, 10)
                 .padding(.bottom, 22)
         }
     }

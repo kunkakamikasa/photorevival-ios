@@ -1,6 +1,15 @@
 import Combine
 import StoreKit
 
+enum StoreProductPreloadCatalog {
+    static var knownProductIDs: [String] {
+        Array(Set(
+            SubscriptionProductID.allCases.map(\.rawValue)
+                + CreditProductCatalog.allProductIDs
+        )).sorted()
+    }
+}
+
 @MainActor
 final class StoreProductPriceStore: ObservableObject {
     static let shared = StoreProductPriceStore()
@@ -9,6 +18,10 @@ final class StoreProductPriceStore: ObservableObject {
     private var requestedIDs = Set<String>()
 
     private init() {}
+
+    func preloadKnownProducts() async {
+        await load(productIDs: StoreProductPreloadCatalog.knownProductIDs)
+    }
 
     func load(productIDs: [String]) async {
         let ids = Set(productIDs.filter { !$0.isEmpty })
@@ -28,6 +41,10 @@ final class StoreProductPriceStore: ObservableObject {
     func displayPrice(for productID: String?, fallback: String = "—") -> String {
         guard let productID, let product = products[productID] else { return fallback }
         return product.displayPrice
+    }
+
+    func loadedDisplayPrice(for productID: String) -> String? {
+        products[productID]?.displayPrice
     }
 
     func periodicPrice(

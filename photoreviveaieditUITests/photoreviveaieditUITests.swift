@@ -99,6 +99,7 @@ final class photoreviveaieditUITests: XCTestCase {
             "-skipStartupAnimation",
             "-skipOnboarding",
             "-disableReturningOffer",
+            "-disableAppOpenAd",
             "-loggedIn",
             "-hideDebugTestControls",
             "-useLocalFeatureCatalog"
@@ -126,12 +127,16 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(app.buttons["credit-pack-starter"].exists)
         XCTAssertTrue(app.buttons["credit-pack-studio"].exists)
         XCTAssertTrue(app.buttons["credit-store-continue"].exists)
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         attachScreenshot(named: "Credit Store", app: app)
 
         app.buttons["credit-store-close"].tap()
 
         XCTAssertTrue(app.descendants(matching: .any)["credit-exit-offer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["credit-exit-offer-claim"].exists)
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         XCTAssertTrue(app.staticTexts["377"].exists)
         attachScreenshot(named: "Credit Exit Offer", app: app)
 
@@ -171,6 +176,7 @@ final class photoreviveaieditUITests: XCTestCase {
             "-skipStartupAnimation",
             "-skipOnboarding",
             "-disableReturningOffer",
+            "-disableAppOpenAd",
             "-forceSubscriberScratchOffer",
             "-simulateSubscriberScratchClaim",
             "-resetSubscriberScratchEligibility",
@@ -196,6 +202,8 @@ final class photoreviveaieditUITests: XCTestCase {
 
         let purchase = app.buttons["subscriber-scratch-purchase"]
         XCTAssertTrue(purchase.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
+        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
         XCTAssertTrue(app.buttons["subscriber-scratch-close"].exists)
         attachScreenshot(named: "Subscriber Scratch 1600 Offer", app: app)
     }
@@ -393,10 +401,14 @@ final class photoreviveaieditUITests: XCTestCase {
         let primaryAction = app.buttons["creation-primary-action"]
         let chooserTitle = app.staticTexts["Choose Template"]
         let firstTemplate = app.buttons["Select Baby Fly"]
+        let templateStrip = app.scrollViews["creation-template-strip"].firstMatch
+        let trailingTemplate = app.buttons["Select Playful Cartoon"]
         XCTAssertTrue(settings.exists)
         XCTAssertTrue(primaryAction.waitForExistence(timeout: 3))
         XCTAssertTrue(chooserTitle.exists)
         XCTAssertTrue(firstTemplate.exists)
+        XCTAssertTrue(templateStrip.exists)
+        XCTAssertTrue(trailingTemplate.exists)
 
         let windowMaxY = app.windows.firstMatch.frame.maxY + 1
         XCTAssertLessThanOrEqual(settings.frame.maxY, windowMaxY)
@@ -405,6 +417,11 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertLessThanOrEqual(firstTemplate.frame.maxY, windowMaxY)
 
         let primaryActionY = primaryAction.frame.minY
+        let trailingTemplateX = trailingTemplate.frame.minX
+        templateStrip.swipeLeft()
+        XCTAssertLessThan(trailingTemplate.frame.minX, trailingTemplateX)
+        XCTAssertEqual(primaryAction.frame.minY, primaryActionY, accuracy: 1)
+
         app.swipeUp()
         XCTAssertEqual(primaryAction.frame.minY, primaryActionY, accuracy: 1)
         attachScreenshot(named: "Video Prompt Upload One Screen", app: app)
@@ -779,15 +796,36 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertHorizontallyContained(photoHero, in: windowFrame, named: "AI Photo hero")
 
         app.buttons["AI Video"].tap()
-        for featureID in ["oneTapRestore", "enhancePhoto", "photoToVideo", "aiImage"] {
+        let expectedVideoModes = [
+            ("photoToVideo", "Photo To Video"),
+            ("textToVideo", "Text To Video")
+        ]
+        for (featureID, title) in expectedVideoModes {
             let mode = app.buttons["video-mode-\(featureID)"]
             XCTAssertTrue(mode.waitForExistence(timeout: 3), "Missing video mode \(featureID)")
+            XCTAssertEqual(mode.label, title)
             XCTAssertHorizontallyContained(mode, in: windowFrame, named: "Video mode \(featureID)")
-        }
 
-        let videoHero = app.buttons["video-mode-hero-oneTapRestore"]
-        XCTAssertTrue(videoHero.waitForExistence(timeout: 3))
-        XCTAssertHorizontallyContained(videoHero, in: windowFrame, named: "AI Video hero")
+            mode.tap()
+            let videoHero = app.buttons["video-mode-hero-\(featureID)"]
+            XCTAssertTrue(videoHero.waitForExistence(timeout: 3), "Missing video hero \(featureID)")
+            XCTAssertHorizontallyContained(
+                videoHero,
+                in: windowFrame,
+                named: "AI Video hero \(featureID)"
+            )
+
+            let tryNow = app.buttons["video-mode-try-now-\(featureID)"]
+            XCTAssertTrue(tryNow.waitForExistence(timeout: 3), "Missing Try Now button \(featureID)")
+            XCTAssertGreaterThanOrEqual(
+                videoHero.frame.maxX - tryNow.frame.maxX,
+                19,
+                "Try Now button \(featureID) is too close to the hero's right edge"
+            )
+        }
+        for featureID in ["oneTapRestore", "enhancePhoto", "aiImage"] {
+            XCTAssertFalse(app.buttons["video-mode-\(featureID)"].exists)
+        }
         attachScreenshot(named: "AI Video Responsive Layout", app: app)
 
         app.buttons["Me"].tap()
@@ -877,7 +915,12 @@ final class photoreviveaieditUITests: XCTestCase {
     @MainActor
     func testAIPhotoFixedFeatureRoutes() throws {
         let app = XCUIApplication()
-        app.launchArguments.append("-skipOnboarding")
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd"
+        ]
         app.launch()
 
         let photoTab = app.buttons["AI Photo"]
@@ -899,6 +942,8 @@ final class photoreviveaieditUITests: XCTestCase {
             if index == 2 {
                 app.buttons["Edit output settings"].tap()
                 XCTAssertTrue(app.staticTexts["Resolution"].waitForExistence(timeout: 2))
+                XCTAssertTrue(app.staticTexts["Ratio"].exists)
+                XCTAssertTrue(app.buttons["21:9"].exists)
                 XCTAssertTrue(app.staticTexts["Output Image Number"].exists)
                 attachScreenshot(named: "AI Photo image settings", app: app)
                 app.buttons["Close output settings"].tap()
@@ -1087,6 +1132,80 @@ final class photoreviveaieditUITests: XCTestCase {
     }
 
     @MainActor
+    func testDirectThreeDayTrialNeverFlashesFamilyOffer() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipStartupAnimation",
+            "-skipOnboarding",
+            "-disableReturningOffer",
+            "-disableAppOpenAd"
+        ]
+        app.launch()
+
+        let debugBubble = app.buttons["debug-test-bubble"]
+        XCTAssertTrue(debugBubble.waitForExistence(timeout: 4))
+        debugBubble.tap()
+
+        let directTrialPreview = app.buttons["Paywall Close · 3-Day Free Trial"]
+        if !directTrialPreview.waitForExistence(timeout: 2) || !directTrialPreview.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(directTrialPreview.waitForExistence(timeout: 2))
+        directTrialPreview.tap()
+
+        let familyClose = app.buttons["returning-offer-close"]
+        XCTAssertFalse(
+            familyClose.exists,
+            "The family offer must never appear while direct trial eligibility is loading"
+        )
+        let eligibilityLoading = app.descendants(matching: .any)["returning-trial-eligibility-loading"]
+        let trialStart = app.buttons["returning-trial-start"]
+        XCTAssertTrue(
+            eligibilityLoading.exists || trialStart.exists,
+            "The direct trial route should show only eligibility loading or the trial offer"
+        )
+
+        let familyFlash = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true"),
+            object: familyClose
+        )
+        familyFlash.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [familyFlash], timeout: 3), .completed)
+
+        if trialStart.exists {
+            app.buttons["returning-trial-close"].tap()
+        }
+    }
+
+    @MainActor
+    func testReturningRetentionOfferDisclosures() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-skipOnboarding",
+            "-disableReturningOffer"
+        ]
+        app.launch()
+
+        let debugBubble = app.buttons["debug-test-bubble"]
+        XCTAssertTrue(debugBubble.waitForExistence(timeout: 4))
+        debugBubble.tap()
+
+        let retentionPreview = app.buttons["Family Exclusive · Second Follow-Up"]
+        if !retentionPreview.waitForExistence(timeout: 2) || !retentionPreview.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(retentionPreview.waitForExistence(timeout: 2))
+        retentionPreview.tap()
+
+        XCTAssertTrue(app.buttons["returning-retention-continue"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["returning-retention-subscription-details"].exists)
+        XCTAssertTrue(app.buttons["returning-retention-restore"].isHittable)
+        XCTAssertTrue(app.buttons["returning-retention-privacy"].isHittable)
+        XCTAssertTrue(app.buttons["returning-retention-terms"].isHittable)
+        attachScreenshot(named: "Returning Retention Subscription Disclosures", app: app)
+    }
+
+    @MainActor
     func testReturningSuperPrizeOffer() throws {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -1184,6 +1303,7 @@ final class photoreviveaieditUITests: XCTestCase {
             "-skipStartupAnimation",
             "-skipOnboarding",
             "-disableReturningOffer",
+            "-disableAppOpenAd",
             "-loggedIn",
             "-forceUnsubscribed",
             "-hideDebugTestControls",
@@ -1202,14 +1322,15 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Today"].exists)
 
         let windowFrame = app.windows.firstMatch.frame
-        for label in ["Save generated video", "Remove watermark", "Messages", "WhatsApp", "Facebook", "Instagram"] {
+        for label in ["Save generated video", "Share generated video"] {
             let element = app.buttons[label]
             XCTAssertTrue(element.exists, "Missing \(label)")
             XCTAssertGreaterThanOrEqual(element.frame.minX, windowFrame.minX - 1)
             XCTAssertLessThanOrEqual(element.frame.maxX, windowFrame.maxX + 1)
         }
-        XCTAssertFalse(app.buttons["Messenger"].exists)
-        XCTAssertFalse(app.buttons["TikTok"].exists)
+        for label in ["Remove watermark", "Messages", "WhatsApp", "Facebook", "Instagram", "Messenger", "TikTok"] {
+            XCTAssertFalse(app.buttons[label].exists, "Unexpected \(label)")
+        }
 
         app.buttons["Delete generation"].tap()
         XCTAssertTrue(app.staticTexts["Permanently delete this creation?"].waitForExistence(timeout: 2))
@@ -1228,7 +1349,17 @@ final class photoreviveaieditUITests: XCTestCase {
         XCTAssertTrue(maximize.isHittable)
         maximize.tap()
         XCTAssertTrue(app.descendants(matching: .any)["history-video-player"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Close preview"].exists)
+        let closePreview = app.buttons["Close preview"]
+        XCTAssertTrue(closePreview.exists)
+
+        let fullScreenFrame = app.windows.firstMatch.frame
+        let portraitVideoHeight = min(fullScreenFrame.height, fullScreenFrame.width * 16 / 9)
+        let portraitVideoMinY = fullScreenFrame.midY - portraitVideoHeight / 2
+        XCTAssertGreaterThanOrEqual(
+            closePreview.frame.minY,
+            portraitVideoMinY,
+            "Close preview button overlaps the top letterbox"
+        )
     }
 
     @MainActor

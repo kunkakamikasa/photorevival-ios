@@ -4,9 +4,9 @@ import Testing
 
 @MainActor
 struct VideoPromptDisplayTests {
-    @Test func twoStageTemplateDisplaysOnlyVideoMotionPrompt() {
+    @Test func twoStageTemplateDisplaysItsCuratedVideoOnlyBrief() throws {
         let item = TemplateItem(
-            id: "love-in-titanic",
+            id: "photorevival-classic-films-love-in-titanic",
             title: "Love in Titanic",
             promptTemplate: """
             Compose @Image1 and @Image2 into one cinematic couple portrait.
@@ -16,26 +16,30 @@ struct VideoPromptDisplayTests {
             """
         )
 
-        #expect(
-            item.displayedPromptTemplate
-                == "The couple gently leans into the wind while the camera slowly pulls back."
-        )
+        let displayedPrompt = try #require(item.displayedPromptTemplate)
+        #expect(displayedPrompt.contains("iconic bow pose"))
+        #expect(displayedPrompt.contains("front subject keeps both arms extended"))
+        #expect(displayedPrompt.contains("light breeze through hair and fabric"))
+        #expect(!displayedPrompt.contains("Compose @Image1"))
+        #expect(!displayedPrompt.contains("The couple gently leans into the wind"))
     }
 
-    @Test func singleStageTemplateKeepsItsOriginalPrompt() {
+    @Test func singleStageTemplateReceivesItsOwnRelevantRewrite() throws {
+        let canonicalPrompt = "The person is surfing joyfully on the sea."
         let item = TemplateItem(
-            id: "single-stage-video",
-            title: "Single Stage",
-            promptTemplate: "Preserve the subject while the camera slowly moves forward."
+            id: "photorevival-summer-beach-surfing",
+            title: "Surfing",
+            promptTemplate: canonicalPrompt
         )
 
-        #expect(
-            item.displayedPromptTemplate
-                == "Preserve the subject while the camera slowly moves forward."
-        )
+        let displayedPrompt = try #require(item.displayedPromptTemplate)
+        #expect(displayedPrompt.contains("rides a wave"))
+        #expect(displayedPrompt.contains("surfing posture"))
+        #expect(displayedPrompt != canonicalPrompt)
+        #expect(!displayedPrompt.contains(canonicalPrompt))
     }
 
-    @Test func emptySecondStageFallsBackToOriginalPrompt() {
+    @Test func unknownTemplateNeverFallsBackToExposingTheOriginalPrompt() {
         let prompt = "Compose both subjects.\n\nVIDEO MOTION:\n"
         let item = TemplateItem(
             id: "incomplete-two-stage-video",
@@ -43,7 +47,48 @@ struct VideoPromptDisplayTests {
             promptTemplate: prompt
         )
 
-        #expect(item.displayedPromptTemplate == prompt)
+        #expect(item.displayedPromptTemplate == nil)
+    }
+
+    @Test func imageCompositionPromptIsNeverPreparedForVideoDisplay() {
+        let item = TemplateItem(
+            id: "image-composition",
+            title: "Image Composition",
+            generationKind: .image,
+            promptTemplate: "Combine @Image1 and @Image2 into one portrait."
+        )
+
+        #expect(item.displayedPromptTemplate == nil)
+    }
+
+    @Test func untouchedDisplaySummaryNeverOverridesCanonicalServerPrompt() {
+        let defaultPrompt = "Bring the \u{201C}Birthday\u{201D} scene to life with warm celebration details."
+
+        #expect(
+            VideoPromptSubmission.userOverride(
+                displayedPrompt: defaultPrompt,
+                defaultDisplayedPrompt: defaultPrompt,
+                isEditable: true
+            ) == nil
+        )
+        #expect(
+            VideoPromptSubmission.userOverride(
+                displayedPrompt: "Make the candlelight softer.",
+                defaultDisplayedPrompt: defaultPrompt,
+                isEditable: true
+            ) == "Make the candlelight softer."
+        )
+        #expect(
+            VideoPromptSubmission.userOverride(
+                displayedPrompt: "Make the candlelight softer.",
+                defaultDisplayedPrompt: defaultPrompt,
+                isEditable: false
+            ) == nil
+        )
+    }
+
+    @Test func currentVideoCatalogHasARelevantBriefForEveryLiveTemplate() {
+        #expect(VideoPromptDisplayCatalog.templateIDs.count == 118)
     }
 
     @Test func cmsTitlesNeverExposeHanCharacters() {
@@ -118,5 +163,18 @@ struct VideoPromptDisplayTests {
 
         #expect(PhotoReviveImageGenerationOptions.providerDefaultResolution == "2K")
         #expect(object["resolution"] as? String == "2K")
+        #expect(object["aspect_ratio"] as? String == "9:16")
+    }
+
+    @Test func imageGenerationOmitsAspectRatioForUnverifiedModels() throws {
+        let options = PhotoReviveImageGenerationOptions(
+            resolution: PhotoReviveImageGenerationOptions.providerDefaultResolution,
+            aspectRatio: nil,
+            outputCount: 1
+        )
+        let data = try JSONEncoder().encode(options)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["aspect_ratio"] == nil)
     }
 }

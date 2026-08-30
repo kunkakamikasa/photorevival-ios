@@ -12,6 +12,26 @@ import UIKit
 
 struct photoreviveaieditTests {
 
+    @MainActor
+    @Test func catalogCanRetryAfterEveryInitialRequestFails() async {
+        let fetchCounter = CatalogFetchCounter()
+        let store = FeatureConfigStore(
+            fetchCatalogData: { _ in
+                await fetchCounter.recordFailure()
+            },
+            restoresCatalogSnapshot: false
+        )
+
+        await store.load()
+        let firstAttemptCount = await fetchCounter.count
+        await store.load()
+        let secondAttemptCount = await fetchCounter.count
+
+        #expect(firstAttemptCount == 4)
+        #expect(secondAttemptCount == 8)
+        #expect(!store.isLoading)
+    }
+
     @Test func selectingShareActivityIsEnoughToClaimReward() {
         #expect(
             RewardShareSelectionPolicy.shouldClaim(
@@ -78,6 +98,64 @@ struct photoreviveaieditTests {
         #expect(object["duration"] as? Int == 8)
         #expect(object["sound"] as? Bool == true)
         #expect(object["multi_shot"] as? Bool == true)
+    }
+
+    @Test func liveSeedanceOptionsMatchTheEndToEndProviderContract() {
+        let options = VideoGenerationOptionCapabilities.current(
+            forModelID: "doubao-seedance-1-5-pro-251215"
+        )
+
+        #expect(options.supportsSound)
+        #expect(options.supportsMultiShot)
+        #expect(options.resolutions == ["480p", "720p", "1080p"])
+        #expect(options.durations == ["5s", "8s", "10s"])
+        #expect(options.aspectRatios == ["16:9", "1:1", "9:16", "4:3", "3:4"])
+        #expect(!options.aspectRatios.contains("21:9"))
+    }
+
+    @Test func liveGrokVideoDoesNotAdvertiseUnsupportedMultiShot() {
+        let options = VideoGenerationOptionCapabilities.current(
+            forModelID: "text-grok-video-3"
+        )
+
+        #expect(options.supportsSound)
+        #expect(!options.supportsMultiShot)
+        #expect(options.normalizedResolution("540p") == "480p")
+        #expect(options.normalizedAspectRatio("21:9") == "16:9")
+    }
+
+    @Test func unknownVideoModelsReceiveOnlyConservativeOptions() {
+        let options = VideoGenerationOptionCapabilities.current(
+            forModelID: "future-unreviewed-model"
+        )
+
+        #expect(!options.supportsSound)
+        #expect(!options.supportsMultiShot)
+        #expect(options.durations == ["5s"])
+        #expect(options.resolutions == ["480p"])
+        #expect(options.aspectRatios == ["9:16"])
+    }
+
+    @Test func seedream45AdvertisesOnlyItsVerifiedImageOptions() {
+        let options = ImageGenerationOptionCapabilities.current(
+            forModelID: "doubao-seedream-4-5-251128"
+        )
+
+        #expect(options.resolutions == ["2K"])
+        #expect(options.outputCounts == ["1"])
+        #expect(options.aspectRatios == [
+            "1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9",
+        ])
+        #expect(options.normalizedAspectRatio("21:9") == "21:9")
+    }
+
+    @Test func unverifiedImageModelsDoNotInheritSeedreamRatios() {
+        let options = ImageGenerationOptionCapabilities.current(
+            forModelID: "grok-3-image"
+        )
+
+        #expect(options.aspectRatios.isEmpty)
+        #expect(options.normalizedAspectRatio("9:16") == nil)
     }
 
     @MainActor
@@ -155,6 +233,33 @@ struct photoreviveaieditTests {
         #expect(FixedFeature(cmsKey: "unknown") == nil)
     }
 
+    @MainActor
+    @Test func aiVideoModesFollowConfiguredVideoEntriesAndOrder() {
+        let configured = [
+            FixedFeature.oneTapRestore,
+            .textToVideo,
+            .enhancePhoto,
+            .photoToVideo,
+            .aiImage
+        ].map { feature in
+            HomeQuickAction(
+                feature: feature,
+                title: "CMS \(feature.title)",
+                item: TemplateItem(id: "test-\(feature.id)", title: feature.title)
+            )
+        }
+
+        let displayed = FeatureConfigStore.displayedVideoModeActions(configured: configured)
+
+        #expect(displayed.map(\.feature) == [.textToVideo, .photoToVideo])
+        #expect(displayed.map(\.title) == ["CMS Text To Video", "CMS Photo To Video"])
+
+        let oneConfiguredMode = FeatureConfigStore.displayedVideoModeActions(
+            configured: configured.filter { $0.feature == .photoToVideo }
+        )
+        #expect(oneConfiguredMode.map(\.feature) == [.photoToVideo])
+    }
+
     @Test func carouselCanTargetFixedFeatureWithoutTryNowItem() {
         let entry = TemplateDetailEntry(
             displayItem: TemplateItem(id: "fixed", title: "AI Image"),
@@ -193,6 +298,82 @@ struct photoreviveaieditTests {
         #expect(action.generationTarget(endpoint: "image-to-image") == imageTarget)
         #expect(action.generationTarget(endpoint: "text-to-image") == textTarget)
         #expect(action.generationTarget == imageTarget)
+    }
+
+    @MainActor
+    @Test func aiImageQuickActionAlsoPowersDedicatedPhotoTools() {
+        let imageTarget = FeatureGenerationTarget(
+            itemID: "image-item",
+            endpoint: "image-to-image",
+            modelType: "image_to_image",
+            modelID: "image-model",
+            estimatedCredits: 30,
+            promptTemplate: nil
+        )
+        let textTarget = FeatureGenerationTarget(
+            itemID: "text-item",
+            endpoint: "text-to-image",
+            modelType: "text_to_image",
+            modelID: "text-model",
+            estimatedCredits: 30,
+            promptTemplate: nil
+        )
+        let quickActions = [
+            HomeQuickAction(
+                feature: .aiImage,
+                item: TemplateItem(id: "ai-image", title: "AI Image"),
+                generationTargets: [imageTarget, textTarget]
+            )
+        ]
+
+        #expect(FixedFeatureGenerationTargetResolver.target(
+            for: .imageToImage,
+            endpoint: "image-to-image",
+            in: quickActions
+        ) == imageTarget)
+        #expect(FixedFeatureGenerationTargetResolver.target(
+            for: .textToImage,
+            endpoint: "text-to-image",
+            in: quickActions
+        ) == textTarget)
+    }
+
+    @MainActor
+    @Test func dedicatedPhotoToolTargetOverridesAIImageAlias() {
+        let combinedTarget = FeatureGenerationTarget(
+            itemID: "combined-text-item",
+            endpoint: "text-to-image",
+            modelType: "text_to_image",
+            modelID: "combined-model",
+            estimatedCredits: 30,
+            promptTemplate: nil
+        )
+        let dedicatedTarget = FeatureGenerationTarget(
+            itemID: "dedicated-text-item",
+            endpoint: "text-to-image",
+            modelType: "text_to_image",
+            modelID: "dedicated-model",
+            estimatedCredits: 30,
+            promptTemplate: nil
+        )
+        let quickActions = [
+            HomeQuickAction(
+                feature: .aiImage,
+                item: TemplateItem(id: "ai-image", title: "AI Image"),
+                generationTargets: [combinedTarget]
+            ),
+            HomeQuickAction(
+                feature: .textToImage,
+                item: TemplateItem(id: "text-to-image", title: "Text to Image"),
+                generationTarget: dedicatedTarget
+            )
+        ]
+
+        #expect(FixedFeatureGenerationTargetResolver.target(
+            for: .textToImage,
+            endpoint: "text-to-image",
+            in: quickActions
+        ) == dedicatedTarget)
     }
 
     @MainActor
@@ -535,6 +716,40 @@ struct photoreviveaieditTests {
         ))
     }
 
+    @Test func startupAnimationWaitsForFourSecondsAndFirstInstallNetwork() {
+        #expect(StartupAnimationPolicy.minimumDisplayNanoseconds == 4_000_000_000)
+        #expect(StartupAnimationPolicy.shouldKeepShowing(
+            minimumDurationElapsed: false,
+            isFirstInstall: true,
+            hasUsableNetworkPath: true
+        ))
+        #expect(StartupAnimationPolicy.shouldKeepShowing(
+            minimumDurationElapsed: true,
+            isFirstInstall: true,
+            hasUsableNetworkPath: false
+        ))
+        #expect(!StartupAnimationPolicy.shouldKeepShowing(
+            minimumDurationElapsed: true,
+            isFirstInstall: true,
+            hasUsableNetworkPath: true
+        ))
+        #expect(!StartupAnimationPolicy.shouldKeepShowing(
+            minimumDurationElapsed: true,
+            isFirstInstall: false,
+            hasUsableNetworkPath: false
+        ))
+    }
+
+    @Test func launchPricePreloadIncludesEveryKnownStoreProduct() {
+        let preloadedIDs = Set(StoreProductPreloadCatalog.knownProductIDs)
+        let subscriptionIDs = Set(SubscriptionProductID.allCases.map(\.rawValue))
+        let creditIDs = Set(CreditProductCatalog.allProductIDs)
+
+        #expect(subscriptionIDs.isSubset(of: preloadedIDs))
+        #expect(creditIDs.isSubset(of: preloadedIDs))
+        #expect(preloadedIDs.count == subscriptionIDs.union(creditIDs).count)
+    }
+
     @Test func googleNonceSendsHashToGoogleAndRawValueToBackend() {
         let nonce = PhotoReviveGoogleNonce(rawValue: "test-nonce")
 
@@ -569,6 +784,24 @@ struct photoreviveaieditTests {
             isSubscribed: false,
             arguments: ["-skipOnboarding"]
         ))
+    }
+
+    @MainActor
+    @Test func startupPromotionEvaluationCanOnlyBeClaimedOncePerLaunch() {
+        let gate = StartupPromotionSessionGate()
+
+        #expect(gate.claimAutomaticEvaluation())
+        #expect(!gate.claimAutomaticEvaluation())
+    }
+
+    @MainActor
+    @Test func debugPromotionPreviewSuppressesAutomaticStartupPromotion() {
+        let gate = StartupPromotionSessionGate()
+
+        gate.suppressAutomaticPromotionsForCurrentLaunch()
+
+        #expect(gate.suppressesAutomaticPromotions)
+        #expect(!gate.claimAutomaticEvaluation())
     }
 
     @Test func subscriberScratchEligibility() {
@@ -683,6 +916,21 @@ struct photoreviveaieditTests {
             limitedTimeAvailable: false,
             randomIndex: 2
         ) == .familyExclusive)
+    }
+
+    @Test func directTrialPresentationNeverUsesFamilyOfferAsItsInitialScreen() {
+        #expect(ReturningOfferInitialPresentation.select(
+            startsAtTrial: true,
+            startsAtRetention: false
+        ) == .checkingTrialEligibility)
+        #expect(ReturningOfferInitialPresentation.select(
+            startsAtTrial: false,
+            startsAtRetention: true
+        ) == .retention)
+        #expect(ReturningOfferInitialPresentation.select(
+            startsAtTrial: false,
+            startsAtRetention: false
+        ) == .family)
     }
 
     @Test func paywallFollowUpSelectionRespectsDailyLimitedOffer() {
@@ -957,4 +1205,13 @@ struct photoreviveaieditTests {
         )
     }
 
+}
+
+private actor CatalogFetchCounter {
+    private(set) var count = 0
+
+    func recordFailure() -> Data? {
+        count += 1
+        return nil
+    }
 }

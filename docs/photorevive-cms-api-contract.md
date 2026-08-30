@@ -84,7 +84,7 @@
 | 邀请码和奖励 | `GET /referral-status`、`POST /redeem-referral` | 满足手动邀请码兑换和服务端奖励归因 |
 | 历史删除/取消 | `POST /delete-task`、`POST /cancel-task` | 满足 |
 | AI Photo CMS 顶图 | `GET /get-app-carousels?page=photo` | 满足；App 使用 CMS 图片，并按 `target_kind` 进入 Try Now 或固定功能 |
-| AI Video 四模式素材 | `GET /get-app-fixed-features` | 满足；功能顺序和入口固定，只读取四张/四段 CMS 素材 |
+| AI Video 模式素材 | `GET /get-app-fixed-features` | 满足；App 动态展示 CMS 已启用的视频生成入口，数量、顺序、标题和素材均跟随配置 |
 
 ## 3. 本次后端处理结果
 
