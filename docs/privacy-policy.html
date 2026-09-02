@@ -288,8 +288,8 @@
       </p>
       <div class="meta">
         <span>Effective date: August 26, 2026</span>
-        <span>Last updated: August 30, 2026</span>
-        <span>Platforms: iOS and iPadOS</span>
+        <span>Last updated: September 2, 2026</span>
+        <span>Platforms: iOS, iPadOS, and Android</span>
       </div>
     </header>
 
@@ -298,15 +298,15 @@
       <div class="summary-grid">
         <div class="summary-card">
           <strong>You choose your photos</strong>
-          <p>We use Apple's system photo picker and receive only the images you explicitly select. We do not automatically browse your entire photo library.</p>
+          <p>We use the platform system photo picker and receive only the images you explicitly select. We do not automatically browse your entire photo library.</p>
         </div>
         <div class="summary-card">
           <strong>AI processing requires uploads</strong>
           <p>Your selected images, prompts, and generation settings are sent to servers to perform restoration, enhancement, image generation, or video generation.</p>
         </div>
         <div class="summary-card">
-          <strong>Ads respect your choices</strong>
-          <p>The App may display Google AdMob ads. Where required, advertising consent and cross-app tracking are controlled through Google's privacy choices and the iOS tracking permission. Refusing them does not disable core editing features.</p>
+          <strong>Ads depend on the App version</strong>
+          <p>Some versions of the App may display Google AdMob ads. Where required, advertising consent and cross-app tracking are controlled through Google's privacy choices and platform permissions. Refusing them does not disable core editing features.</p>
         </div>
         <div class="summary-card">
           <strong>You can manage your data</strong>
@@ -327,6 +327,7 @@
         <li><a href="#ai">AI Content Processing</a></li>
         <li><a href="#retention">Storage and Retention</a></li>
         <li><a href="#rights">Your Rights and Choices</a></li>
+        <li><a href="#account-deletion">Delete Your Account</a></li>
         <li><a href="#security">Security</a></li>
         <li><a href="#children">Children's Privacy</a></li>
         <li><a href="#transfer">International Transfers</a></li>
@@ -376,8 +377,8 @@
               </tr>
               <tr>
                 <td>Subscription and transaction information</td>
-                <td>Product ID, transaction ID, signed transaction data, subscription status, price, currency, purchase result, and purchase-restoration result.</td>
-                <td>Apple processes payment and provides verification data so we can activate memberships, restore purchases, prevent duplicate processing, and resolve refunds or disputes. Product, price, currency, and transaction outcome information may also be sent to Firebase Analytics and advertising-measurement providers to measure purchase performance. We do not directly collect payment-card numbers.</td>
+                <td>Product ID, transaction or order ID, purchase token or signed transaction data, subscription status, price, currency, purchase result, and purchase-restoration result.</td>
+                <td>Apple or Google Play processes payment and provides verification data so we can activate memberships, grant credits, restore purchases, prevent duplicate processing, and resolve refunds or disputes. In App versions that include analytics or advertising measurement, product, price, currency, and transaction outcome information may also be used to measure purchase performance. We do not directly collect payment-card numbers.</td>
               </tr>
               <tr>
                 <td>Rewards and usage records</td>
@@ -386,18 +387,18 @@
               </tr>
               <tr>
                 <td>Device, network, and log information</td>
-                <td>iOS platform, App version, time zone, IDFV, Firebase app-instance or installation identifiers, Adjust ADID, other app- or developer-bounded identifiers, IP address, and server request logs; this may also include device model, operating-system version, language, network information, approximate location inferred from IP address, and crash, performance, or other diagnostic information collected by integrated SDKs.</td>
-                <td>Collected automatically to connect the service, deliver and measure ads, operate analytics and attribution, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
+                <td>Platform, App version, time zone, a randomly generated Android installation identifier or Apple IDFV, and other app- or developer-bounded identifiers; IP address and server request logs; and, in App versions that include analytics, attribution, advertising, or diagnostics SDKs, app-instance, installation, attribution, device, operating-system, language, network, IP-derived approximate-location, crash, performance, and diagnostic information.</td>
+                <td>Collected automatically as applicable to connect the service, maintain sessions, operate analytics and attribution, deliver or measure ads in ad-enabled versions, adapt content, maintain security, diagnose failures, produce statistics, and prevent abuse.</td>
               </tr>
               <tr>
                 <td>Product analytics, advertising attribution, and usage data</td>
-                <td>Firebase app-instance information; your Photo Revival account ID when signed in; authentication and subscription status; screen views; onboarding progress; template and feature selections; paywall and promotion interactions; generation type, template ID, input count, credit cost, output settings, status, processing time, and generalized failure category; content-save events; purchase product, value, currency, and result; Adjust attribution data; Meta automatically logged App events and SDK data; AdMob advertising and interaction data; and IDFA if you authorize tracking.</td>
-                <td>Used to understand how the App is used, analyze product and purchase funnels, improve features, measure advertising performance, identify installation sources, prevent fraud, and avoid duplicate attribution. Analytics data may be associated with your account when you are signed in.</td>
+                <td>In App versions that include analytics, attribution, or advertising SDKs: app-instance information; your Photo Revival account ID when signed in; authentication and subscription status; screen views; onboarding progress; template and feature selections; paywall and promotion interactions; generation type, template ID, input count, credit cost, output settings, status, processing time, and generalized failure category; content-save events; purchase product, value, currency, and result; attribution data; automatically logged App events; advertising interaction data; and IDFA or advertising ID only where permitted and available.</td>
+                <td>Used where these SDKs are enabled to understand how the App is used, analyze product and purchase funnels, improve features, measure advertising performance, identify installation sources, prevent fraud, and avoid duplicate attribution. Analytics data may be associated with your account when you are signed in.</td>
               </tr>
               <tr>
                 <td>Advertising data and privacy choices</td>
-                <td>Ads requested or shown, ad impressions, ad interactions, ad performance and delivery information, device or app identifiers, consent status, and advertising privacy selections. Depending on your region and choices, Google and participating advertising providers may use permitted information to select personalized, non-personalized, limited, or technically delivered ads.</td>
-                <td>Collected or stored through Google Mobile Ads and Google's User Messaging Platform to deliver ads, remember privacy choices, limit repetition, measure performance, detect invalid activity, maintain security, and comply with advertising and privacy requirements.</td>
+                <td>In ad-enabled App versions: ads requested or shown, ad impressions, ad interactions, ad performance and delivery information, device or app identifiers, consent status, and advertising privacy selections. Depending on your region and choices, Google and participating advertising providers may use permitted information to select personalized, non-personalized, limited, or technically delivered ads.</td>
+                <td>Collected or stored only where Google Mobile Ads and Google's User Messaging Platform are enabled, to deliver ads, remember privacy choices, limit repetition, measure performance, detect invalid activity, maintain security, and comply with advertising and privacy requirements.</td>
               </tr>
               <tr>
                 <td>Feedback and contact information</td>
@@ -412,7 +413,7 @@
               <tr>
                 <td>Local settings and cache</td>
                 <td>Login and subscription state, onboarding state, offer-display records, advertising consent choices, attribution snapshots, media cache, and securely stored session tokens.</td>
-                <td>Stored on your device to remember settings, improve loading, and maintain your session. Deleting the App generally clears ordinary local data but does not delete a server account or cancel an App Store subscription.</td>
+                <td>Stored on your device to remember settings, improve loading, and maintain your session. Deleting the App generally clears ordinary local data but does not delete a server account or cancel an App Store or Google Play subscription.</td>
               </tr>
             </tbody>
           </table>
@@ -434,13 +435,13 @@
       <section id="permissions">
         <h2>3. Device Permissions</h2>
         <ul>
-          <li><strong>Photos:</strong> Used to select source images or a feedback screenshot. The App uses the system photo picker, and only items you explicitly select are provided to the App.</li>
-          <li><strong>Tracking:</strong> Used, where applicable, to access IDFA and support advertising measurement or personalization across apps or websites. You may refuse this permission without losing access to core editing and generation features.</li>
-          <li><strong>Notifications:</strong> Used to deliver service messages you permit and may be part of a reward task. You can refuse or disable notifications at any time in iOS Settings.</li>
+          <li><strong>Photos and media:</strong> Used to select source images or a feedback screenshot and to save results at your request. On supported system versions, the App uses the platform photo picker, and only items you explicitly select are provided to the App. Older Android versions may request storage access only when required to save a file.</li>
+          <li><strong>Tracking (iOS and iPadOS only):</strong> Used, where applicable, to access IDFA and support advertising measurement or personalization across apps or websites. You may refuse this permission without losing access to core editing and generation features.</li>
+          <li><strong>Notifications:</strong> Used to deliver service messages you permit and may be part of a reward task. You can refuse or disable notifications at any time in your device settings.</li>
         </ul>
         <p>
-          You can manage permissions in iOS Settings under “Privacy &amp; Security” or on the App's system
-          settings page. Withdrawing permission does not affect processing lawfully completed beforehand.
+          You can manage permissions in iOS or Android system settings. Withdrawing permission does not
+          affect processing lawfully completed beforehand.
         </p>
       </section>
 
@@ -450,7 +451,7 @@
         <ol>
           <li>Create and manage accounts, complete Apple or Google sign-in, and maintain sessions;</li>
           <li>Receive source material, prompts, and settings and create, display, and delete AI generation tasks;</li>
-          <li>Verify App Store subscriptions, restore purchases, and manage memberships, credits, and transaction records;</li>
+          <li>Verify App Store or Google Play purchases, restore subscriptions, and manage memberships, credits, and transaction records;</li>
           <li>Provide check-in, reward, referral, and anti-abuse functions;</li>
           <li>Respond to feedback, diagnose errors, secure servers and accounts, and prevent fraud or misuse;</li>
           <li>Deliver personalized, non-personalized, limited, or technically delivered ads as permitted by your region and choices; control ad frequency; measure ad performance; and prevent invalid or fraudulent activity;</li>
@@ -470,6 +471,10 @@
           <div class="service">
             <strong>Apple</strong>
             <p>Sign in with Apple, App Store subscriptions, the system photo picker, notifications, and operating-system services. <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener noreferrer">Apple Privacy Policy</a></p>
+          </div>
+          <div class="service">
+            <strong>Google Play</strong>
+            <p>Processes Android subscriptions and one-time credit purchases and provides purchase-verification and lifecycle information. <a href="https://policies.google.com/privacy?hl=en" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a></p>
           </div>
           <div class="service">
             <strong>Google Sign-In</strong>
@@ -500,12 +505,17 @@
         <ul>
           <li><strong>Legal compliance:</strong> We may disclose information to courts, regulators, or law-enforcement authorities when required by law or reasonably necessary to protect users, the public, our rights, or security.</li>
           <li><strong>Business transactions:</strong> Information may transfer as part of a merger, acquisition, financing, restructuring, or asset transfer, subject to continued protection and legally required notice.</li>
-          <li><strong>At your direction:</strong> For example, when you use the iOS share sheet to send generated content to another app. The recipient processes that content under its own terms and privacy policy.</li>
+          <li><strong>At your direction:</strong> For example, when you use the iOS or Android system share sheet to send generated content to another app. The recipient processes that content under its own terms and privacy policy.</li>
         </ul>
       </section>
 
       <section id="tracking">
         <h2>6. Analytics, Advertising Attribution, and Tracking</h2>
+        <p>
+          Analytics, advertising, attribution, and tracking SDK availability can differ by platform and App
+          version. The Android version's Google Play disclosure describes the SDKs present in that specific
+          Android release. The following describes processing when the relevant integration is enabled.
+        </p>
         <h3>Firebase Analytics</h3>
         <p>
           We use Firebase Analytics to measure product usage and purchase performance. Firebase may assign
@@ -595,15 +605,41 @@
           <li>Opt out of the sale or sharing of personal information or of targeted advertising where applicable law provides that right; and</li>
           <li>Submit a complaint to a competent data-protection authority.</li>
         </ul>
-        <h3>Deleting data or your account</h3>
+        <p>You can delete an individual generation record using the delete control on the App's history page.</p>
+      </section>
+
+      <section id="account-deletion">
+        <h2>10. Delete Your Account</h2>
+        <p>You can delete your Photo Revival account directly in the App:</p>
         <ol>
-          <li>You can delete an individual generation record using the delete control on the App's history page.</li>
-          <li>To request complete deletion of your account and associated information, email <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a>. We may reasonably verify account ownership before completing a request to prevent unauthorized deletion.</li>
+          <li>Open <strong>Me</strong> and select the settings button.</li>
+          <li>Open your profile card, then select <strong>Delete Account</strong>.</li>
+          <li>Review the warning and select <strong>Confirm</strong>.</li>
         </ol>
+        <p>
+          If you cannot access the App, email
+          <a href="mailto:berkehancanat@gmail.com?subject=Photo%20Revival%20Account%20Deletion">berkehancanat@gmail.com</a>
+          with the subject “Photo Revival Account Deletion.” We may reasonably verify account ownership before
+          completing a request so that another person cannot delete your account.
+        </p>
+        <h3>What is deleted</h3>
+        <p>
+          Deleting your account removes your authentication account, profile, uploaded source files, generated
+          content and task history, credit wallet, rewards and referral records, feedback linked to your account,
+          and other user records that are configured to be deleted with the account.
+        </p>
+        <h3>What may be retained</h3>
+        <p>
+          We may retain a limited deletion audit record and transaction, refund, tax, accounting, fraud-prevention,
+          security, and dispute records for the periods required or permitted by law. Information may also remain
+          temporarily in isolated backups until normal backup rotation completes. Retained records are not used to
+          recreate your account or for ordinary product use.
+        </p>
         <div class="note">
           Deleting the App, signing out, or disabling Apple or Google sign-in does not automatically delete
           your server account. Deleting your Photo Revival account also does not automatically cancel an
-          App Store subscription. You must separately manage auto-renewal in your Apple ID subscription settings.
+          App Store or Google Play subscription. You must separately manage auto-renewal in your Apple ID or
+          Google Play subscription settings.
         </div>
         <p>
           We respond to verifiable requests within the period required by applicable law. Where permitted,
@@ -613,11 +649,11 @@
       </section>
 
       <section id="security">
-        <h2>10. Security</h2>
+        <h2>11. Security</h2>
         <p>
           We use technical and organizational measures appropriate to the risks, such as HTTPS in transit,
-          iOS Keychain storage for session tokens, access controls, least-privilege practices, log monitoring,
-          and service-provider management to protect information from unauthorized access, disclosure,
+          iOS Keychain or Android Keystore-backed encrypted storage for session tokens, access controls,
+          least-privilege practices, log monitoring, and service-provider management to protect information from unauthorized access, disclosure,
           alteration, or loss.
         </p>
         <p>
@@ -627,7 +663,7 @@
       </section>
 
       <section id="children">
-        <h2>11. Children's Privacy</h2>
+        <h2>12. Children's Privacy</h2>
         <p>
           The App is not directed to children under 13, and we do not knowingly collect personal information
           from them. Where a higher digital-consent age applies, a person below that age should use the
@@ -641,7 +677,7 @@
       </section>
 
       <section id="transfer">
-        <h2>12. International Data Transfers</h2>
+        <h2>13. International Data Transfers</h2>
         <p>
           We and our service providers may process information outside your country or region, where privacy
           laws may differ. Where required, we use appropriate contractual, organizational, or legal safeguards
@@ -650,7 +686,7 @@
       </section>
 
       <section id="changes">
-        <h2>13. Changes to This Policy</h2>
+        <h2>14. Changes to This Policy</h2>
         <p>
           We may update this Policy when our features, providers, or legal obligations change. We will update
           the “Last updated” date above and provide notice through the App, our website, or another appropriate
@@ -659,7 +695,7 @@
       </section>
 
       <section id="contact">
-        <h2>14. Contact Us</h2>
+        <h2>15. Contact Us</h2>
         <p>For questions about this Policy or to exercise a privacy right, contact us by email:</p>
         <div class="contact">
           <p><strong>Email:</strong> <a href="mailto:berkehancanat@gmail.com">berkehancanat@gmail.com</a></p>
