@@ -120,6 +120,7 @@ enum StartupServiceBootstrap {
 @main
 struct photoreviveaieditApp: App {
     @UIApplicationDelegateAdaptor(PhotoReviveAppDelegate.self) private var appDelegate
+    @State private var appLanguage = AppLanguageSelection.resolve()
 
     init() {
 #if DEBUG
@@ -143,6 +144,16 @@ struct photoreviveaieditApp: App {
     var body: some Scene {
         WindowGroup {
             AppRootView()
+                .environment(\.locale, appLanguage.locale)
+                .environment(\.layoutDirection, appLanguage.layoutDirection)
+                .id(appLanguage)
+                .onReceive(
+                    NotificationCenter.default.publisher(
+                        for: NSLocale.currentLocaleDidChangeNotification
+                    )
+                ) { _ in
+                    appLanguage = AppLanguageSelection.resolve()
+                }
                 .onOpenURL { url in
                     _ = GIDSignIn.sharedInstance.handle(url)
                     _ = ApplicationDelegate.shared.application(

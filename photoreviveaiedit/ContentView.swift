@@ -1,6 +1,18 @@
 import Combine
 import SwiftUI
 
+enum HomeOverlayLayoutPolicy {
+    static let maximumBannerWidth: CGFloat = 560
+
+    static func bannerWidth(in containerSize: CGSize) -> CGFloat {
+        min(
+            max(containerSize.width - 36, 0),
+            maximumBannerWidth,
+            max(containerSize.height * 0.75, 0)
+        )
+    }
+}
+
 final class StartupPromotionSessionGate: ObservableObject {
     static let shared = StartupPromotionSessionGate()
 
@@ -151,7 +163,7 @@ struct ContentView: View {
         }
         .overlay {
             GeometryReader { proxy in
-                let bannerWidth = max(proxy.size.width - 36, 0)
+                let bannerWidth = HomeOverlayLayoutPolicy.bannerWidth(in: proxy.size)
 
                 ZStack(alignment: .bottom) {
                     BottomTabBar(selection: $selectedTab) { tab in

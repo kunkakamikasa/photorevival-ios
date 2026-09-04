@@ -13,6 +13,14 @@ enum PhotoCropAspect: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var displayTitle: String {
+        switch self {
+        case .original: AppLocalization.string("ORIGINAL")
+        case .freeform: AppLocalization.string("FREEFORM")
+        default: rawValue
+        }
+    }
+
     func value(for imageSize: CGSize, freeformValue: CGFloat) -> CGFloat {
         switch self {
         case .original:

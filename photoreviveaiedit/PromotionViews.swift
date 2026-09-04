@@ -475,33 +475,36 @@ struct LimitedTimeOfferPopup: View {
                 .onTapGesture(perform: closeOffer)
 
             GeometryReader { proxy in
-                ScrollView {
-                    VStack(spacing: 12) {
+                ZStack(alignment: .topLeading) {
+                    ScrollView {
                         offerCard
                             .frame(maxWidth: min(390, proxy.size.width - 32))
-
-                        Button(action: closeOffer) {
-                            Image(systemName: "xmark")
-                                .font(.title3)
-                                .foregroundStyle(LimitedOfferPalette.onAccentText)
-                                .frame(width: 46, height: 46)
-                                .background(LimitedOfferPalette.closeButton, in: Circle())
-                                .overlay(
-                                    Circle().stroke(
-                                        LimitedOfferPalette.orange.opacity(0.70),
-                                        lineWidth: 1
-                                    )
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close limited offer")
-                        .accessibilityIdentifier("limited-offer-close")
+                            .frame(minHeight: proxy.size.height)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 18)
                     }
-                    .frame(minHeight: proxy.size.height)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
+                    .scrollIndicators(.hidden)
+                    .scrollBounceBehavior(.basedOnSize)
+
+                    Button(action: closeOffer) {
+                        Image(systemName: "xmark")
+                            .font(.title3)
+                            .foregroundStyle(LimitedOfferPalette.onAccentText)
+                            .frame(width: 46, height: 46)
+                            .background(LimitedOfferPalette.closeButton, in: Circle())
+                            .overlay(
+                                Circle().stroke(
+                                    LimitedOfferPalette.orange.opacity(0.70),
+                                    lineWidth: 1
+                                )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, max(proxy.safeAreaInsets.leading + 14, 18))
+                    .padding(.top, max(proxy.safeAreaInsets.top + 14, 18))
+                    .accessibilityLabel("Close limited offer")
+                    .accessibilityIdentifier("limited-offer-close")
                 }
-                .scrollIndicators(.hidden)
             }
 
             if isPurchasing {
@@ -550,7 +553,7 @@ struct LimitedTimeOfferPopup: View {
     private var offerCard: some View {
         VStack(spacing: 18) {
             Text("Limited Time Offer!")
-                .font(.system(size: 32, weight: .heavy))
+                .font(.system(size: 27, weight: .heavy))
                 .foregroundStyle(
                     LinearGradient(
                         colors: [LimitedOfferPalette.coral, LimitedOfferPalette.orange],
@@ -560,6 +563,8 @@ struct LimitedTimeOfferPopup: View {
                 )
                 .minimumScaleFactor(0.72)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 42)
 
             VStack(spacing: 10) {
                 Text("◆ PRO")
@@ -954,6 +959,7 @@ struct SummerSalePaywallView: View {
                 )
             }
         }
+        .ignoresSafeArea()
         .preferredColorScheme(.light)
         .sensoryFeedback(.selection, trigger: selectedPlan)
         .accessibilityIdentifier("summer-sale-screen")

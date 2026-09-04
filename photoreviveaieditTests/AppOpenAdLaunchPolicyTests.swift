@@ -4,6 +4,22 @@ import Testing
 
 struct AppOpenAdLaunchPolicyTests {
     @Test
+    func automaticPromotionWaitsForAppOpenAdThenRemainsEligible() {
+        #expect(!StartupPromotionPresentationPolicy.canEvaluateAutomaticPromotion(
+            hasFinishedInitialPermissionRequest: true,
+            isAppOpenAdBlockingLaunchContent: true
+        ))
+        #expect(StartupPromotionPresentationPolicy.canEvaluateAutomaticPromotion(
+            hasFinishedInitialPermissionRequest: true,
+            isAppOpenAdBlockingLaunchContent: false
+        ))
+        #expect(!StartupPromotionPresentationPolicy.canEvaluateAutomaticPromotion(
+            hasFinishedInitialPermissionRequest: false,
+            isAppOpenAdBlockingLaunchContent: false
+        ))
+    }
+
+    @Test
     func debugAdsAreEnabledByDefaultOutsideAutomatedTests() {
         #expect(AppOpenAdConfiguration.shouldEnableAdvertising(
             arguments: [],
