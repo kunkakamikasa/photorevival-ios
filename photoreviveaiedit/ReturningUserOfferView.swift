@@ -122,11 +122,15 @@ struct ReturningUserOfferFlowView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = AspectFillLayout(source: designSize, destination: proxy.size)
+            let layout = ReturningOfferCanvasLayout(
+                source: designSize,
+                destination: proxy.size
+            )
 
             ZStack {
+                Color.black
+
                 if isCheckingInitialTrialEligibility {
-                    Color.black
                     StorePurchaseLoadingOverlay(
                         accessibilityLabel: "Checking free trial eligibility"
                     )
@@ -134,29 +138,38 @@ struct ReturningUserOfferFlowView: View {
                 } else {
                     if screen == .family {
                         familyOfferBackground(size: proxy.size)
-                        familyOfferContent(using: layout)
-                    } else if screen == .trial {
-                        Image(screen.assetName)
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipped()
-                        trialOfferContent(using: layout)
-                    } else {
-                        Color.black.opacity(0.55)
-                            .accessibilityHidden(true)
-
-                        Image(screen.assetName)
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipped()
-                        retentionCopyCorrections(using: layout)
                     }
 
-                    controls(using: layout)
+                    ScrollView(.vertical) {
+                        ZStack {
+                            if screen != .family {
+                                fittedOfferArtwork(using: layout)
+                            }
+
+                            if screen == .family {
+                                familyOfferContent(using: layout)
+                            } else if screen == .trial {
+                                trialOfferContent(using: layout)
+                            } else {
+                                Color.black.opacity(0.55)
+                                    .frame(
+                                        width: designSize.width,
+                                        height: designSize.height
+                                    )
+                                    .scaleEffect(layout.scale)
+                                    .position(layout.center)
+                                    .accessibilityHidden(true)
+                                retentionCopyCorrections(using: layout)
+                            }
+
+                            controls(using: layout)
+                        }
+                        .frame(
+                            width: proxy.size.width,
+                            height: layout.contentHeight
+                        )
+                    }
+                    .scrollIndicators(.hidden)
 
                     if isPurchasing || isRestoring {
                         StorePurchaseLoadingOverlay(
@@ -246,29 +259,34 @@ struct ReturningUserOfferFlowView: View {
         .clipped()
     }
 
-    private func familyOfferContent(using layout: AspectFillLayout) -> some View {
+    private func fittedOfferArtwork(using layout: ReturningOfferCanvasLayout) -> some View {
+        Image(screen.assetName)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: designSize.width, height: designSize.height)
+            .scaleEffect(layout.scale)
+            .position(layout.center)
+            .accessibilityHidden(true)
+    }
+
+    private func familyOfferContent(using layout: ReturningOfferCanvasLayout) -> some View {
         familyOfferDesign
             .frame(width: designSize.width, height: designSize.height)
             .scaleEffect(layout.scale)
-            .position(
-                x: layout.origin.x + (designSize.width * layout.scale / 2),
-                y: layout.origin.y + (designSize.height * layout.scale / 2)
-            )
+            .position(layout.center)
             .allowsHitTesting(false)
     }
 
-    private func trialOfferContent(using layout: AspectFillLayout) -> some View {
+    private func trialOfferContent(using layout: ReturningOfferCanvasLayout) -> some View {
         trialOfferDesign
             .frame(width: designSize.width, height: designSize.height)
             .scaleEffect(layout.scale)
-            .position(
-                x: layout.origin.x + (designSize.width * layout.scale / 2),
-                y: layout.origin.y + (designSize.height * layout.scale / 2)
-            )
+            .position(layout.center)
             .allowsHitTesting(false)
     }
 
-    private func retentionCopyCorrections(using layout: AspectFillLayout) -> some View {
+    private func retentionCopyCorrections(using layout: ReturningOfferCanvasLayout) -> some View {
         // The retention artwork contains legacy numeric marketing claims.
         // Cover only those baked-in labels while preserving the rest of the asset pixel-for-pixel.
         ZStack {
@@ -344,10 +362,7 @@ struct ReturningUserOfferFlowView: View {
         }
         .frame(width: designSize.width, height: designSize.height)
         .scaleEffect(layout.scale)
-        .position(
-            x: layout.origin.x + (designSize.width * layout.scale / 2),
-            y: layout.origin.y + (designSize.height * layout.scale / 2)
-        )
+        .position(layout.center)
         .allowsHitTesting(false)
     }
 
@@ -657,7 +672,7 @@ struct ReturningUserOfferFlowView: View {
     }
 
     @ViewBuilder
-    private func controls(using layout: AspectFillLayout) -> some View {
+    private func controls(using layout: ReturningOfferCanvasLayout) -> some View {
         switch screen {
         case .family:
             hotspot(
@@ -763,7 +778,7 @@ struct ReturningUserOfferFlowView: View {
         }
     }
 
-    private func privacyHotspot(using layout: AspectFillLayout) -> some View {
+    private func privacyHotspot(using layout: ReturningOfferCanvasLayout) -> some View {
         hotspot(
             label: "Privacy Policy",
             identifier: "returning-offer-privacy",
@@ -775,7 +790,7 @@ struct ReturningUserOfferFlowView: View {
         }
     }
 
-    private func termsHotspot(using layout: AspectFillLayout) -> some View {
+    private func termsHotspot(using layout: ReturningOfferCanvasLayout) -> some View {
         hotspot(
             label: "Terms of Use",
             identifier: "returning-offer-terms",
@@ -792,7 +807,7 @@ struct ReturningUserOfferFlowView: View {
         identifier: String,
         center: CGPoint,
         size: CGSize,
-        layout: AspectFillLayout,
+        layout: ReturningOfferCanvasLayout,
         isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
@@ -1079,16 +1094,42 @@ private struct ReturningOfferPurchaseAlert: Identifiable {
     let message: String
 }
 
-private struct AspectFillLayout {
+struct ReturningOfferCanvasLayout {
     let scale: CGFloat
     let origin: CGPoint
+    let renderedSize: CGSize
+    let contentHeight: CGFloat
+
+    var center: CGPoint {
+        CGPoint(
+            x: origin.x + renderedSize.width / 2,
+            y: origin.y + renderedSize.height / 2
+        )
+    }
 
     init(source: CGSize, destination: CGSize) {
-        scale = max(destination.width / source.width, destination.height / source.height)
-        let renderedSize = CGSize(width: source.width * scale, height: source.height * scale)
+        guard source.width > 0,
+              source.height > 0,
+              destination.width > 0,
+              destination.height > 0 else {
+            scale = 1
+            renderedSize = source
+            contentHeight = max(source.height, destination.height)
+            origin = .zero
+            return
+        }
+
+        let widthScale = min(1, destination.width / source.width)
+        let fittedScale = min(widthScale, destination.height / source.height)
+
+        // Portrait presentations fit the complete purchase decision on screen.
+        // Short or landscape windows keep a readable width and scroll vertically.
+        scale = destination.width > destination.height ? widthScale : fittedScale
+        renderedSize = CGSize(width: source.width * scale, height: source.height * scale)
+        contentHeight = max(destination.height, renderedSize.height)
         origin = CGPoint(
             x: (destination.width - renderedSize.width) / 2,
-            y: (destination.height - renderedSize.height) / 2
+            y: (contentHeight - renderedSize.height) / 2
         )
     }
 

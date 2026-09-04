@@ -608,6 +608,7 @@ final class photoreviveaieditUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-skipOnboarding",
+            "-skipStartupAnimation",
             "-resetLimitedOfferEligibility",
             "-forceLimitedOffer",
             "-loggedIn"
@@ -617,9 +618,15 @@ final class photoreviveaieditUITests: XCTestCase {
         app.buttons["AI Photo"].tap()
         app.buttons["Open Pro membership"].tap()
         XCTAssertTrue(app.buttons["Close membership"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["membership-continue"].exists)
-        XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
-        XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
+        let membershipContinue = app.buttons["membership-continue"]
+        let privacy = app.buttons["legal-privacy-policy"]
+        let terms = app.buttons["legal-terms-of-service"]
+        XCTAssertTrue(membershipContinue.exists)
+        XCTAssertTrue(membershipContinue.isHittable)
+        XCTAssertTrue(privacy.exists)
+        XCTAssertTrue(privacy.isHittable)
+        XCTAssertTrue(terms.exists)
+        XCTAssertTrue(terms.isHittable)
         attachScreenshot(named: "Membership", app: app)
 
         let proPlus = app.buttons["membership-tier-proPlus"]
@@ -630,7 +637,9 @@ final class photoreviveaieditUITests: XCTestCase {
 
         app.buttons["Close membership"].tap()
 
-        XCTAssertTrue(app.buttons["Close limited offer"].waitForExistence(timeout: 3))
+        let limitedOfferClose = app.buttons["Close limited offer"]
+        XCTAssertTrue(limitedOfferClose.waitForExistence(timeout: 3))
+        XCTAssertTrue(limitedOfferClose.isHittable)
         XCTAssertTrue(app.buttons["limited-offer-try-now"].exists)
         XCTAssertTrue(app.buttons["legal-privacy-policy"].exists)
         XCTAssertTrue(app.buttons["legal-terms-of-service"].exists)
@@ -1077,6 +1086,7 @@ final class photoreviveaieditUITests: XCTestCase {
             "-forceOnboarding",
             "-skipStartupAnimation",
             "-disableReturningOffer",
+            "-disableAppOpenAd",
             "-resetLimitedOfferEligibility",
             "-forceLimitedOffer",
             "-isLoggedIn",
@@ -1104,6 +1114,13 @@ final class photoreviveaieditUITests: XCTestCase {
 
         app.buttons["onboarding-continue"].tap()
         XCTAssertTrue(app.buttons["Close membership"].waitForExistence(timeout: 3))
+        let membershipContinue = app.buttons["membership-continue"]
+        XCTAssertTrue(membershipContinue.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            membershipContinue.isHittable,
+            "The first-launch purchase action must be visible without scrolling"
+        )
+        Thread.sleep(forTimeInterval: 0.45)
         attachScreenshot(named: "Initial Membership", app: app)
         app.buttons["Close membership"].tap()
 

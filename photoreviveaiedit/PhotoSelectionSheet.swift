@@ -112,6 +112,12 @@ struct PhotoSelectionSheet: View {
         case created = "Created"
 
         var id: String { rawValue }
+        var displayTitle: String {
+            switch self {
+            case .uploaded: AppLocalization.string("Uploaded")
+            case .created: AppLocalization.string("Created")
+            }
+        }
     }
 
     let maximumSelectionCount: Int
@@ -206,7 +212,7 @@ struct PhotoSelectionSheet: View {
                         selectedTab = tab
                     }
                 } label: {
-                    Text(tab.rawValue)
+                    Text(tab.displayTitle)
                         .font(.system(size: 18, weight: selectedTab == tab ? .bold : .medium))
                         .foregroundStyle(selectedTab == tab ? AppPalette.ink : AppPalette.brownInk.opacity(0.72))
                         .frame(maxWidth: .infinity)

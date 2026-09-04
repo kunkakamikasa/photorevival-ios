@@ -6735,7 +6735,7 @@ private struct FeaturePhotoCropView: View {
                                 selectedAspect = aspect
                                 resetViewport()
                             } label: {
-                                Text(aspect.rawValue)
+                                Text(aspect.displayTitle)
                                     .font(.system(size: 19, weight: .medium))
                                     .foregroundStyle(selectedAspect == aspect ? .white : .gray)
                                     .padding(.horizontal, selectedAspect == aspect ? 16 : 0)

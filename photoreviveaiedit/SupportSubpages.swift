@@ -4,6 +4,28 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+enum PaywallLayoutPolicy {
+    static let minimumReadableScale: CGFloat = 0.78
+
+    static func scale(
+        containerSize: CGSize,
+        designWidth: CGFloat,
+        contentHeight: CGFloat
+    ) -> CGFloat {
+        guard containerSize.width > 0,
+              containerSize.height > 0,
+              designWidth > 0,
+              contentHeight > 0 else { return 1 }
+
+        let widthScale = containerSize.width / designWidth
+        let heightScale = containerSize.height / contentHeight
+
+        // Fit the full purchase decision into ordinary portrait windows while
+        // retaining readable controls and vertical scrolling in short windows.
+        return min(1, widthScale, max(heightScale, minimumReadableScale))
+    }
+}
+
 struct MembershipPaywallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -110,29 +132,57 @@ struct MembershipPaywallView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let scale = proxy.size.width / designWidth
             let contentHeight = activeContentHeight
+            let bottomClearance = max(proxy.safeAreaInsets.bottom, 20)
+            let visibleContentSize = CGSize(
+                width: proxy.size.width,
+                height: max(proxy.size.height - bottomClearance, 1)
+            )
+            let scale = PaywallLayoutPolicy.scale(
+                containerSize: visibleContentSize,
+                designWidth: designWidth,
+                contentHeight: contentHeight
+            )
+            let scaledWidth = designWidth * scale
+            let scaledHeight = contentHeight * scale
 
             ZStack(alignment: .topLeading) {
                 paywallBackground
 
                 ScrollView(.vertical) {
-                    Group {
-                        if usesLoggedInPaywall {
-                            loggedInPaywallContent
-                        } else {
-                            paywallContent
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+
+                            Group {
+                                if usesLoggedInPaywall {
+                                    loggedInPaywallContent
+                                } else {
+                                    paywallContent
+                                }
+                            }
+                            .frame(width: designWidth, height: contentHeight, alignment: .top)
+                            .scaleEffect(scale, anchor: .topLeading)
+                            .frame(
+                                width: scaledWidth,
+                                height: scaledHeight,
+                                alignment: .topLeading
+                            )
+
+                            Spacer(minLength: 0)
                         }
-                    }
-                        .frame(width: designWidth, height: contentHeight, alignment: .top)
-                        .scaleEffect(scale, anchor: .topLeading)
                         .frame(
-                            width: proxy.size.width,
-                            height: contentHeight * scale,
-                            alignment: .topLeading
+                            minWidth: proxy.size.width,
+                            minHeight: visibleContentSize.height,
+                            alignment: .top
                         )
+
+                        Color.clear
+                            .frame(height: bottomClearance)
+                    }
                 }
                 .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
 
                 if isPurchasing || isRestoring {
                     StorePurchaseLoadingOverlay(
@@ -193,7 +243,9 @@ struct MembershipPaywallView: View {
             paywallHeader
                 .frame(width: designWidth, height: paywallHeaderHeight)
 
-            Color.clear.frame(height: usesFirstLaunchVideoBackground ? 0 : 58)
+            // Keep the complete purchase decision, including legal links, on
+            // screen in iPhone compatibility mode on iPad.
+            Color.clear.frame(height: usesFirstLaunchVideoBackground ? 0 : 12)
 
             benefitSection
                 .frame(width: designWidth, height: 184, alignment: .top)
@@ -225,12 +277,12 @@ struct MembershipPaywallView: View {
             loggedInHero
 
             VStack(spacing: 0) {
-                Color.clear.frame(height: 299)
+                Color.clear.frame(height: 280)
 
                 loggedInTierCarousel
                     .frame(width: designWidth, height: 242)
 
-                Color.clear.frame(height: 30)
+                Color.clear.frame(height: 12)
 
                 loggedInMembershipPlanRow(.annual)
                     .frame(width: 390, height: 82)
@@ -240,17 +292,17 @@ struct MembershipPaywallView: View {
                 loggedInMembershipPlanRow(.weekly)
                     .frame(width: 390, height: 82)
 
-                Color.clear.frame(height: 17)
+                Color.clear.frame(height: 10)
 
                 loggedInRefundGuarantee
                     .frame(width: 390, height: 24)
 
-                Color.clear.frame(height: 17)
+                Color.clear.frame(height: 10)
 
                 loggedInContinueButton
                     .frame(width: 390, height: 64)
 
-                Color.clear.frame(height: 13)
+                Color.clear.frame(height: 0)
 
                 footerLinks
                     .frame(width: 390, height: 22)

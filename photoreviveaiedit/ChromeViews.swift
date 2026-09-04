@@ -87,10 +87,12 @@ struct BottomTabBar: View {
             }
         }
         .padding(5)
+        .frame(maxWidth: 560)
         .background(.ultraThinMaterial, in: Capsule())
         .background(Color.white.opacity(0.25), in: Capsule())
         .overlay(Capsule().stroke(.white.opacity(0.74), lineWidth: 1))
         .shadow(color: .black.opacity(0.14), radius: 13, y: 6)
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
         .padding(.bottom, -14)
     }
@@ -315,7 +317,7 @@ struct MePage: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { kind = item }
                     } label: {
-                        Text(item.rawValue)
+                        Text(item.displayTitle)
                             .font(.system(size: 19, weight: .bold))
                             .foregroundStyle(kind == item ? Color(red: 0.80, green: 0.29, blue: 0.25) : AppPalette.ink)
                             .frame(width: 94, height: 43)

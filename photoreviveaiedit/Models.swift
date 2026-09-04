@@ -23,10 +23,12 @@ enum EnglishDisplayText {
     }
 
     static func title(_ value: String?, fallback: String) -> String {
-        guard let value else { return fallback }
+        guard let value else { return AppLocalization.string(fallback) }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return fallback }
-        guard hasHanCharacters(trimmed) else { return trimmed }
+        guard !trimmed.isEmpty else { return AppLocalization.string(fallback) }
+        guard hasHanCharacters(trimmed) else {
+            return AppLocalization.string(trimmed)
+        }
 
         let filteredCharacters = trimmed.unicodeScalars.compactMap { scalar -> Character? in
             guard !isHan(scalar), !isCJKPunctuation(scalar) else { return nil }
@@ -37,7 +39,7 @@ enum EnglishDisplayText {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
             .trimmingCharacters(in: titleTrimCharacters)
-        return filtered.isEmpty ? fallback : filtered
+        return AppLocalization.string(filtered.isEmpty ? fallback : filtered)
     }
 
     static func sectionTitle(
@@ -48,9 +50,9 @@ enum EnglishDisplayText {
         if let value, hasHanCharacters(value) {
             switch id {
             case "cms-section-6561":
-                return "Supermodel Runway"
+                return AppLocalization.string("Supermodel Runway")
             case "cms-section-6567":
-                return "God-Tier Live Suspect"
+                return AppLocalization.string("God-Tier Live Suspect")
             default:
                 break
             }
@@ -64,19 +66,22 @@ enum EnglishDisplayText {
     static func prompt(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !hasHanCharacters(trimmed) else { return nil }
+        guard !trimmed.isEmpty else { return nil }
+        guard !hasHanCharacters(trimmed) else { return nil }
         return value
     }
 
     /// Server and StoreKit messages can follow the device or provider locale.
-    /// The app is English-only, so never surface a message containing Han
-    /// characters. Keep the original error in logs and show a safe English
-    /// fallback in the UI instead.
+    /// Preserve the existing safe fallback for unexpected Chinese provider
+    /// messages; the app's Japanese strings come from the local catalog.
     static func userFacingMessage(_ value: String?, fallback: String) -> String {
-        guard let value else { return fallback }
+        guard let value else { return AppLocalization.string(fallback) }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !hasHanCharacters(trimmed) else { return fallback }
-        return trimmed
+        guard !trimmed.isEmpty else { return AppLocalization.string(fallback) }
+        guard !hasHanCharacters(trimmed) else {
+            return AppLocalization.string(fallback)
+        }
+        return AppLocalization.string(trimmed)
     }
 
     private static func isHan(_ scalar: Unicode.Scalar) -> Bool {
@@ -230,19 +235,19 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .home: "Home"
-        case .photo: "AI Photo"
-        case .video: "AI Video"
-        case .me: "Me"
+        case .home: AppLocalization.string("Home")
+        case .photo: AppLocalization.string("AI Photo")
+        case .video: AppLocalization.string("AI Video")
+        case .me: AppLocalization.string("Me")
         }
     }
 
     var pageTitle: String {
         switch self {
         case .home: ""
-        case .photo: "AI Photo"
-        case .video: "AI Video"
-        case .me: "My Creations"
+        case .photo: AppLocalization.string("AI Photo")
+        case .video: AppLocalization.string("AI Video")
+        case .me: AppLocalization.string("My Creations")
         }
     }
 
@@ -261,6 +266,12 @@ enum MeHistoryKind: String, CaseIterable, Identifiable {
     case photo = "Photo"
 
     var id: String { rawValue }
+    var displayTitle: String {
+        switch self {
+        case .video: AppLocalization.string("Video")
+        case .photo: AppLocalization.string("Photo")
+        }
+    }
 }
 
 extension Notification.Name {
@@ -299,13 +310,13 @@ enum FixedFeature: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .oneTapRestore: "One-Tap Restore"
-        case .photoToVideo: "Photo To Video"
-        case .aiImage: "AI Image"
-        case .enhancePhoto: "Enhance Photo"
-        case .textToVideo: "Text To Video"
-        case .imageToImage: "Image to Image"
-        case .textToImage: "Text to Image"
+        case .oneTapRestore: AppLocalization.string("One-Tap Restore")
+        case .photoToVideo: AppLocalization.string("Photo To Video")
+        case .aiImage: AppLocalization.string("AI Image")
+        case .enhancePhoto: AppLocalization.string("Enhance Photo")
+        case .textToVideo: AppLocalization.string("Text To Video")
+        case .imageToImage: AppLocalization.string("Image to Image")
+        case .textToImage: AppLocalization.string("Text to Image")
         }
     }
 }

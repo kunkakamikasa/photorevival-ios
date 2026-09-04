@@ -844,6 +844,13 @@ private enum CreditFilter: String, CaseIterable, Identifiable {
     case earned = "Earned"
 
     var id: String { rawValue }
+    var displayTitle: String {
+        switch self {
+        case .all: AppLocalization.string("All")
+        case .spent: AppLocalization.string("Spent")
+        case .earned: AppLocalization.string("Earned")
+        }
+    }
 }
 
 struct CreditDetailView: View {
@@ -994,7 +1001,7 @@ struct CreditDetailView: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) { filter = option }
                 } label: {
-                    Text(option.rawValue)
+                    Text(option.displayTitle)
                         .font(.system(size: 18, weight: filter == option ? .medium : .regular))
                         .foregroundStyle(filter == option ? .white : Color.gray.opacity(0.55))
                         .frame(maxWidth: .infinity)

@@ -23,6 +23,15 @@ enum StartupAnimationPolicy {
     }
 }
 
+enum StartupPromotionPresentationPolicy {
+    static func canEvaluateAutomaticPromotion(
+        hasFinishedInitialPermissionRequest: Bool,
+        isAppOpenAdBlockingLaunchContent: Bool
+    ) -> Bool {
+        hasFinishedInitialPermissionRequest && !isAppOpenAdBlockingLaunchContent
+    }
+}
+
 enum OnboardingGuideSwipeDirection: Equatable {
     case previous
     case next
@@ -217,8 +226,13 @@ struct AppRootView: View {
         } else {
             ContentView(
                 featureConfigStore: featureConfigStore,
-                startupPresentationsAllowed: trackingAuthorization.hasFinishedInitialRequest
-                    && !appOpenAdManager.didPresentAdForCurrentLaunch,
+                startupPresentationsAllowed: StartupPromotionPresentationPolicy
+                    .canEvaluateAutomaticPromotion(
+                        hasFinishedInitialPermissionRequest: trackingAuthorization
+                            .hasFinishedInitialRequest,
+                        isAppOpenAdBlockingLaunchContent: appOpenAdManager
+                            .isBlockingLaunchContent
+                    ),
                 isReturningSession: hasCompletedOnboarding && !completedOnboardingThisSession
             )
                 .transition(.opacity)
@@ -291,7 +305,7 @@ private struct LaunchExperienceView: View {
 
             switch page {
             case .welcome:
-                WelcomeVideoContinueHitTarget(onContinue: advance)
+                WelcomeContinueOverlay(onContinue: advance)
             case .restore, .pet, .fusion:
                 GuideOverlay(
                     page: page,
@@ -371,12 +385,11 @@ private enum LaunchPage: Int {
         }
     }
 
-    /// The three guide videos are authored at 9:16. Fitting that exact canvas
-    /// to the screen width preserves the side margins baked into the footage;
-    /// any extra height on taller devices is absorbed by the black lower area.
+    /// Onboarding videos contain artwork close to their lower edge. Preserve
+    /// each authored canvas so compatible iPad windows do not crop that content.
     var mediaAspectRatio: CGFloat? {
         switch self {
-        case .welcome: nil
+        case .welcome: 1080.0 / 2340.0
         case .restore, .pet, .fusion: 9.0 / 16.0
         }
     }
@@ -522,28 +535,47 @@ private struct LaunchBackgroundMedia: View {
     }
 }
 
-private struct WelcomeVideoContinueHitTarget: View {
+private struct WelcomeContinueOverlay: View {
     let onContinue: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
-            Button(action: onContinue) {
-                RoundedRectangle(cornerRadius: 12)
-                    // Keep the button artwork authored into the welcome video,
-                    // but render a real surface so SwiftUI does not optimize the
-                    // completely clear label out of manual hit testing.
-                    .fill(Color.white.opacity(0.001))
-                    .frame(
-                        width: max(proxy.size.width - 32, 0),
-                        height: 72
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 12))
+            let buttonWidth = min(max(proxy.size.width - 40, 0), 370)
+            let minimumBottomSpacing = max(proxy.safeAreaInsets.bottom + 12, 20)
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                VStack(spacing: 4) {
+                    Text("AI-POWERED")
+                        .font(.system(size: 20, weight: .bold))
+
+                    Text("RESTORE • ENHANCE • ANIMATE")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color(red: 1.0, green: 0.69, blue: 0.03))
+                }
+                .multilineTextAlignment(.center)
+                .shadow(color: .black.opacity(0.9), radius: 4, y: 2)
+                .padding(.bottom, 30)
+
+                VStack(spacing: 7) {
+                    Text("Welcome to\nPhoto Revival")
+                        .font(.system(size: 24, weight: .heavy))
+                        .lineSpacing(0)
+
+                    Text("Bring Your Favorite Moments to Life")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .multilineTextAlignment(.center)
+                .shadow(color: .black.opacity(0.95), radius: 5, y: 2)
+                .padding(.bottom, 20)
+
+                OnboardingContinueButton(action: onContinue)
+                    .frame(width: buttonWidth)
             }
-            .buttonStyle(.plain)
-            .position(x: proxy.size.width / 2, y: proxy.size.height * 0.890)
-            .zIndex(1)
-            .accessibilityLabel("Continue")
-            .accessibilityIdentifier("onboarding-continue")
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.bottom, minimumBottomSpacing)
         }
     }
 }
@@ -555,6 +587,14 @@ private struct GuideOverlay: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let buttonWidth = min(max(proxy.size.width - 40, 0), 390)
+            let minimumBottomSpacing = max(proxy.safeAreaInsets.bottom + 12, 20)
+            let preferredCenterY = proxy.size.height * 0.890
+            let safeCenterY = max(
+                25,
+                min(preferredCenterY, proxy.size.height - minimumBottomSpacing - 25)
+            )
+
             ZStack {
                 VStack(spacing: 0) {
                     Text(page.title)
@@ -576,8 +616,8 @@ private struct GuideOverlay: View {
                 )
 
                 OnboardingContinueButton(action: onContinue)
-                    .padding(.horizontal, 20)
-                    .position(x: proxy.size.width / 2, y: proxy.size.height * 0.890)
+                    .frame(width: buttonWidth)
+                    .position(x: proxy.size.width / 2, y: safeCenterY)
             }
             .contentShape(Rectangle())
             .simultaneousGesture(

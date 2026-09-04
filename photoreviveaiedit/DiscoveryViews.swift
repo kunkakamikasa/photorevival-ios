@@ -1285,7 +1285,7 @@ private struct HomeQuickActionStrip: View {
     var body: some View {
         VStack(spacing: 8) {
             GeometryReader { proxy in
-                let cardWidth = max(108, (proxy.size.width - 64) / 3)
+                let cardWidth = min(180, max(108, (proxy.size.width - 64) / 3))
 
                 ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: 10) {
